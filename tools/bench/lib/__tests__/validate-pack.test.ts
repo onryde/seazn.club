@@ -813,7 +813,7 @@ describe("validatePack — resolving the module and its cfg", () => {
 
   it("reds an unknown variant key, and names the ones the module declares", () => {
     // `variantKey` is a named cfg PRESET, not a module selector — the product
-    // 422s on exactly this (`usecases/divisions.ts:242`), reading the preset
+    // 422s on exactly this (`usecases/divisions/create.ts:123-125`), reading the preset
     // from the `sport_variants` rows `scripts/sync-sports.ts` generates from
     // `module.variants`. Offline that map IS the source.
     const finding = onlyError(

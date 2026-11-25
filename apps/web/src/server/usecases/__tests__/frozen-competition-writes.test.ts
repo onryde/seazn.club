@@ -136,7 +136,7 @@ function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<u
         }),
     ],
     [
-      "divisions.ts#createDivision",
+      "divisions/create.ts#createDivision",
       () =>
         createDivision(s.auth, s.competitionId, {
           name: "Plate",
@@ -324,7 +324,7 @@ const START_SITES: StartSite[] = [
     },
     attempt: (r) => openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: OPEN_AT }),
     lands: (r) => ({
-      answer: { opened: true, invited: 2, retrying: 0, skipped: [{ fixtureId: r.boards[1]!.fixtureId, reason: "lichess_unlinked" }] },
+      answer: { opened: true, invited: 2, retrying: 0, skipped: [{ fixtureId: r.boards[1]!.fixtureId, reason: "lichess_unlinked" }], payment: null },
       // the round's stamp; the held board's new row (the invited board's row stood already); the one hold; the stale row started over; the
       // invited board's two seat stamps, outbox rows and mails; and the open's ledger event
       changes: { opens: 1, bridges: 1, holds: 1, stale: -1, stamps: 2, outbox: 2, mailed: 2, events: 1 },
@@ -418,7 +418,7 @@ describe.skipIf(!HAS_DB)("Match Day O4 — an online round's START writes obey t
     expect(await sql`select 1 from stage_round_opens where stage_id = ${a.stageId}`, "the frozen competition's round was not opened").toHaveLength(0);
 
     const other = await openRound({ stageId: second.stageId, roundNo: 1, actorUserId: a.ownerUserId }, { now: OPEN_AT });
-    expect(other, "the competition that is not frozen opens as ever").toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(other, "the competition that is not frozen opens as ever").toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(await sql`select 1 from stage_round_opens where stage_id = ${second.stageId}`).toHaveLength(1);
   }, 120_000);
 });

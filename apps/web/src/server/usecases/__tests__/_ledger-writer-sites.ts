@@ -1,14 +1,15 @@
 // The match-credit ledger's WRITERS, declared once (Settings -> Credits -> Streaming review I2).
 //
-// `org_stream_credits` is written from nine places, all in stream-credits.ts. The organiser-facing history
+// `org_stream_credits` is written from twelve places: nine in stream-credits.ts, and three in the Online Chess package writer
+// (online-package/ledger.ts, spec 2026-11-23-online-chess-credits-design.md §7.1, §7.5). The organiser-facing history
 // (stream-credit-history.ts) names every row by what wrote it — and one of its names, "Refund: camera never connected",
 // is read off a row's SHAPE (a refund, no author, a session) rather than off anything the writer stamps. That is only
 // honest while the shapes stay in one-to-one correspondence with the writers, so the writers are pinned here:
 //
 //   * `LEDGER_WRITER_SITES` is the ORACLE — typed from the writers' contract (the key formats and the reasons in the V410 /
 //     V426 migrations and the stream-credits.ts header), never read back from the code under test. Two tests hold it:
-//       - stream-credit-ledger-writers.test.ts scans stream-credits.ts with the TypeScript parser and requires the insert
-//         sites it finds to be exactly these nine (so a tenth, or a renamed one, fails by name);
+//       - stream-credit-ledger-writers.test.ts scans EACH writer file (`file`) with the TypeScript parser and requires the
+//         insert sites it finds to be exactly the ones this table lists for it (so a tenth, or a renamed one, fails by name);
 //       - stream-credit-history.test.ts drives EVERY site through its real writer, reads each row back and requires it to
 //         wear the shape this table declares for the site that wrote it.
 //   * The scanners below take SOURCE TEXT, not a path, so the test can run them on synthetic files and prove they see an
@@ -28,6 +29,8 @@ export const SRC = new URL("../../../", import.meta.url).pathname;
 export interface LedgerWriterSite {
   /** The matrix row's name. */
   key: string;
+  /** The production file holding the insert, relative to src/. */
+  file: string;
   /** The function that holds the insert (nearest named ancestor of the statement). */
   fn: string;
   /** Text that must appear in the insert's template literal (its SQL and its `${}` expressions), telling the sites of one
@@ -41,6 +44,8 @@ export interface LedgerWriterSite {
   byStaff: boolean;
   /** The row's `session_id`: always set, never set, or either. */
   session: "always" | "never" | "either";
+  /** The row's `online_package_id` (V561): set on every Online Chess package row, never on any other writer's. */
+  package: "always" | "never";
   /** The shape of the row's idempotency key, or null for a site that writes none. */
   key_shape: RegExp | null;
   /** The history kinds the site's rows are shown as. */
@@ -49,16 +54,27 @@ export interface LedgerWriterSite {
 
 const ORG = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
+/** The match-credit writer (streams, bought packs, grants, the monthly rollover, the claw-back). */
+export const STREAM_WRITER_FILE = "server/usecases/stream-credits.ts";
+/** The Online Chess package writer: a package's debits and returns, and the settle step's claw-back of a reversed pack. */
+export const PACKAGE_WRITER_FILE = "server/usecases/online-package/ledger.ts";
+
 export const LEDGER_WRITER_SITES: readonly LedgerWriterSite[] = [
-  { key: "consume", fn: "consumeForSession", needle: "'consume'", reasons: ["consume"], buckets: ["monthly", "pack"], byStaff: false, session: "always", key_shape: null, kinds: ["streamUsed"] },
-  { key: "purchase", fn: "recordPurchase", needle: "'purchase'", reasons: ["purchase"], buckets: ["pack"], byStaff: false, session: "never", key_shape: null, kinds: ["packPurchase"] },
-  { key: "pack-clawback", fn: "recordStreamPackRefund", needle: "'revoke'", reasons: ["revoke"], buckets: ["pack"], byStaff: false, session: "never", key_shape: /^stream_pack_refund:.+$/, kinds: ["packRefund"] },
-  { key: "staff", fn: "staffRow", needle: "created_by", reasons: ["grant", "revoke", "refund"], buckets: ["monthly", "pack"], byStaff: true, session: "either", key_shape: /^.+$/, kinds: ["staffAdjust", "refundStaff"] },
-  { key: "never-live-refund", fn: "refundConsumeForSession", needle: "'refund'", reasons: ["refund"], buckets: ["monthly", "pack"], byStaff: false, session: "always", key_shape: null, kinds: ["refundNoCamera"] },
-  { key: "monthly-topup", fn: "rollMonthlyLocked", needle: "streamMonthlyDeltaKey", reasons: ["grant"], buckets: ["monthly"], byStaff: false, session: "never", key_shape: new RegExp(`^stream-monthly:${ORG}:\\d{4}-\\d{2}:to-\\d+$`), kinds: ["monthlyGrant"] },
-  { key: "monthly-expire", fn: "rollMonthlyLocked", needle: "'expire'", reasons: ["expire"], buckets: ["monthly"], byStaff: false, session: "never", key_shape: null, kinds: ["expired"] },
-  { key: "monthly-grant", fn: "rollMonthlyLocked", needle: "streamMonthlyGrantKey", reasons: ["grant"], buckets: ["monthly"], byStaff: false, session: "never", key_shape: new RegExp(`^stream-monthly:${ORG}:\\d{4}-\\d{2}$`), kinds: ["monthlyGrant"] },
-  { key: "event-pass", fn: "grantPassStreamCredits", needle: "'grant', 'pack'", reasons: ["grant"], buckets: ["pack"], byStaff: false, session: "never", key_shape: /^stream-pass:.+$/, kinds: ["passGrant"] },
+  { key: "consume", file: STREAM_WRITER_FILE, fn: "consumeForSession", needle: "'consume'", reasons: ["consume"], buckets: ["monthly", "pack"], byStaff: false, session: "always", package: "never", key_shape: null, kinds: ["streamUsed"] },
+  { key: "purchase", file: STREAM_WRITER_FILE, fn: "recordPurchase", needle: "'purchase'", reasons: ["purchase"], buckets: ["pack"], byStaff: false, session: "never", package: "never", key_shape: null, kinds: ["packPurchase"] },
+  { key: "pack-clawback", file: STREAM_WRITER_FILE, fn: "recordStreamPackRefund", needle: "'revoke'", reasons: ["revoke"], buckets: ["pack"], byStaff: false, session: "never", package: "never", key_shape: /^stream_pack_refund:.+$/, kinds: ["packRefund"] },
+  { key: "staff", file: STREAM_WRITER_FILE, fn: "staffRow", needle: "created_by", reasons: ["grant", "revoke", "refund"], buckets: ["monthly", "pack"], byStaff: true, session: "either", package: "never", key_shape: /^.+$/, kinds: ["staffAdjust", "refundStaff"] },
+  { key: "never-live-refund", file: STREAM_WRITER_FILE, fn: "refundConsumeForSession", needle: "'refund'", reasons: ["refund"], buckets: ["monthly", "pack"], byStaff: false, session: "always", package: "never", key_shape: null, kinds: ["refundNoCamera"] },
+  { key: "monthly-topup", file: STREAM_WRITER_FILE, fn: "rollMonthlyLocked", needle: "streamMonthlyDeltaKey", reasons: ["grant"], buckets: ["monthly"], byStaff: false, session: "never", package: "never", key_shape: new RegExp(`^stream-monthly:${ORG}:\\d{4}-\\d{2}:to-\\d+$`), kinds: ["monthlyGrant"] },
+  { key: "monthly-expire", file: STREAM_WRITER_FILE, fn: "rollMonthlyLocked", needle: "'expire'", reasons: ["expire"], buckets: ["monthly"], byStaff: false, session: "never", package: "never", key_shape: null, kinds: ["expired"] },
+  { key: "monthly-grant", file: STREAM_WRITER_FILE, fn: "rollMonthlyLocked", needle: "streamMonthlyGrantKey", reasons: ["grant"], buckets: ["monthly"], byStaff: false, session: "never", package: "never", key_shape: new RegExp(`^stream-monthly:${ORG}:\\d{4}-\\d{2}$`), kinds: ["monthlyGrant"] },
+  { key: "event-pass", file: STREAM_WRITER_FILE, fn: "grantPassStreamCredits", needle: "'grant', 'pack'", reasons: ["grant"], buckets: ["pack"], byStaff: false, session: "never", package: "never", key_shape: /^stream-pass:.+$/, kinds: ["passGrant"] },
+  // Online Chess (§7.1, §7.5): the package writer. A debit is a consume and a return a refund, each naming the package and no
+  // session or staff author, with no key (V561's org_stream_credits_package_row_check); the settle step's claw-back is a keyless pack
+  // revoke carrying the payment intent, no package and no session (stream_pack_reversals attributes it, not a key).
+  { key: "package-debit", file: PACKAGE_WRITER_FILE, fn: "debitForPackage", needle: "'consume'", reasons: ["consume"], buckets: ["monthly", "pack"], byStaff: false, session: "never", package: "always", key_shape: null, kinds: ["onlinePackagePaid", "onlinePackageResized"] },
+  { key: "package-return", file: PACKAGE_WRITER_FILE, fn: "refundForPackage", needle: "'refund'", reasons: ["refund"], buckets: ["monthly", "pack"], byStaff: false, session: "never", package: "always", key_shape: null, kinds: ["onlinePackageResized", "onlinePackageRefunded"] },
+  { key: "package-settle", file: PACKAGE_WRITER_FILE, fn: "revokeForReversal", needle: "'revoke'", reasons: ["revoke"], buckets: ["pack"], byStaff: false, session: "never", package: "never", key_shape: null, kinds: ["packRefund"] },
 ];
 
 // ---------------------------------------------------------------------------------------------------------------------

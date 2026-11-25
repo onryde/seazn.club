@@ -10,6 +10,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import type { OpenRoundView } from "@/lib/open-round";
 import { emptyExtendTally } from "@/lib/checkin-extend";
+import { ApiV1Error } from "@/lib/client-v1";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { quoteOf } from "@/lib/__tests__/_receipt-quote";
 
 /** The shell's quiet day read, handed to the hook as its refresh (`useOpenRoundWith`: the router-bound form had no caller and went, B8). */
 const shellRefresh = vi.hoisted(() => vi.fn());
@@ -217,7 +220,7 @@ describe("useOpenRoundWith - the presses follow THIS round", () => {
 
   it("the handle has no round-extend press: the round's +5 is the panel's own control, so nothing here can send one", () => {
     const { handle } = mount(VIEW());
-    expect(Object.keys(handle()).sort()).toEqual(["ask", "cancel", "open", "resend", "state"]);
+    expect(Object.keys(handle()).sort()).toEqual(["ask", "cancel", "closePay", "open", "pay", "resend", "state"]);
   });
 
   it("a redraw with another round number retargets the press, and the runner survives it: a double tap across the redraw sends ONE request", async () => {
@@ -235,3 +238,72 @@ describe("useOpenRoundWith - the presses follow THIS round", () => {
     expect(net.calls.map((c) => c.json)).toEqual([{ roundNo: 7 }, { roundNo: 8 }]);
   });
 });
+
+// Online Chess credits (spec 2026-11-23 §7.6, §8.4): an Open on an unpaid package is answered with the receipt's ask, the receipt's confirm is the open
+// again with `pay`, and a round change takes the standing receipt with it. Driven through the real reducer and runner, the network doubled at `apiV1`.
+describe("useOpenRoundWith - the receipt an unpaid open stands up", () => {
+  const QUOTE = quoteOf({ size: 64, held: 41, rounds: 5 });
+  const unpaid = () => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: QUOTE, next: null, invitable: 3 } as unknown as Record<string, unknown>);
+  const BODY = { size: 64 as const, expectedOwed: 4, cameras: false };
+  const standUp = async () => {
+    const m = mount(VIEW({ stageId: "stage-Z", roundNo: 1 }));
+    m.handle().ask();
+    m.handle().open();
+    net.calls[0]!.reject(unpaid());
+    await flush();
+    return m;
+  };
+
+  it("the 402 stands the receipt up (the quote, no notice, the confirmation closed) and refreshes nothing", async () => {
+    const { handle } = await standUp();
+    expect(handle().state).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: { quote: QUOTE, next: null, invitable: 3 } });
+    expect(shellRefresh).not.toHaveBeenCalled();
+  });
+
+  it("pay(body) is the open again for THIS stage and round with the body; its answer closes the receipt and is the round's notice", async () => {
+    const { handle } = await standUp();
+    const paid = { opened: true, invited: 4, retrying: 0, skipped: [], payment: { applied: true, credits: 4, size: 64, capacityLoweredTo: null } };
+    const done = handle().pay(BODY);
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([
+      ["/api/v1/stages/stage-Z/open-round", { roundNo: 1 }],
+      ["/api/v1/stages/stage-Z/open-round", { roundNo: 1, pay: BODY }],
+    ]);
+    expect(handle().state.busy, "held while it is paid").toEqual({ kind: "open" });
+    expect(handle().state.pay, "the receipt stays up until it answers").not.toBeNull();
+    net.calls[1]!.resolve(paid);
+    await done;
+    await flush();
+    expect(handle().state).toMatchObject({ busy: null, pay: null, notice: { kind: "answered", result: paid } });
+    expect(shellRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused pay rejects to the receipt's own handler, frees the press and leaves the receipt standing; the next pay is sent", async () => {
+    const { handle } = await standUp();
+    const changed = new ApiV1Error("Changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: QUOTE } as unknown as Record<string, unknown>);
+    const first = handle().pay(BODY);
+    net.calls[1]!.reject(changed);
+    await expect(first).rejects.toBe(changed);
+    await flush();
+    expect(handle().state).toMatchObject({ busy: null, notice: null, pay: { quote: QUOTE } });
+    expect(shellRefresh).not.toHaveBeenCalled();
+    void handle().pay({ ...BODY, expectedOwed: 3 });
+    expect(net.calls[2]!.json).toEqual({ roundNo: 1, pay: { ...BODY, expectedOwed: 3 } });
+  });
+
+  it("closePay() closes the standing receipt, sends nothing, and leaves no notice", async () => {
+    const { handle } = await standUp();
+    handle().closePay();
+    expect(handle().state).toEqual(initialOpenRoundUi());
+    expect(net.calls, "the open's one request, and nothing since").toHaveLength(1);
+  });
+
+  it("a round change takes the standing receipt with it (a receipt for round 1 is never confirmed for round 2), and a view of null does nothing on pay", async () => {
+    const { ui, handle } = await standUp();
+    ui.rerender({ view: VIEW({ stageId: "stage-Z", roundNo: 2 }) });
+    expect(handle().state).toEqual(initialOpenRoundUi());
+    ui.rerender({ view: null });
+    await expect(handle().pay(BODY)).rejects.toThrow();
+    expect(net.calls, "the null view sent nothing").toHaveLength(1);
+  });
+});
+

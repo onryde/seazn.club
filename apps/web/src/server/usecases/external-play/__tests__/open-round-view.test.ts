@@ -174,7 +174,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
 
   it("opened: each pairing's invite time is the stamp on file; nothing left to press; the round leaves once its window closes", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });
-    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
 
     const v = roundOf(await view(r, at(MIN)), 1);
     expect(v.state).toBe("open");
@@ -200,7 +200,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const b2 = r.boards[1]!;
     mail.fail.add(b2.away.email);
-    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b2.fixtureId, reason: "send_failed" }] });
+    expect(await press(r, 1, T0)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b2.fixtureId, reason: "send_failed" }], payment: null });
 
     const v = roundOf(await view(r, at(2 * MIN)), 1);
     expect(v.press).toBe("reinvite");
@@ -214,7 +214,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
 
     mail.fail.clear();
     const res = await expectPressAgrees(r, v, at(2 * MIN));
-    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(roundOf(await view(r, at(3 * MIN)), 1).press).toBe("none");
   });
 
@@ -244,7 +244,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     expect(v.press).toBe("reopen");
     expect(v.pairings[0]).toMatchObject({ owedSeats: 2, invitedAt: null, canResend: false });
     mail.fail.clear();
-    expect(await expectPressAgrees(r, v, late)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await expectPressAgrees(r, v, late)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(roundOf(await view(r, late), 1).deadlineAt, "the window restarted at the press").toBe(
       new Date(late.getTime() + DEADLINE_AFTER_MS).toISOString(),
     );
@@ -265,7 +265,7 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     const owed = v.pairings.filter((p) => p.owedSeats > 0);
     expect(owed.map((p) => [p.fixtureId, p.owedSeats])).toEqual([[added.fixture_id, 2]]);
     mail.sent.length = 0;
-    expect(await expectPressAgrees(r, v, at(MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await expectPressAgrees(r, v, at(MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(mail.sent.sort()).toEqual([late.home.email, late.away.email].sort());
   });
 

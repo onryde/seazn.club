@@ -15,7 +15,7 @@ import { NEEDS_REASONS } from "@/server/external-play/types";
 import { listNeedsOrganiserExternalPlay, mintOrgOwnerAuth, readNeedsReason } from "@/server/usecases/external-play";
 import { createDivision } from "../divisions";
 import { scoreEvent } from "../scoring";
-import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
@@ -157,7 +157,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
       variant_key: "classical",
       config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
     });
-    const [stage] = await createStages(s.auth, other.id, { seq: 1, kind: "league", name: "RR", config: {} });
+    const [stage] = await createStagesOnLegacyOnline(s.auth, other.id, { seq: 1, kind: "league", name: "RR", config: {} });
     const [fx] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, scheduled_at)
       values (${stage!.id}, ${other.id}, ${s.orgId}, 1, 1, ${`q2-${s.fixtureId.slice(0, 6)}`}, 'scheduled', ${T})

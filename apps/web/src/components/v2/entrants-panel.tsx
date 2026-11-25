@@ -17,6 +17,8 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { lichessRefusalText } from "./entrants-lichess-refusal";
 import { onlineEntrantCapText } from "./online-entrant-cap-refusal";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import Link from "@/components/ui/console-link";
 import type { MessageKey } from "@/lib/messages";
 import { SuspensionChip } from "@/components/discipline/suspension-chip";
 // RS007/V380 — the SAME organiser-facing category/age-band derivations the
@@ -163,6 +165,9 @@ interface DivisionRosterRow {
 
 interface Props {
   divisionId: string;
+  /** Online Chess credits (spec 2026-11-23 §7.6): where the organiser changes the division's size - the Fixtures tab, where the size select and the
+   *  pay line are. Offered beside the "size is full" refusal only. Null/absent (a reader who may not pay): the sentence stands alone. */
+  changeSizeHref?: string | null;
   entrants: EntrantRow[];
   /** entrant id → resolved badge URL (own badge → team logo → club crest),
    *  from listEntrantLogoUrls. The rows fall back to this when the entrant
@@ -241,6 +246,7 @@ async function loadAllPersons(): Promise<Person[]> {
 
 export function EntrantsPanel({
   divisionId,
+  changeSizeHref = null,
   entrants,
   logoUrls,
   canEdit,
@@ -263,6 +269,8 @@ export function EntrantsPanel({
   const confirmDialog = useConfirm();
   const [persons, setPersons] = useState<Person[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Online Chess credits: the refusal on screen is "the SIZE is full" (ONLINE_SIZE_FULL), which a bigger size lifts - so it offers the way there.
+  const [sizeFull, setSizeFull] = useState(false);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
@@ -369,6 +377,7 @@ export function EntrantsPanel({
   const fail = useCallback(
     (err: unknown) => {
       // W3 T12 Phase 2: every refusal decides the recovery afresh, so a later, different one never keeps a stale button.
+      setSizeFull(err instanceof ApiV1Error && err.code === ONLINE_PACKAGE_CODES.sizeFull);
       setAddRoundFor(
         err instanceof ApiV1Error &&
           err.code === "SWISS_NO_ROUND_LEFT" &&
@@ -785,6 +794,12 @@ export function EntrantsPanel({
         <p data-testid="entrants-error" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
           {error}
         </p>
+      )}
+      {/* Online Chess credits (spec 2026-11-23 §7.6): the size sentence names the way out, a bigger size, and this is the way to it. */}
+      {error && sizeFull && changeSizeHref !== null && (
+        <Link href={changeSizeHref} data-testid="entrants-change-size" className="btn btn-ghost min-h-11 w-fit px-3 py-1.5 text-sm">
+          {msg("onlineChess.sizeFull.change")}
+        </Link>
       )}
       {/* W3 T12 Phase 2 — "Add a round", the recovery SWISS_NO_ROUND_LEFT's own sentence names, offered only while the
           server says it goes through. After it lands the organiser adds the player again (the refused add wrote

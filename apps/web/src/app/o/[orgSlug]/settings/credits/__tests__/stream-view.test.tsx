@@ -15,6 +15,8 @@
 //   V6 empty           render the table for zero rows                             → "an empty ledger says so, and offers no export"
 //   V7 pager           drop the cursor encode / the Latest link                   → "the pager"
 //   V11 change colour  swap the spend / gain colours                              → "shows the date, the change with its sign, the balance after"
+//   V12 package words  drop {division} / {size} from a package kind's call, or print the key → "an Online Chess package row names its division and size, in every locale"
+//   V13 package cell   drop the competition cell of a package row                     → "an Online Chess package row shows its competition where a match row shows its match"
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
@@ -37,8 +39,12 @@ const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").re
 const row = (over: Partial<StreamHistoryRow> = {}): StreamHistoryRow => ({
   id: "00000000-0000-0000-0000-000000000001", dateIso: "2026-10-20T09:00:00.000Z", kind: "streamUsed", delta: -1, balanceAfter: 4,
   fixture: { homeName: "Hawks", awayName: "Owls", fixtureNo: 3, competitionName: "Autumn League", href: "/o/riverside/c/autumn/d/open/f/3" },
+  onlinePackage: null,
   ...over,
 });
+/** The three kinds an Online Chess package's rows wear (the ones whose sentence names a division and a size). */
+const PACKAGE_KINDS = ["onlinePackagePaid", "onlinePackageResized", "onlinePackageRefunded"] as const;
+const PKG = { divisionName: "Open Rapid", size: 64, competitionName: "Autumn League" };
 const view = (over: Partial<StreamCreditsTabView> = {}): StreamCreditsTabView => ({
   offer: "on", total: 7, monthly: 2, pack: 5, freeAllowance: 5, freeUsed: 3, freeResetsInDays: 11,
   history: { rows: [row()], nextCursor: null },
@@ -62,18 +68,57 @@ describe("BillingStreamCredits — the history's words", () => {
       const d = dictFile(loc);
       for (const kind of STREAM_HISTORY_KINDS) {
         const delta = kind === "packPurchase" ? 5 : kind === "streamUsed" || kind === "expired" ? -1 : 1;
-        const out = await markup(view({ history: { rows: [row({ kind, delta, fixture: null })], nextCursor: null } }), loc);
+        const isPackage = (PACKAGE_KINDS as readonly string[]).includes(kind);
+        const out = await markup(view({ history: { rows: [row({ kind, delta, fixture: null, onlinePackage: isPackage ? PKG : null })], nextCursor: null } }), loc);
         const want =
           kind === "packPurchase"
             ? fill(d["settings.credits.stream.kind.packPurchase.other"]!, { count: 5 })
-            : d[`settings.credits.stream.kind.${kind}`]!;
+            : isPackage
+              ? fill(d[`settings.credits.stream.kind.${kind}`]!, { division: PKG.divisionName, size: PKG.size })
+              : d[`settings.credits.stream.kind.${kind}`]!;
         expect(want, `${loc}/${kind}: the dictionary has the sentence`).toBeTruthy();
+        expect(want, `${loc}/${kind}: no placeholder is left unfilled`).not.toMatch(/\{\w+\}/);
         expect(out, `${loc}/${kind}`).toContain(esc(want));
         expect(out, `${loc}/${kind}: the key leaked`).not.toContain("settings.credits.stream.kind");
         checked++;
       }
     }
     expect(checked).toBe(LOCALES.length * STREAM_HISTORY_KINDS.length);
+  });
+
+  it("an Online Chess package row names its division and size, in every locale; a division with markup in its name is text, never markup (V12)", async () => {
+    const hostile = { ...PKG, divisionName: "<b onmouseover=x>Open</b> & Co" };
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const d = dictFile(loc);
+      for (const kind of PACKAGE_KINDS) {
+        const out = await markup(view({ history: { rows: [row({ kind, delta: -2, fixture: null, onlinePackage: PKG })], nextCursor: null } }), loc);
+        expect(out, `${loc}/${kind}: the division`).toContain(esc(PKG.divisionName));
+        // the placeholders each kind's sentence carries are the ones the row fills: size only where the sentence says it
+        if (d[`settings.credits.stream.kind.${kind}`]!.includes("{size}")) expect(out, `${loc}/${kind}: the size`).toContain(String(PKG.size));
+        const bad = await markup(view({ history: { rows: [row({ kind, delta: -2, fixture: null, onlinePackage: hostile })], nextCursor: null } }), loc);
+        expect(bad, `${loc}/${kind}: escaped`).toContain(esc(hostile.divisionName));
+        expect(bad, `${loc}/${kind}: not markup`).not.toContain("<b onmouseover");
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * PACKAGE_KINDS.length);
+  });
+
+  it("an Online Chess package row shows its competition where a match row shows its match; a package whose division is gone shows a dash (V13)", async () => {
+    const withComp = await markup(view({ history: { rows: [row({ kind: "onlinePackagePaid", delta: -2, fixture: null, onlinePackage: PKG })], nextCursor: null } }));
+    expect(withComp).toContain(">Autumn League</span>");
+    expect(withComp, "no match link on a package row").not.toContain("/f/");
+    const gone = await markup(view({ history: { rows: [row({ kind: "onlinePackageRefunded", delta: 2, fixture: null, onlinePackage: { ...PKG, competitionName: null } })], nextCursor: null } }));
+    expect(gone).not.toContain("Autumn League");
+    expect(gone, "the division's name snapshot is still the row's words").toContain("Open Rapid");
+    expect(gone).toContain(">—</div>");
+  });
+
+  it("a package kind that arrives with no package block is the neutral sentence, never a placeholder (the reader sets both together; this is the guard)", async () => {
+    const out = await markup(view({ history: { rows: [row({ kind: "onlinePackagePaid", delta: -2, fixture: null, onlinePackage: null })], nextCursor: null } }));
+    expect(out).toContain(esc(dictFile("en")["settings.credits.stream.kind.other"]!));
+    expect(out).not.toMatch(/\{division\}|\{size\}/);
   });
 
   it("a pack of one is the singular, a pack of five the plural (V2)", async () => {
@@ -89,6 +134,9 @@ describe("BillingStreamCredits — the history's words", () => {
       const d = dictFile(loc);
       const sentences = STREAM_HISTORY_KINDS.map((k) => (k === "packPurchase" ? d["settings.credits.stream.kind.packPurchase.other"]! : d[`settings.credits.stream.kind.${k}`]!));
       expect(new Set(sentences).size, loc).toBe(STREAM_HISTORY_KINDS.length);
+      // …and the three Online Chess ones stay distinct once a division is filled in (the paid sentence and the resized one both carry a size)
+      const filled = PACKAGE_KINDS.map((k) => fill(d[`settings.credits.stream.kind.${k}`]!, { division: "X", size: 64 }));
+      expect(new Set(filled).size, `${loc}: package sentences`).toBe(PACKAGE_KINDS.length);
     }
   });
 });

@@ -307,9 +307,12 @@ export async function withTenant<T>(
      *  and locks; everything it does runs with the pool's own privileges. */
     privilegedPrelude?: (tx: Tx) => Promise<void>;
     /** Runs LAST, on this transaction's own connection, after `fn` returns and with the role set BACK to the pool's
-     *  (`reset role`): for a row in a SEALED table that must commit or roll back with `fn`'s writes — a log the spec
-     *  says every write carries (the Match Day code's use log, MD-1). It gets `fn`'s result; keep it to that write.
-     *  Allow-listed: lib/__tests__/privileged-epilogue-boundary.test.ts names the one caller. */
+     *  (`reset role`): for rows in a SEALED table that must commit or roll back with `fn`'s writes. Two uses: a log the
+     *  spec says every write carries (the Match Day code's use log, MD-1), and an Online Chess package that a division
+     *  save or delete carries with it (the unpaid row and its size, the full refund's ledger rows, the unpaid row deleted:
+     *  divisions.ts, competitions.ts; spec 2026-11-23 §7.3). It gets `fn`'s result; keep it to those writes, addressed by
+     *  what the prelude read or `fn` returned, never by a read of a row `fn` just deleted. A throw rolls back `fn` too.
+     *  Allow-listed: lib/__tests__/privileged-epilogue-boundary.test.ts names every caller. */
     privilegedEpilogue?: (tx: Tx, result: T) => Promise<void>;
   } = {},
 ): Promise<T> {

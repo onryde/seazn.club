@@ -6,12 +6,14 @@
 //   P1 offer guard   drop the `!== "on"` early return in projectedStreamCreditsTotal   → "a plan that does not stream"
 //   P3 top-up        project `rate` instead of `rate - granted` (planMonthlyRoll topUp)  → "a mid-month upgrade"
 //   P2 expiry        project `plan.grant` instead of `grant - expire`                  → "last month's unused free credits expire"
-import { beforeEach, describe, expect, it, vi } from "vitest";
+//   P4 chess offer   the projection asks `relayOffer` alone (the tab asks the Online Chess flag too)  → "(h) only Online Chess offered"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate } from "@/server/usecases/stream-credits";
+import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 
 const { relayOfferMock } = vi.hoisted(() => ({
   relayOfferMock: vi.fn<(orgId: string) => Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean; composedAvailable: boolean }>>(),
@@ -30,6 +32,13 @@ const ledgerRows = async (orgId: string) =>
 beforeEach(() => {
   relayOfferMock.mockReset();
   relayOfferMock.mockResolvedValue(ON);
+  // The vitest environment offers Online Chess to everyone (`ONLINE_CHESS_ALWAYS=1`), which would make "a plan that does not stream"
+  // an offer. Off unless a case says otherwise; PostHog is unconfigured here, so off is the helper's own fallback.
+  forgetOnlineChessFlagCache();
+  vi.stubEnv("ONLINE_CHESS_ALWAYS", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe.skipIf(!HAS_DB)("rail projection equals the Streaming tab", () => {
@@ -103,5 +112,27 @@ describe.skipIf(!HAS_DB)("rail projection equals the Streaming tab", () => {
       insert into org_stream_credits (org_id, delta, reason, bucket, balance_after)
       values (${r.orgId}, -1, 'consume', 'monthly', 0)`;
     expect(await projectedStreamCreditsTotal(r.orgId)).toBe(-1);
+  });
+  it("(h) only Online Chess offered: the projection is the tab's total — the month's grant — and writes nothing; neither offered, the bare ledger", async () => {
+    relayOfferMock.mockResolvedValue(OFF);
+    let checked = 0;
+    for (const chess of [true, false]) {
+      vi.stubEnv("ONLINE_CHESS_ALWAYS", chess ? "1" : "");
+      forgetOnlineChessFlagCache();
+      const r = await streamRig();
+      const before = await ledgerRows(r.orgId);
+      const projected = await projectedStreamCreditsTotal(r.orgId);
+      expect(await ledgerRows(r.orgId), `chess ${chess}: the rail read writes nothing`).toBe(before);
+      const tab = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+      expect(projected, `chess ${chess}: the rail equals the tab`).toBe(tab.total);
+      if (chess) {
+        expect(tab.offer).toBe("on");
+        expect(projected, "the month is owed, so the projection is above the bare ledger").toBeGreaterThan(0);
+      } else {
+        expect([tab.offer, projected]).toEqual(["notIncluded", 0]);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 });

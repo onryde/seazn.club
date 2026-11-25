@@ -1032,3 +1032,21 @@ describe("the board in focus's cameras: only a watchable side is joined, only fo
     island.unmount();
   });
 });
+
+// Online Chess credits (plan Task 12): the pay-and-open receipt reads WHO is charged and in which currency off the ctx every panel is handed. The page
+// gives the shell both (`orgId`, `currency`); this is the seam between them - a shell that dropped either would compile, render and quietly turn the
+// receipt's credits chooser into a link.
+describe("Online Chess credits: the shell hands the round panel the organisation and its currency", () => {
+  const ctxOf = (o: Partial<MatchDayShellProps>) => {
+    const island = renderIsland(MatchDayShell, props({ ...night(), online_rounds: [round("stage-1:3", "before", null)] } as MatchDayView, { focusRoundKey: "stage-1:3", ...o }));
+    return parts(island.tree()).round!.ctx as { orgId?: string; currency?: string; orgSlug: string };
+  };
+
+  it("both reach the panel's ctx; with none given the ctx carries none (the pair)", () => {
+    expect(ctxOf({ orgId: "org-1", currency: "eur" })).toMatchObject({ orgId: "org-1", currency: "eur", orgSlug: "acme" });
+    const bare = ctxOf({});
+    expect(bare.orgId).toBeUndefined();
+    expect(bare.currency).toBeUndefined();
+  });
+});
+

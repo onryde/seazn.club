@@ -11,12 +11,12 @@
 import type { MatrixData } from "@/lib/pricing-matrix";
 import type { HelpSearchRow } from "@/lib/help-search";
 import { allHelpArticles, helpHeadings, helpSectionLabel, type HelpArticle } from "@/server/help-content";
-import { resolveHelpTokens, stripHelpTokens } from "@/server/help-tokens";
+import { resolveHelpTokens, resolveOnlineTokens, stripHelpTokens } from "@/server/help-tokens";
 
 let cached: Promise<HelpSearchRow[]> | null = null;
 
 async function build(articles: Iterable<HelpArticle>, matrix?: MatrixData): Promise<HelpSearchRow[]> {
-  const text = (s: string) => (matrix ? resolveHelpTokens(s, matrix) : stripHelpTokens(s));
+  const text = (s: string) => resolveOnlineTokens(matrix ? resolveHelpTokens(s, matrix) : stripHelpTokens(s));
   return Promise.all(
     [...articles].map(async (a) => {
       const row: HelpSearchRow = {
@@ -27,7 +27,7 @@ async function build(articles: Iterable<HelpArticle>, matrix?: MatrixData): Prom
         headings: (await helpHeadings(a.markdown)).map((h) => h.text),
       };
       // A guard, not a hope: nothing that looks like a token leaves this function.
-      if (JSON.stringify(row).includes("{{plan")) throw new Error(`help search index: a plan token survived in ${a.slug}`);
+      if (/\{\{(?:plan|online)/.test(JSON.stringify(row))) throw new Error(`help search index: a plan token survived in ${a.slug}`);
       return row;
     }),
   );

@@ -65,6 +65,13 @@ const OTHER_VOCABULARY: ReadonlyMap<string, { literals: readonly StripeOnlyStatu
     "server/usecases/registrations/checkout.ts",
     { literals: ["unpaid"], why: "Stripe Checkout Session payment_status, never subscriptions.status" },
   ],
+  // Online Chess credits (spec 2026-11-23 §8.4): Open round's state machine. `{ type: "unpaid" }` is the action the 402
+  // ONLINE_CHESS_UNPAID answer dispatches (the division's package is not paid yet, so the receipt stands up). A package
+  // state of our own, never a subscription's.
+  [
+    "components/v2/desk/open-round-state.ts",
+    { literals: ["unpaid"], why: "the open-round reducer's action for an unpaid Online Chess package (402 ONLINE_CHESS_UNPAID)" },
+  ],
 ]);
 
 /** A bare `status`: the shape a comparison against `subscriptions.status` takes. Excused nowhere by OTHER_VOCABULARY. */

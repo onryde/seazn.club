@@ -25,7 +25,7 @@ import { promotionVerdict } from "./places-left";
 import { divisionFormatMaxes } from "./format-max";
 import { formatMaxPromotionRefusal } from "../roundrobin-refusal";
 import { divisionPlaysOnline, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { assertOnlineRoom, countOnlineHeld, lockDivisionForCap, onlineCapBinds } from "@/server/external-play/online-entrant-cap";
+import { assertOnlineRoom, assertSizeRoom, capBinder, countOnlineHeld, lockDivisionForCap, sizeForDoor } from "@/server/external-play/online-entrant-cap";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -92,8 +92,10 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  *  - at or past the FORMAT's max entrants (`divisionFormatMaxes`: the largest field the first stage's draw fits): always refused,
  *    422 `FORMAT_TOO_MANY_ENTRANTS`, on any plan and confirmed or not. It answers FIRST, before the online cap (owner "apply rec"
  *    2026-11-22): no plan or cap raises it, so its sentence is the one that says what to change;
- *  - past the cap of a division that plays ONLINE, min(`planLimit`, 256) (owner ruling 2026-11-21, 256 since 2026-11-23), where the online cap is what
- *    binds (the plan's limit is absent or no lower): always refused, 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no plan to
+ *  - past the cap of a division that plays ONLINE, min(`planLimit`, size, 256) (owner ruling 2026-11-21, 256 since 2026-11-23; the size
+ *    since Online Chess credits, spec §7.6), where the SIZE is what binds: always refused, 422 `ONLINE_SIZE_FULL` (`size`, `nextSize`),
+ *    judged by the same count and ahead of the plan's refusal; where the online cap is what binds (the plan's limit is absent or no
+ *    lower, and the size is 256): always refused, 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no plan to
  *    raise. It is judged by the places the division HOLDS (`countOnlineHeld`: live entrants plus sign-ups let in), the count every
  *    online-cap door shares, not by the plan's count below, and it comes before the plan's refusal (at a plan of exactly 256 no
  *    upgrade changes anything);
@@ -145,7 +147,12 @@ export async function assertOrganiserPromotionHasRoom(
   // changes anything) - after the format's max above; where a LOWER plan limit binds (re-review N2: a size pack's 96) the same count
   // answers with the plan's own refusal.
   const held = online ? await countOnlineHeld(tx, divisionId) : 0;
-  if (online && onlineCapBinds(true, opts.planLimit)) assertOnlineRoom(held + 1);
+  // The size the organiser bought is a third line (spec §7.6), read under the lock taken above: where it is the lowest, ONLINE_SIZE_FULL
+  // answers, ahead of the plan's refusal just as the online cap does (the lowest line is the one that says what to change).
+  const size = online ? await sizeForDoor(tx, divisionId) : null;
+  const binder = capBinder(online, opts.planLimit, size);
+  if (binder === "online") assertOnlineRoom(held + 1);
+  else if (binder === "size") assertSizeRoom(size!, held + 1);
   if (verdict.kind === "plan_limit") throw planLimitRefusal(verdict.limit, verdict.active);
   if (online && promotionVerdict({ capacity: null, planLimit: opts.planLimit, formatMax: null, active: held }).kind === "plan_limit") {
     throw planLimitRefusal(opts.planLimit!, held);
@@ -210,6 +217,10 @@ export async function promoteOldestWaitlisted(
    *  solo sign-up is the caller's to wave through (it takes no team place). The automatic promotions pass nothing: the place they fill
    *  was just freed. A refusal throws, so nothing is promoted and the transaction rolls back. */
   beforePromote?: (picked: { id: string; free_agent: boolean }) => Promise<void>,
+  /** The registrants the seat gate has already passed over, shared by a caller that promotes MANY places in a row (a size that grew:
+   *  registrations/promote-into-room.ts): they are left out of this pick, and each one passed over now is added to it. Without it every
+   *  place would pass the same unseatable registrant over again - a second ledger row and a second "skipped" mail for one skip. */
+  passedOver?: string[],
 ): Promise<RegistrationWithGroupRow | null> {
   // FU1: where a promotion SEATS the next in line (free, auto approval), it seats them as the settings' kind - and a kind
   // the division no longer takes (Entrant kinds narrowed since they joined) would be refused by `materialise`, failing the
@@ -224,7 +235,7 @@ export async function promoteOldestWaitlisted(
   }
   // `skipped`: the candidates this call has passed over - `excludeId`, and (with a seat gate) every registrant whose seat the gate
   // refused. A passed-over entry is left exactly as it was: still waitlisted, in its place, picked again by the NEXT freed spot.
-  const skipped: string[] = excludeId ? [excludeId] : [];
+  const skipped: string[] = [...(excludeId ? [excludeId] : []), ...(passedOver ?? [])];
   for (;;) {
     const [picked] = await tx<{ id: string; group_id: string; free_agent: boolean }[]>`
       select r.id, r.group_id, r.free_agent from registrations r
@@ -252,6 +263,7 @@ export async function promoteOldestWaitlisted(
     if (early) {
       await recordSkippedPromotion(tx, divisionId, picked.id, early);
       skipped.push(picked.id);
+      passedOver?.push(picked.id);
       continue;
     }
     await beforePromote?.(picked);
@@ -261,6 +273,7 @@ export async function promoteOldestWaitlisted(
       if (!isLichessRosterRefusal(err)) throw err;
       await recordSkippedPromotion(tx, divisionId, picked.id, err);
       skipped.push(picked.id);
+      passedOver?.push(picked.id);
     }
   }
 }

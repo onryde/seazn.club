@@ -720,6 +720,22 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   const camera = strip.getByTestId("division-builder-camera");
   await expect(camera).toHaveValue("inherit");
   await camera.selectOption("required");
+  // Online Chess credits (spec 8.1; T11 fix round 1 I1/I3): Online play, then Camera, then "Players, up to" and the price line - and the
+  // price follows the camera. Five Swiss rounds fit 16 players (1 credit; 2 with the Fair-play camera - the spec's table).
+  const packageBlock = strip.getByTestId("division-online-package");
+  const priceLine = strip.getByTestId("online-price-line");
+  await expect(packageBlock, "the size block is drawn under Lichess").toBeVisible();
+  const cameraBox = await camera.boundingBox();
+  const packageBox = await packageBlock.boundingBox();
+  expect(cameraBox!.y, "the camera sits above the size and its price").toBeLessThan(packageBox!.y);
+  await camera.selectOption("off");
+  await expect(priceLine, "16 players, no camera").toContainText("Online Chess: 1 credit");
+  await camera.selectOption("optional");
+  await expect(priceLine, "an optional camera is priced with the camera").toContainText("Online Chess: 2 credits");
+  await camera.selectOption("required");
+  await expect(priceLine, "16 players with the camera").toContainText("Online Chess: 2 credits");
+  const balanceBefore = Number((await priceLine.innerText()).match(/You have (\d+) credits?/)![1]);
+  const ledgerClock = await withDb(async (sql) => (await sql<{ t: Date }[]>`select clock_timestamp() as t`)[0]!.t);
   // m8: the control moves the match length - both clocks spent, base + 40 moves of increment, rounded up.
   const slotMinutes = Math.ceil((2 * (picked.limitSeconds + 40 * picked.incrementSeconds)) / 60);
   await expect(page.getByTestId("division-builder-match-minutes")).toHaveValue(String(slotMinutes));
@@ -733,6 +749,27 @@ test("chess: online play is asked first, Lichess is refused without one of its e
   const slug = await landed(page);
 
   const { division, stages, schedule } = await readBack(slug, compId);
+  // Creating the division SPENDS NOTHING (spec 7.2: the price line says "nothing is spent here"): the package is unpaid, no ledger row
+  // names it, and the balance the API reads is the one the price line showed before Create - unless another spec's ledger row landed
+  // in the org in between (the org is shared), which is told apart from a spend by its not naming this package.
+  const unpaid = await withDb(async (sql) => {
+    const [p] = await sql<{ id: string; size: number; paid_at: Date | null; credits_paid: number }[]>`
+      select id, size, paid_at, credits_paid from division_online_packages where division_id = ${division.id} and refunded_at is null`;
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where online_package_id = ${p!.id}`;
+    const [{ foreign }] = await sql<{ foreign: number }[]>`
+      select count(*)::int as foreign from org_stream_credits
+       where org_id = (select org_id from divisions where id = ${division.id}) and created_at >= ${ledgerClock}
+         and online_package_id is distinct from ${p!.id}`;
+    return { ...p!, ledgerRows: n, foreign };
+  });
+  expect(unpaid.size, "the package holds the size the select showed").toBe(16);
+  expect(unpaid.paid_at, "created, not paid").toBeNull();
+  expect(unpaid.credits_paid).toBe(0);
+  expect(unpaid.ledgerRows, "no ledger row names the package: nothing was spent").toBe(0);
+  const quote = await apiJson<{ balance: number }>(request, `/api/v1/divisions/${division.id}/online-package?size=16`);
+  expect(quote.status, `quote: ${JSON.stringify(quote.error)}`).toBe(200);
+  if (unpaid.foreign === 0) expect(quote.data!.balance, "the balance is the one the price line showed before Create").toBe(balanceBefore);
   const stored = division.config.clock as { base?: unknown; increment?: unknown; delay?: unknown } | undefined;
   const checks: [string, unknown, unknown][] = [
     ["name", division.name, name],

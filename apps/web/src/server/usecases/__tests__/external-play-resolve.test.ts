@@ -49,7 +49,8 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { getFixtureState, listDivisionFixtures } from "../fixtures";
 import { startDivision } from "../schedule";
-import { completeStage, createStages, generateStageFixtures } from "../stages";
+import { completeStage, generateStageFixtures } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { getCompetitionDesk, listFixturesAwaitingSettle } from "../competition-desk";
 import { abandonNoResult, needsDecision } from "@/components/v2/needs-decision";
 import { scoreEvent } from "../scoring";
@@ -732,7 +733,7 @@ async function seedRealTable(kind: "league", players: number) {
       { display_name: `L${i + 1}`, kind: "individual", seed: i + 1, members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
     ]);
   }
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind, name: "League", config: {}, progression: null });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind, name: "League", config: {}, progression: null });
   await generateStageFixtures(owner, stage!.id);
   await sql`update fixtures set scheduled_at = now() - interval '5 minutes' where stage_id = ${stage!.id}`;
   await startDivision(owner, division.id);

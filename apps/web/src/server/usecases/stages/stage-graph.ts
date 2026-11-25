@@ -48,6 +48,9 @@ import { fixtureHoldsStandingResultSql } from "../fixture-results-sql";
 import { matchName, refuseOwnFormatLoss } from "../fixture-override-guards";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { assertOnlineFormat, assertRoundsFit } from "../online-package/format";
+import { countedRounds, livePackage } from "../online-package/read";
 import { STAGE_COLS, type Tx, type StageInput, type StageRow } from "./types";
 import { lockBoardsRefusingOnlineGames, lockSwissBoardAppends } from "./swiss-boards";
 
@@ -356,6 +359,15 @@ async function insertStageBatch(
     select competition_id, sport_key, module_version, variant_key, config, tiebreakers from divisions where id = ${divisionId}
     for no key update`;
   if (!division) throw new HttpError(404, "division not found");
+  // Online Chess (spec 2026-11-23 §7.6, P16): an online division runs Swiss and knockout only, so a batch that gives it a league,
+  // a group, a ladder or an americano is refused by name, the whole batch, before any insert - at both writers, as this function
+  // is `createStages`' and `replaceStages`' one write. Asked of the CHANGE (the batch's kinds), never of the stages that stand: a
+  // legacy online division holding a league stays readable and can still take a Swiss. Not asked once a round has opened.
+  // The division lock is held; the live package is read plain under it (the pay door takes the same lock before it writes).
+  const playsOnline = divisionPlaysOnline(division);
+  const onlinePackage = playsOnline ? await livePackage(tx, divisionId) : null;
+  const onlineBeforeRound1 = playsOnline && (onlinePackage === null || onlinePackage.frozenAt === null);
+  if (onlineBeforeRound1) assertOnlineFormat(inputs.map((s) => s.kind));
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
   // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
   // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
@@ -401,6 +413,10 @@ async function insertStageBatch(
     // W5 follow-ups fix round 1 (I2): a source that has already finished is asked now what its completion would have been.
     await refuseUnfillableFromFinishedSources(tx, row, s.progression as never);
   }
+  // Online Chess (P1, P11, P15): the Swiss rounds the division declares - the stages that stand and this batch's, summed - must fit
+  // the size its package holds, until a round opens. Asked only of a batch that declares Swiss rounds, so a legacy division over its
+  // size can still take a knockout. After the inserts, so the sum is read from the rows; the refusal rolls the batch back.
+  if (onlineBeforeRound1 && inputs.some((s) => s.kind === "swiss")) assertRoundsFit(await countedRounds(tx, divisionId), onlinePackage);
   // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a batch that sets the division's FIRST stage - a new format, or
   // a format change (`replaceStages` runs this batch after its delete) - on a field already past that format's max is refused
   // by name, with the max and the field, as the draw doors refuse it (`generateStageFixturesTx`). A stage added after the

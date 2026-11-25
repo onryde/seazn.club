@@ -64,7 +64,8 @@ import { RegistrationHubRegistrantActions } from "@/components/registration-hub-
 import { EntrantsPanel, type EntrantsPanelEligibility } from "@/components/v2/entrants-panel";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, ONLINE_DIVISION_FULL, ONLINE_PLAY_TOO_MANY_ENTRANTS } from "@/lib/online-chess";
-import { assertOnlinePlayFits, onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
+import { assertOnlinePlayFits, onlineDivisionFullError, onlineSizeFullError } from "@/server/external-play/online-entrant-cap";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 import { v1 } from "@/server/api-v1/http";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
@@ -89,6 +90,9 @@ const asRefusal = (e: { message: string; status: number; code?: string; extra?: 
 
 /** The REAL refusal of the entrant door, as the API v1 envelope delivers it to the client. */
 const FULL = (): Refusal => asRefusal(onlineDivisionFullError());
+/** The REAL refusal of a door that would put the division past the SIZE its organiser bought (Online Chess credits, spec §7.6): 16 here. */
+const SIZE_FULL = (): Refusal => asRefusal(onlineSizeFullError(16));
+const SIZE_WORDS = () => tRuntime(EN_UI, "onlineChess.sizeFull", { size: 16, nextSize: 32 });
 /** The REAL refusal of the online switch for a division holding `n` entrants. */
 function tooMany(n: number): Refusal {
   try {
@@ -141,6 +145,77 @@ describe("EntrantsPanel: an online chess division that is full says so in the or
     expect(shown).toContain(String(MAX));
     expect(shown, "a capacity limit: no upsell").not.toMatch(/upgrade|plan|raise|pro\b/i);
     expect(island.tree().some((e) => e.type === UpgradeGate), "no paywall: an upgrade does not lift this").toBe(false);
+  });
+
+  it("ONLINE_SIZE_FULL (the size the organiser bought): the dictionary's sentence with the size and the next one up, not the server's English, and no UpgradeGate", async () => {
+    const refusal = SIZE_FULL();
+    expect(refusal.code, "premise: the real refusal carries the size's own code").toBe(ONLINE_PACKAGE_CODES.sizeFull);
+    expect(refusal.extra, "premise: and the numbers the sentence names").toEqual({ size: 16, nextSize: 32 });
+    const island = await addRefusedWith(refusal);
+    const shown = textOf(banner(island.tree())!);
+    expect(shown).toBe(SIZE_WORDS());
+    expect(shown).toContain("16");
+    expect(shown).toContain("32");
+    expect(shown, "no plan upsell: the way out is a bigger size").not.toMatch(/upgrade|plan\b|raise|pro\b/i);
+    expect(island.tree().some((e) => e.type === UpgradeGate), "no paywall").toBe(false);
+  });
+
+  // Online Chess credits (plan Task 12): the size sentence names the way out - a bigger size - and the panel offers it: a "Change size" link to the
+  // Fixtures tab, where the size select and the pay line are. The other full refusal (256, the most any size holds) is not lifted by a size, so it
+  // offers none.
+  const CHANGE_SIZE = "/o/riverside/c/summer-league/d/chess?tab=fixtures";
+  const changeSize = (tree: Tree) => tree.find((e) => propsOf(e)["data-testid"] === "entrants-change-size");
+  const addRefusedWithLink = async (failure: Refusal, changeSizeHref: string | null = CHANGE_SIZE) => {
+    const island = renderIsland(EntrantsPanel, { ...panelProps(), changeSizeHref });
+    await vi.waitFor(() => expect(net.personsLoaded, "premise: the persons directory was read").toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 0));
+    net.refuse.set("entrants", failure);
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(net.calls.filter((c) => c === "POST /api/v1/divisions/div-1/entrants"), "premise: the add really went to the server").toHaveLength(1);
+    return island;
+  };
+
+  it("ONLINE_SIZE_FULL offers 'Change size', a link to the Fixtures tab, beside the sentence", async () => {
+    const island = await addRefusedWithLink(SIZE_FULL());
+    expect(textOf(banner(island.tree())!), "premise: the size sentence is up").toBe(SIZE_WORDS());
+    const link = changeSize(island.tree());
+    expect(link, "the link is offered").toBeDefined();
+    expect(propsOf(link!).href).toBe(CHANGE_SIZE);
+    expect(textOf(link!).trim()).toBe(tRuntime(EN_UI, "onlineChess.sizeFull.change"));
+  });
+
+  it("ONLINE_DIVISION_FULL (256) offers none: no size lifts it", async () => {
+    const island = await addRefusedWithLink(FULL());
+    expect(textOf(banner(island.tree())!), "premise: the 256 sentence is up").toBe(FULL_WORDS());
+    expect(changeSize(island.tree())).toBeUndefined();
+  });
+
+  it("no address to send the organiser to (a reader who may not pay, or no package page): the sentence stands alone", async () => {
+    const asked = [
+      async () => addRefusedWithLink(SIZE_FULL(), null),
+      async () => addRefusedWith(SIZE_FULL()), // the prop absent altogether
+    ];
+    for (const [i, ask] of asked.entries()) {
+      net.calls.length = 0;
+      const island = await ask();
+      expect(textOf(banner(island.tree())!), `premise (${i}): the size sentence is up`).toBe(SIZE_WORDS());
+      expect(changeSize(island.tree()), `case ${i}`).toBeUndefined();
+    }
+  });
+
+  it("a later, different refusal takes the link away; the next successful attempt clears the sentence and the link with it", async () => {
+    const island = await addRefusedWithLink(SIZE_FULL());
+    expect(changeSize(island.tree()), "premise: the link is up").toBeDefined();
+    net.refuse.set("entrants", FULL());
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(textOf(banner(island.tree())!), "premise: the 256 sentence replaced it").toBe(FULL_WORDS());
+    expect(changeSize(island.tree())).toBeUndefined();
+    net.refuse.set("entrants", SIZE_FULL());
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(changeSize(island.tree()), "the size refusal brings it back").toBeDefined();
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]); // answered: nothing refused this time
+    expect(banner(island.tree()), "premise: the sentence is gone").toBeUndefined();
+    expect(changeSize(island.tree())).toBeUndefined();
   });
 
   it("the other direction: the plan's own refusal (402 PAYMENT_REQUIRED) still opens the upgrade gate, and a later full refusal replaces it", async () => {
@@ -316,9 +391,13 @@ describe("the two sentences exist in all four locales, each in its own words, wi
   const DICTS = Object.fromEntries(
     LOCALES.map((l) => [l, JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Dict]),
   ) as Record<(typeof LOCALES)[number], Dict>;
-  const KEYS = { [ONLINE_DIVISION_FULL]: ["{limit}"], [ONLINE_PLAY_TOO_MANY_ENTRANTS]: ["{limit}", "{entrants}"] } as const;
+  const KEYS = {
+    [ONLINE_DIVISION_FULL]: ["{limit}"],
+    [ONLINE_PLAY_TOO_MANY_ENTRANTS]: ["{limit}", "{entrants}"],
+    [ONLINE_PACKAGE_CODES.sizeFull]: ["{size}", "{nextSize}"],
+  } as const;
 
-  it("every locale carries both keys with their placeholders, and es/fr/nl are not the English text", async () => {
+  it("every locale carries every key with its placeholders, and es/fr/nl are not the English text", async () => {
     const { ONLINE_ENTRANT_CAP_KEYS } = await import("../online-entrant-cap-refusal");
     let checked = 0;
     for (const loc of LOCALES) {
@@ -331,11 +410,11 @@ describe("the two sentences exist in all four locales, each in its own words, wi
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 4 locales x 2 keys").toBe(LOCALES.length * 2);
+    expect(checked, "anti-vacuity: 4 locales x 3 keys").toBe(LOCALES.length * 3);
   });
 
   it("English says capacity and nothing about plans, upgrading or Pro (a capacity limit is not an upsell)", () => {
-    for (const key of ["onlineChess.entrantCap", "onlineChess.turnOnTooMany"]) {
+    for (const key of ["onlineChess.entrantCap", "onlineChess.turnOnTooMany", "onlineChess.sizeFull"]) {
       expect(DICTS.en[key] as string, key).not.toMatch(/upgrade|plan\b|raise|pro\b/i);
     }
   });
@@ -352,6 +431,9 @@ describe("onlineEntrantCapText: only the two codes, and only with the numbers it
       tRuntime(EN_UI, "onlineChess.entrantCap", { limit: 7 }),
     );
     expect(onlineEntrantCapText({ code: ONLINE_PLAY_TOO_MANY_ENTRANTS, extra: { limit: MAX } }, say), "no count to name: the server's own words stay").toBeNull();
+    expect(onlineEntrantCapText({ code: ONLINE_PACKAGE_CODES.sizeFull, extra: { size: 16, nextSize: 32 } }, say), "the size's sentence").toBe(SIZE_WORDS());
+    expect(onlineEntrantCapText({ code: ONLINE_PACKAGE_CODES.sizeFull, extra: { size: 16, nextSize: null } }, say), "no next size to name: the server's own words stay").toBeNull();
+    expect(onlineEntrantCapText({ code: ONLINE_PACKAGE_CODES.sizeFull }, say), "no numbers at all").toBeNull();
     expect(onlineEntrantCapText({ code: ONLINE_PLAY_TOO_MANY_ENTRANTS, extra: { limit: MAX, entrants: 130 } }, say)).toBe(
       tRuntime(EN_UI, "onlineChess.turnOnTooMany", { entrants: 130, limit: MAX }),
     );

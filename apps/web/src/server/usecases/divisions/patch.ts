@@ -1,7 +1,4 @@
 import "server-only";
-// Division use-cases (doc 08 §3, doc 06). Creation snapshots the merged
-// variant config and PINS the sport module version (doc 02 §4) so a running
-// division always replays under the rules it started with.
 import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -10,7 +7,7 @@ import {
   entrantsOverrideWidensBeyondIndividual,
   isChessSport,
 } from "@/lib/chess-individual-only";
-import { assertWithinLimit, getLimit, requireFeature, competitionIsEnded } from "@/lib/entitlements";
+import { requireFeature } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { effectiveEntrantModel, fixtureKeysFor, type TiebreakerKey } from "@seazn/engine/sport";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
@@ -22,32 +19,22 @@ import {
   AGE_MAX_BEFORE_MIN,
   AGE_CUTOFF_BOTH_OR_NEITHER,
   AGE_CUTOFF_DAY_INVALID_FOR_MONTH,
-  type CreateDivision,
   type PatchDivision,
 } from "@/server/api-v1/schemas";
 // The SAME day-per-month predicate `checkAgeCutoff` validates the request
 // body with — imported, never re-implemented, so a change to DAYS_IN_MONTH
 // moves both layers together (F12's merge-check below).
 import { isValidCutoffDay } from "@/lib/registration-rules";
-import { captureServer } from "@/lib/posthog-server";
-import { EVENTS } from "@/lib/analytics-events";
-import { assertCompetitionNotFrozen } from "./entitlement-freeze";
-import { divisionRefusals, lockedStageIdsAmong } from "./rule-locks";
-import { refuseInvalidatedOverrides } from "./fixture-override-guards";
-import { configWriteIssueList, refuseConfigWriteIssues, refuseInvalidatedStageRules } from "./stage-rules-merge";
-import { refuseCascadeForSport, refuseDivisionTableSave, refuseStrayPointsMapKeys, startedStagesToPin, type KeptPinned } from "./table-rule-guards";
+import { divisionRefusals, lockedStageIdsAmong } from "../rule-locks";
+import { refuseInvalidatedOverrides } from "../fixture-override-guards";
+import { configWriteIssueList, refuseConfigWriteIssues, refuseInvalidatedStageRules } from "../stage-rules-merge";
+import { refuseDivisionTableSave, refuseStrayPointsMapKeys, startedStagesToPin, type KeptPinned } from "../table-rule-guards";
 import { pinStageTableRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
-import { reseedStagePresets } from "./stage-preset-reseed";
-import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
+import { reseedStagePresets } from "../stage-preset-reseed";
+import { heldAwards, rewriteHeldAwards, type HeldAward } from "../award-rewrite";
 import { bumpMovedRules, unfrozenRules, type UnfrozenRules } from "@/server/engine-db/rules-version";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
-import {
-  slugify,
-  withUniqueSlug,
-  SLUG_CONSTRAINT,
-  recordSlugHistory,
-  RESERVED_ENTITY_SLUGS,
-} from "./slugs";
+import { slugify, withUniqueSlug, SLUG_CONSTRAINT, recordSlugHistory } from "../slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import {
@@ -60,629 +47,37 @@ import {
 // D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
-import { normalizeTags } from "./venues";
+import { normalizeTags } from "../venues";
 import {
   applyOnlinePlayToConfig,
   assertOnlinePlayValue,
+  divisionPlaysOnline,
   readOnlinePlay,
   withoutDivisionMetaKeys,
 } from "@/server/external-play/online-play";
-import {
-  assertCameraPolicyForSport,
-  assertCameraPolicyValue,
-  assertPolicyChange,
-  CAMERA_POLICY_CHANGED,
-  effectivePolicy,
-  readCameraPolicy,
-  type CameraPolicy,
-} from "@/server/external-play/camera-policy";
+import { assertCameraPolicyValue } from "@/server/external-play/camera-policy";
+import { auditDivisionCameraChange, lockDivisionCameraRow } from "../division-camera-policy";
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard, readPlanLimit } from "@/server/external-play/online-entrant-cap";
-import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
-import { audit } from "./audit";
-
-export interface DivisionRow {
-  id: string;
-  competition_id: string;
-  name: string;
-  slug: string;
-  /** Markdown (v3/06 §2), rendered on the public division page. */
-  description: string | null;
-  sport_key: string;
-  variant_key: string;
-  config: unknown;
-  module_version: string;
-  tiebreakers: string[] | null;
-  /** V364/V380 first-class eligibility columns — the ONE eligibility
-   *  representation (RS007/V380 dropped the jsonb `eligibility` column this
-   *  comment used to say "read alongside"); see
-   *  registration-eligibility.ts's EligibilityDivision. */
-  category: string | null;
-  age_min: number | null;
-  age_max: number | null;
-  /** RS007/V380: both-or-neither — enforced by `checkAgeCutoff` (api-v1/schemas/divisions.ts)
-   *  on the request body and by `patchDivision`'s merge-check below on the
-   *  merged row, NOT by `divisions_age_cutoff_check`, which a one-sided
-   *  orphan satisfies (see that merge-check's own comment).
-   *  Null defaults to 1 January of the season-start year
-   *  (registration-rules.ts's `ageBandEligibilityIssues`). */
-  age_cutoff_month: number | null;
-  age_cutoff_day: number | null;
-  /** RS007/V380: the retired jsonb "custom rule" note, now a first-class
-   *  column the public entry/join pages render as a warning. */
-  eligibility_note: string | null;
-  status: string;
-  officials_hide_names: boolean;
-  scheduling_mode: string;
-  auto_progress: boolean;
-  /** SPEC-2: draft a news post when results land in this division. */
-  auto_posts: boolean;
-  /** V416: publish seed numbers on the public site (`public_entrants_v`
-   *  redacts `seed` when false). Admin reads are unaffected. */
-  show_seeds: boolean;
-  schedule_locked: boolean;
-  archived_at: string | null;
-  created_at: string;
-  /** Division event-ledger head — the board's optimistic token (gap 10). */
-  seq: number;
-  /** Youth privacy (v3/11 gap 8): auto from U-age eligibility, overridable. */
-  youth: boolean;
-  player_name_display: "full" | "first_initial" | null;
-  /** Card identity (V274, v8): uploaded logo; null → monogram tile. */
-  logo_url: string | null;
-  logo_storage_path: string | null;
-  /** D5/P8 candidate-court filter (V367): tags ⊇ required_court_tags, empty
-   *  = any court. CRUD lives here; the READ path that actually FILTERS a
-   *  candidate set is P9 pass 2b's `usecases/court-candidates.ts`
-   *  (`resolveCandidateCourts`/`unionRequiredCourtTags`), unioned with
-   *  `stages.required_court_tags` (the sibling V367 column, wired the same
-   *  pass — CRUD for the stage side still does not exist). */
-  required_court_tags: string[];
-  /** V451 online-chess camera requirement for this division; null = inherit
-   *  the competition's (NOT NULL floor). Resolved per fixture, with the stage
-   *  level, by camera-policy.ts's fixtureCameraPolicy. */
-  camera_policy: CameraPolicy | null;
-}
-
-const COLS = [
-  "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
-  "module_version", "tiebreakers", "category", "age_min", "age_max", "age_cutoff_month",
-  "age_cutoff_day", "eligibility_note", "status",
-  "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "show_seeds", "schedule_locked",
-  "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
-  "logo_storage_path", "required_court_tags", "camera_policy",
-] as const;
-
-/** One variant choice for the Settings tab's format editor. `config` is the preset exactly as the row stores it - only the keys
- *  the variant declares (scripts/sync-sports.ts), never a parsed config - because a variant switch needs to know WHICH keys
- *  the old and the new variant own (W2e Task 29); `system` tells a built-in from this org's own preset. */
-export interface VariantOption {
-  key: string;
-  name: string;
-  system: boolean;
-  config: Record<string, unknown>;
-}
-
-/** Variant choices for the Settings tab's format editor (v8) — system
- *  presets plus this org's own, deduped per key (org's wins). */
-export async function listVariantOptions(
-  auth: AuthCtx,
-  sportKey: string,
-): Promise<VariantOption[]> {
-  return withTenant(auth.orgId, (tx) =>
-    tx<VariantOption[]>`
-      select distinct on (key) key, name, (org_id is null) as system, config from sport_variants
-      where sport_key = ${sportKey}
-      order by key, org_id nulls last`,
-  );
-}
-
-/**
- * U-anything eligibility (age_max below 18) marks a division youth. RS007/
- * V380 repoints this at the first-class `age_max` column — the ONE place
- * `youth` derives from now, replacing three prior derivations (this
- * function's old jsonb-scanning body, its INSERT-time call below, and its
- * PATCH-time re-derive) plus a fourth, independent raw-SQL recompute in
- * `settings/page.tsx` that now just reads the `youth` column directly.
- */
-export function deriveYouth(ageMax: number | null): boolean {
-  return ageMax != null && ageMax < 18;
-}
-
-export async function listDivisions(
-  auth: AuthCtx,
-  competitionId: string,
-  opts: { includeArchived?: boolean } = {},
-): Promise<DivisionRow[]> {
-  return withTenant(auth.orgId, async (tx) => {
-    const [comp] = await tx`select 1 from competitions where id = ${competitionId}`;
-    if (!comp) throw new HttpError(404, "competition not found");
-    // Archived divisions are hidden from the console (v3/09 §4) — only the
-    // competition-settings "Archived divisions" list asks for them.
-    return tx<DivisionRow[]>`
-      select ${tx(COLS)} from divisions
-      where competition_id = ${competitionId}
-      ${opts.includeArchived ? tx`` : tx`and archived_at is null`}
-      order by created_at, id`;
-  });
-}
-
-/**
- * A finished competition does not grow (#376 branch, part D).
- *
- * `assertCompetitionNotFrozen` checks the over-quota freeze and says nothing
- * about status, so a completed or archived competition accepted new divisions.
- * Not a quota leak — the per-competition cap still binds — but it made
- * "completed" mean nothing, and it contradicted the same competition being
- * refused an Event Pass.
- *
- * TERMINAL ONLY. `past_ends_on` must keep accepting writes: that arm is
- * routinely a stale end date on a competition still being played, which is why
- * the pass chip points that organiser at the settings form. The pass line and
- * the write line share a vocabulary, not a threshold.
- *
- * Takes the CALLER'S tx: the status it refuses on must be the one the insert
- * would have run against, and a read outside the transaction could see a
- * different snapshot.
- */
-async function assertCompetitionNotEnded(tx: postgres.TransactionSql, competitionId: string) {
-  const [comp] = await tx<{ status: string }[]>`
-    select status from competitions where id = ${competitionId}`;
-  if (comp && competitionIsEnded(comp.status)) {
-    throw new HttpError(
-      409,
-      "This competition is finished, so no new divisions can be added to it",
-      "COMPETITION_ENDED",
-    );
-  }
-}
-
-/** Activation funnel (feature 1): step after competition_created. Exported
- *  so createFromTemplate (usecases/templates.ts, D1a) can fire the SAME
- *  event, with the SAME shape, after ITS OWN transaction commits — see
- *  fireCompetitionCreated's comment in usecases/competitions.ts for why this
- *  needs to exist at all (P4 review 2026-08-13 finding 1). */
-export async function fireDivisionCreated(
-  auth: AuthCtx,
-  sportKey: string,
-  competitionId: string,
-): Promise<void> {
-  await captureServer({
-    event: EVENTS.DIVISION_CREATED,
-    distinctId: auth.userId ?? `org:${auth.orgId}`,
-    orgId: auth.orgId,
-    properties: { sport_key: sportKey, competition_id: competitionId },
-  });
-}
-
-export async function createDivision(
-  auth: AuthCtx,
-  competitionId: string,
-  input: CreateDivision,
-): Promise<DivisionRow> {
-  // OUTSIDE the transaction: the freeze lookup queries the POOLED `sql` proxy
-  // (`getLimit`), and `withTenant` pins a pooled connection for its whole
-  // callback — see entitlement-freeze.ts. An unknown competition is never a
-  // member of the frozen set, so the entity's own 404 still fires first.
-  await assertCompetitionNotFrozen(auth.orgId, competitionId);
-  // The plan LOOKUP is resolved out here; the COUNT stays inside the
-  // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
-  // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
-  // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  const divisionCap = await getLimit(
-    auth.orgId,
-    "divisions.per_competition.max",
-    competitionId,
-  );
-  // T20: a division created online STARTS online play, so the club must be offered it (the PostHog flag
-  // `online-chess`). Asked only when online play is asked for, and out here for the same reason as the reads above:
-  // it is a remote call, never made while a tenant transaction holds a pooled connection.
-  if ((input.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess") {
-    await assertOnlineChessOffered(auth);
-  }
-
-  const row = await withTenant(auth.orgId, async (tx) => {
-    const [comp] = await tx`select 1 from competitions where id = ${competitionId}`;
-    if (!comp) throw new HttpError(404, "competition not found");
-    await assertCompetitionNotEnded(tx, competitionId);
-
-    // Doc 10 §1: `divisions.per_competition.max` (Community's real bite: 4 —
-    // V270 set 2, V319 raised it). Counted in the same tx as the insert
-    // (doc 10 §2 rule 1).
-    //
-    // An archived division still counts once it has RECORDED RESULTS. Archiving
-    // used to free the slot unconditionally, which made create → play → archive
-    // → create an unlimited-divisions loop inside one competition: archive was
-    // a delete that skipped delete's own DIVISION_HAS_RESULTS guard and got the
-    // slot back as well. An UNPLAYED division archived still frees its slot, so
-    // fixing a division configured with the wrong sport stays free.
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from divisions d
-      where d.competition_id = ${competitionId}
-        and (d.archived_at is null
-             or (division_has_results(d.id) and d.slot_waived_at is null))`;
-    assertWithinLimit(divisionCap, "divisions.per_competition.max", n + 1);
-
-    // Sport catalog carries the latest shipped module version; the division
-    // pins it now and forever (doc 02 §4).
-    const [sport] = await tx<{ module_version: string }[]>`
-      select module_version from sports where key = ${input.sport_key}`;
-    if (!sport) throw new HttpError(422, `unknown sport '${input.sport_key}'`);
-
-    // Variant preset: system (org_id null) or this org's own (RLS scopes it).
-    const [variant] = await tx<{ config: Record<string, unknown> }[]>`
-      select config from sport_variants
-      where sport_key = ${input.sport_key} and key = ${input.variant_key}
-      order by org_id nulls last limit 1`;
-    if (!variant) {
-      throw new HttpError(422, `unknown variant '${input.variant_key}' for ${input.sport_key}`);
-    }
-
-    // Merge preset + overrides, then validate the snapshot through the pinned
-    // module's own schema — an invalid config never reaches the DB.
-    const sportModule = resolveModule(input.sport_key, sport.module_version);
-    const merged = { ...variant.config, ...input.config };
-    const parsed = sportModule.configSchema.safeParse(merged);
-    if (!parsed.success) {
-      throw new EngineError("CONFIG_INVALID", `invalid ${input.sport_key} config`, {
-        issues: parsed.error.issues,
-      });
-    }
-    const finalConfig = parsed.data as Record<string, unknown>;
-    // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): the engine's write-door refusals, after its schema.
-    refuseConfigWriteIssues(sportModule, input.sport_key, finalConfig);
-    // W2d Task 10 (spec §5.5; Task 8 carry): a points table keyed by anything but a set score is refused at write, and
-    // the division's own tie-break order is validated against the sport (`validateCascade`'s kind-independent rules:
-    // every stage created under it is then asked its own kind's, `createStages`). `[]` is an order too: refused, empty.
-    refuseStrayPointsMapKeys(finalConfig);
-    if (input.tiebreakers !== undefined && input.tiebreakers !== null) refuseCascadeForSport(sportModule, finalConfig, input.tiebreakers);
-    const inputCfg = input.config as Record<string, unknown>;
-    const onlinePlay =
-      inputCfg && "onlinePlay" in inputCfg
-        ? assertOnlinePlayValue(input.sport_key, inputCfg.onlinePlay)
-        : readOnlinePlay(null);
-    applyOnlinePlayToConfig(finalConfig, onlinePlay);
-    const incomingEntrants = inputCfg?.entrants;
-    if (incomingEntrants != null && typeof incomingEntrants === "object") {
-      // Chess is individual-only (owner ruling 2026-10-26): the entrant-shape
-      // override may not widen it to pairs or teams. Nothing is stored yet, so
-      // there is no legacy value to tolerate here (patchDivision does).
-      if (isChessSport(input.sport_key) && entrantsOverrideWidensBeyondIndividual(incomingEntrants)) {
-        throw chessIndividualOnlyError();
-      }
-      finalConfig.entrants = incomingEntrants;
-    }
-    // T6: a column, not a config key — absent ⇒ null ⇒ inherit, exactly like
-    // every division created before the column existed. No round can be open
-    // on a division that does not exist yet, so there is nothing to gate and
-    // nothing changed to audit.
-    const cameraPolicy = assertCameraPolicyValue(input.camera_policy);
-    assertCameraPolicyForSport(input.sport_key, cameraPolicy);
-    // T5-I1/T6 (M12): a division played online must have a clock the Board
-    // API will actually play, and the organiser learns that HERE, at setup —
-    // a 1+0 is CREATED by Lichess and then every move is refused, so a later
-    // check would only fire at round open. Over-the-board chess is untouched.
-    if (readOnlinePlay(finalConfig) === "lichess") {
-      assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
-    }
-
-    // Shared by both slug paths so the generated one can be RETRIED against
-    // the unique index — `q` is the savepoint, and replaces `tx` inside it.
-    const insert = async (slug: string, q: postgres.TransactionSql): Promise<DivisionRow> => {
-      // RS007/V380: category/age_min/age_max/age_cutoff_month/age_cutoff_day/
-      // eligibility_note are writable at create time now — the division-
-      // creation wizard's Eligibility tab writes them directly (see
-      // api-v1/schemas/divisions.ts's CreateDivision; the registration hub config panel still
-      // edits the SAME columns via PATCH, which stays the only path for an
-      // already-created division). `??`, not the schema's own `undefined`,
-      // because postgres.js sends a bound JS `undefined` as literal SQL
-      // `undefined`, not `null` — every other create-time column here already
-      // follows this rule (e.g. `input.tiebreakers ? ... : null` two lines
-      // below). `deriveYouth` reads the effective age_max from THIS request —
-      // the SAME single derivation patchDivision re-runs on an age_max PATCH,
-      // not a second copy (deriveYouth's own doc comment).
-      const ageMax = input.age_max ?? null;
-      const [row] = await q<DivisionRow[]>`
-        insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
-                               module_version, tiebreakers, category, age_min, age_max,
-                               age_cutoff_month, age_cutoff_day, eligibility_note, youth,
-                               camera_policy)
-        values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
-                ${q.json(finalConfig as never)}, ${sport.module_version},
-                ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
-                ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
-                ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
-                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)},
-                ${cameraPolicy})
-        returning ${q(COLS)}`;
-      return row!;
-    };
-    // Explicit slugs 409 on collision; generated ones dedupe with "-2"
-    // suffixes and skip the reserved "new" (static /d/new route).
-    if (input.slug) {
-      if (RESERVED_ENTITY_SLUGS.has(input.slug)) {
-        throw new HttpError(422, `slug '${input.slug}' is reserved`);
-      }
-      const [dupe] = await tx`
-        select 1 from divisions where competition_id = ${competitionId} and slug = ${input.slug}`;
-      if (dupe) {
-        throw new HttpError(409, `slug '${input.slug}' is already in use in this competition`);
-      }
-      return insert(input.slug, tx);
-    }
-    return withUniqueSlug(
-      tx,
-      {
-        base: slugify(input.name),
-        constraint: SLUG_CONSTRAINT.divisions,
-        taken: async (s) => {
-          const [taken] = await tx`
-            select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
-          return !!taken;
-        },
-      },
-      insert,
-    );
-  });
-  await expireCompetitionShell(auth.orgId, { competitionId, divisionId: row.id });
-  // Activation funnel (feature 1): step after competition_created.
-  await fireDivisionCreated(auth, input.sport_key, competitionId);
-  return row;
-}
-
-export async function getDivision(auth: AuthCtx, id: string): Promise<DivisionRow> {
-  return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<DivisionRow[]>`select ${tx(COLS)} from divisions where id = ${id}`;
-    if (!row) throw new HttpError(404, "division not found");
-    return row;
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Delete / archive / restore — v3/09 §4 (PROMPT-38). Graduated
-// destructiveness: setup divisions hard-delete; started/resulted divisions
-// archive (hidden + restorable); archived divisions purge after a 30-day
-// cool-off. Owner/admin only (the route enforces the role).
-// ---------------------------------------------------------------------------
-
-const PURGE_COOL_OFF_DAYS = 30;
-
-interface DeleteTarget {
-  id: string;
-  competition_id: string;
-  name: string;
-  slug: string;
-  sport_key: string;
-  status: string;
-  archived_at: string | null;
-}
-
-async function auditCompetition(
-  tx: postgres.TransactionSql,
-  competitionId: string,
-  type: string,
-  payload: Record<string, unknown>,
-  actorId: string | null,
-): Promise<void> {
-  await tx`
-    insert into competition_events (competition_id, type, payload, actor_id)
-    values (${competitionId}, ${type}, ${tx.json(payload as never)}, ${actorId})`;
-}
-
-// Open registration blocks delete AND archive: registrants could still be
-// paying into a division that is about to vanish (v3/09 §4).
-async function assertRegistrationClosed(
-  tx: postgres.TransactionSql,
-  divisionId: string,
-  action: "delete" | "archive",
-): Promise<void> {
-  const [settings] = await tx<{ enabled: boolean; closes_at: string | null }[]>`
-    select enabled, closes_at from registration_settings where division_id = ${divisionId}`;
-  const open =
-    settings?.enabled === true &&
-    (settings.closes_at === null || new Date(settings.closes_at).getTime() > Date.now());
-  if (open) {
-    throw new HttpError(
-      409,
-      `Registration is open for this division — close registration first, then ${action} it`,
-      "REGISTRATION_OPEN",
-    );
-  }
-}
-
-/**
- * DELETE semantics: setup division (never started, nothing decided) → hard
- * delete; archived ≥30 days → purge (hard delete); anything else → 409
- * DIVISION_HAS_RESULTS with the `{archive: true}` hint. Frozen competitions
- * are NOT blocked: deleting reduces usage, which is the honest way out of an
- * over-quota freeze.
- */
-export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
-  const deleted = await withTenant(auth.orgId, async (tx) => {
-    const [division] = await tx<DeleteTarget[]>`
-      select id, competition_id, name, slug, sport_key, status, archived_at
-      from divisions where id = ${id}`;
-    if (!division) throw new HttpError(404, "division not found");
-    await assertRegistrationClosed(tx, id, "delete");
-
-    // Money records must outlive mistakes (spec 2026-07-12 issue #10): a hard
-    // delete cascades the registrations away, so block it while any card
-    // payment on this division is not fully refunded. Archive stays open.
-    // Polish wave P5 (carry d): per ENTRY - its own card payment (V387) net of
-    // that payment's refunds (`ownPaymentRefundedCents`, V512). The cart's
-    // totals never clear while it holds an unpaid entry beside a refunded one.
-    const [{ live_payments }] = await tx<{ live_payments: number }[]>`
-      select count(*)::int as live_payments from registrations r
-      where r.division_id = ${id} and r.payment_intent_id is not null
-        and r.refunded_cents - r.late_refunded_cents < r.amount_cents`;
-    if (live_payments > 0) {
-      throw new HttpError(
-        409,
-        "Registrations here hold card payments — refund them before deleting, or archive instead",
-        "REGISTRATION_PAYMENTS",
-        { archive: true },
-      );
-    }
-
-    // ONE definition of "has recorded results", shared with the quota count in
-    // createDivision (V354). The two ask different questions of it — delete
-    // refuses, the quota charges — but they must never disagree about the
-    // answer, and this repo's recurring defect is exactly a forked copy of one
-    // rule. The audit payload keeps a real count, which is not the same
-    // question and stays a count.
-    const [{ has_results }] = await tx<{ has_results: boolean }[]>`
-      select division_has_results(${id}) as has_results`;
-
-    if (division.archived_at !== null) {
-      // Purge path: archived divisions hard-delete after the cool-off.
-      const ageMs = Date.now() - new Date(division.archived_at).getTime();
-      const coolOffMs = PURGE_COOL_OFF_DAYS * 24 * 60 * 60 * 1000;
-      if (ageMs < coolOffMs) {
-        const daysLeft = Math.ceil((coolOffMs - ageMs) / (24 * 60 * 60 * 1000));
-        throw new HttpError(
-          409,
-          `An archived division can be purged ${PURGE_COOL_OFF_DAYS} days after archiving — ${daysLeft} day(s) to go`,
-          "ARCHIVE_COOL_OFF",
-        );
-      }
-    } else if (division.status !== "setup" || has_results) {
-      // Broader than the SLOT rule (V354) deliberately: this destroys data, so
-      // a division that merely LEFT setup is protected too. The slot rule
-      // charges only for real results, because publishing a misconfigured
-      // division and archiving it is a mistake, not usage.
-      throw new HttpError(
-        409,
-        "This division has started or has recorded results — archive it instead (restorable), or purge it 30 days after archiving",
-        "DIVISION_HAS_RESULTS",
-        { archive: true },
-      );
-    }
-
-    const [{ entrants }] = await tx<{ entrants: number }[]>`
-      select count(*)::int as entrants from entrants where division_id = ${id}`;
-    const [{ fixtures }] = await tx<{ fixtures: number }[]>`
-      select count(*)::int as fixtures from fixtures where division_id = ${id}`;
-    // Audit fidelity, not a guard: how MANY results died with the row. The
-    // guard's question ("any at all?") is division_has_results above — this is
-    // a different question, so it stays a count.
-    const [{ decided }] = await tx<{ decided: number }[]>`
-      select count(*)::int as decided from fixtures
-      where division_id = ${id} and status in ('decided', 'finalized', 'forfeited')`;
-
-    // The division ledger dies with the row (ON DELETE CASCADE); the audit
-    // fact lives on the competition ledger, which survives (v3/09 §4).
-    // Persons/teams/clubs are org-level rows — untouched by design.
-    await auditCompetition(
-      tx,
-      division.competition_id,
-      division.archived_at !== null ? "division_purged" : "division_deleted",
-      {
-        division_id: id,
-        name: division.name,
-        slug: division.slug,
-        sport_key: division.sport_key,
-        entrants,
-        fixtures,
-        decided_fixtures: decided,
-      },
-      auth.userId,
-    );
-    await tx`delete from divisions where id = ${id}`;
-    return division;
-  });
-  // A purge removes a division the shell stopped listing when it was archived.
-  if (deleted.archived_at === null) {
-    await expireCompetitionShell(auth.orgId, { competitionId: deleted.competition_id, divisionId: id });
-  }
-}
-
-/** Archive: hide from console/public/quota, restorable. Idempotent. */
-export async function archiveDivision(auth: AuthCtx, id: string): Promise<DivisionRow> {
-  let archived = false;
-  const result = await withTenant(auth.orgId, async (tx) => {
-    archived = false;
-    const [existing] = await tx<DivisionRow[]>`
-      select ${tx(COLS)} from divisions where id = ${id}`;
-    if (!existing) throw new HttpError(404, "division not found");
-    if (existing.archived_at !== null) return existing;
-    await assertRegistrationClosed(tx, id, "archive");
-
-    const [row] = await tx<DivisionRow[]>`
-      update divisions set archived_at = now() where id = ${id} returning ${tx(COLS)}`;
-    await auditCompetition(
-      tx,
-      existing.competition_id,
-      "division_archived",
-      { division_id: id, name: existing.name, slug: existing.slug },
-      auth.userId,
-    );
-    archived = true;
-    return row as DivisionRow;
-  });
-  if (archived) await expireCompetitionShell(auth.orgId, { competitionId: result.competition_id, divisionId: id });
-  return result;
-}
-
-/** Restore an archived division. Re-checks the divisions quota — restoring
- *  must not smuggle a competition back over its plan limit. */
-export async function restoreDivision(auth: AuthCtx, id: string): Promise<DivisionRow> {
-  // The competition id, ahead of the transaction, ONLY to scope the plan lookup
-  // below — an Event Pass lifts this cap for one competition, so dropping the
-  // scope would change the answer. Authorisation is unaffected: the row itself
-  // is read under RLS inside the transaction, which 404s for a foreign org.
-  const [ref] = await sql<{ competition_id: string }[]>`
-    select competition_id from divisions where id = ${id}`;
-  // The plan LOOKUP is resolved out here; the COUNT stays inside the
-  // transaction with the insert (doc 10 §2 rule 1). `getLimit` queries the
-  // pooled `sql` proxy, and `withTenant` pins a pooled connection for its whole
-  // callback — see `assertWithinLimit` in lib/entitlements.ts.
-  const divisionCap = await getLimit(
-    auth.orgId,
-    "divisions.per_competition.max",
-    ref?.competition_id,
-  );
-  let restored = false;
-  const result = await withTenant(auth.orgId, async (tx) => {
-    restored = false;
-    const [existing] = await tx<DivisionRow[]>`
-      select ${tx(COLS)} from divisions where id = ${id}`;
-    if (!existing) throw new HttpError(404, "division not found");
-    if (existing.archived_at === null) return existing;
-    // Un-archiving is a create in every way that matters to the lifecycle: a
-    // finished competition must not grow back either.
-    await assertCompetitionNotEnded(tx, existing.competition_id);
-
-    // Identical predicate to createDivision's (V354) — restoring must not
-    // smuggle a competition past a limit a create would have refused. The row
-    // being restored is EXCLUDED and re-added as the `+ 1` below: it is
-    // archived, so under the old `archived_at is null` count it was never in
-    // `n`, but a resulted archived division now IS, and counting it twice would
-    // refuse a restore that fits.
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from divisions d
-      where d.competition_id = ${existing.competition_id}
-        and d.id <> ${id}
-        and (d.archived_at is null
-             or (division_has_results(d.id) and d.slot_waived_at is null))`;
-    assertWithinLimit(divisionCap, "divisions.per_competition.max", n + 1);
-
-    const [row] = await tx<DivisionRow[]>`
-      update divisions set archived_at = null where id = ${id} returning ${tx(COLS)}`;
-    await auditCompetition(
-      tx,
-      existing.competition_id,
-      "division_restored",
-      { division_id: id, name: existing.name, slug: existing.slug },
-      auth.userId,
-    );
-    restored = true;
-    return row as DivisionRow;
-  });
-  if (restored) await expireCompetitionShell(auth.orgId, { competitionId: result.competition_id, divisionId: id });
-  return result;
-}
+import { onlineChessDisabled, onlineChessOffered } from "../external-play/online-chess-flag";
+import {
+  applyOnlineSave,
+  captureRefundEvents,
+  assertCamerasPaidFor,
+  assertOnlineFormat,
+  decideOnlineSize,
+  derivedCameras,
+  prepareOnlineSave,
+  promoteWaitlistAfterMoveUp,
+  type OnlineSavePrelude,
+  type OnlineSaveResult,
+  type RefundedPackage,
+} from "../online-package";
+import type { OnlineSize } from "@/lib/online-chess-package";
+import { type DivisionRow, COLS } from "./types";
+import { deriveYouth } from "./helpers";
 
 // Structural comparison for the format-lock exemption below. Sorts object keys
 // so two configs compare equal regardless of insertion order (pragmatic
@@ -722,7 +117,11 @@ function restoreKey(target: Record<string, unknown>, from: Record<string, unknow
 /** `stagesKeptPinned` (W2d Task 10, spec §5.4): the started (pinned) stages whose live table rules this save moved — they
  *  keep their pin, board order. A stage that started with no pin (an ad-hoc match on a pending stage) is pinned by the save
  *  first and listed with them (fix round 1, I1). */
-export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[] };
+/** `online` (Online Chess, spec 2026-11-23 §7.1/§7.4, review I2): what the save did to the division's package — the capacity
+ *  its size write lowered and what its switch-off refund gave back and gave up — `{ capacityLoweredTo: null, refunded: null }`
+ *  when it did neither. The row above is the one the tenant callback wrote, BEFORE the package epilogue: a lowered capacity
+ *  lives on the registration settings, never on this row, so `capacityLoweredTo` is the only place the save reports it. */
+export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[]; online: OnlineSaveResult };
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
 // also carries divisions_category_check, which shares the code but means a
@@ -805,8 +204,25 @@ export async function patchDivision(
       : null;
   // The online switch judges the places held against min(plan cap, 256) (cap-256 review m1): the plan's limit is an entitlement
   // read, asked out here like the flag above and only when the patch names 'lichess'. undefined for a sport that cannot play online.
+  // Online Chess (spec 2026-11-23 §7.1, §7.3): a size the patch names is judged against the same plan limit, read here too.
   const onlineCapGuard =
-    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess" ? await openOnlineCapGuard(id) : undefined;
+    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess" || patch.online_size !== undefined
+      ? await openOnlineCapGuard(id)
+      : undefined;
+  // Online Chess (spec 2026-11-23 §7.1, §7.3, §7.4): a save that names online play or a size carries the division's package
+  // with it — turned on, an unpaid row (at the size named, else the smallest that holds the places held); turned off, the row
+  // refunded (paid), deleted (unpaid) or left (frozen); a size named, an unpaid row moved. Read and locked in the privileged
+  // prelude (`division:` lock, then the money lock when there is money to return), judged in the tenant callback, written in
+  // the privileged epilogue: the package table is sealed. A save that names neither touches no package. Never flag-gated.
+  const onlinePatch = patch.config as Record<string, unknown> | undefined;
+  const onlineNamed = (onlinePatch !== undefined && "onlinePlay" in onlinePatch) || patch.online_size !== undefined;
+  const turnsOnlineOff = onlinePatch !== undefined && "onlinePlay" in onlinePatch && onlinePatch.onlinePlay !== "lichess";
+  let onlinePrelude: OnlineSavePrelude | null = null;
+  let onlineSize: OnlineSize | null = null;
+  // Out of the epilogue through this closure (it returns void): the response's `online`.
+  let onlineSaved: OnlineSaveResult = { capacityLoweredTo: null, refunded: null };
+  // The packages a switch-off refunded, for the analytics sent after the commit (a fresh list per attempt).
+  let onlineRefunds: RefundedPackage[] = [];
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -862,12 +278,17 @@ export async function patchDivision(
     roundOpened = await anyRoundOpened(ptx, id, new Date());
   };
   const row = await withTenant(auth.orgId, async (tx) => {
+    // Online Chess camera gate (P9, P19): set where a camera policy CHANGES (null = this save changes none): whether the division had
+    // cameras before the write. Read again after the UPDATE, where a turn-on of a paid package that did not pay for them is refused.
+    let camerasBefore: boolean | null = null;
     // W2c batch-3 I1: the walkovers no event records, read before a format write (`award-rewrite.ts`); none otherwise.
     let held: HeldAward[] = [];
     // W2c Task 15 fix round 1 (I-1): what every unstarted match resolves to before a format write (`rules-version.ts`);
     // undefined when the save writes no format.
     let rulesBefore: UnfrozenRules | undefined;
     const effective: Record<string, unknown> = { ...patch };
+    // Not a column: the package row's (the epilogue below).
+    delete effective.online_size;
     // Batch 4 re-review N1: ONE lock order everywhere — the division advisory lock FIRST, then any row lock on `divisions`.
     // The stage writers (`insertStageBatch`, which `createStages` and `replaceStages` share) take the advisory lock and
     // only then reopen a completed division (`update divisions`, a row lock); this save used to read the row `for no key
@@ -898,53 +319,19 @@ export async function patchDivision(
     if (cameraPolicyNamed) {
       // The stored value this write replaces, under the same `for no key
       // update` the masking/seeds reads below use, plus the competition floor
-      // it inherits when it is null.
-      const [cur] = await tx<
-        {
-          sport_key: string;
-          competition_id: string;
-          camera_policy: string | null;
-          competition_policy: string;
-        }[]
-      >`
-        select d.sport_key, d.competition_id, d.camera_policy,
-               c.camera_policy as competition_policy
-          from divisions d
-          join competitions c on c.id = d.competition_id
-         where d.id = ${id}
-           for no key update of d`;
-      if (!cur) throw new HttpError(404, "division not found");
-      assertCameraPolicyForSport(cur.sport_key, incomingCamera);
-      const storedCamera = readCameraPolicy(cur.camera_policy);
-      // Only a real CHANGE of the stored value is gated and audited: a re-send
-      // of the current value must never 409 or leave a row.
-      if (incomingCamera !== storedCamera) {
-        // The gate judges what PLAYERS get (the division-level effective
-        // policy), not the stored values: clearing 'off' to inherit a
-        // 'required' competition is a tightening even though null has no rank.
-        const floor = readCameraPolicy(cur.competition_policy);
-        const effectiveFrom = effectivePolicy({ stage: null, division: storedCamera, competition: floor });
-        const effectiveTo = effectivePolicy({ stage: null, division: incomingCamera, competition: floor });
-        assertPolicyChange({ from: effectiveFrom, to: effectiveTo, windowOpened: roundOpened });
-        // Same transaction as the write it describes (ruling Q2: one row in
-        // competition_events per change), so a refused or rolled-back change
-        // can never leave a row saying it happened.
-        await audit(
-          tx,
-          cur.competition_id,
-          auth.orgId,
-          CAMERA_POLICY_CHANGED,
-          {
-            divisionId: id,
-            stageId: null,
-            from: storedCamera,
-            to: incomingCamera,
-            effectiveFrom,
-            effectiveTo,
-            roundOpened,
-          },
-          auth.userId,
-        );
+      // it inherits when it is null. The gate and the audit are the ONE rule
+      // every writer of the division's own policy shares (the Online Chess
+      // receipt writes the same column, division-camera-policy.ts): only a real
+      // CHANGE is gated and audited, judged on the division-level effective
+      // policy, the audit row in this transaction.
+      const cur = await lockDivisionCameraRow(tx, id);
+      const changed = await auditDivisionCameraChange(tx, {
+        cur, to: incomingCamera, divisionId: id, orgId: auth.orgId, actorId: auth.userId, roundOpened,
+      });
+      if (changed) {
+        // Online Chess (P9): what the division's stages and policies said BEFORE this write (the audit row writes no policy), so that
+        // after it a save that turns cameras ON is asked whether the package paid for them (below, after the UPDATE).
+        camerasBefore = await derivedCameras(tx, id);
       }
       effective.camera_policy = incomingCamera;
     }
@@ -1269,6 +656,13 @@ export async function patchDivision(
         ) {
           throw onlineChessDisabled();
         }
+        // Online Chess runs Swiss and knockout only (spec 2026-11-23 §7.6, P16): a division holding a league, a group, a ladder or an
+        // americano cannot turn online play on, 422 ONLINE_FORMAT_NOT_SUPPORTED naming the first such stage by seq. The same off ->
+        // lichess transition as the two gates around it, so a legacy online division holding a league stays readable and saves.
+        if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
+          const stored = await tx<{ kind: string }[]>`select kind from stages where division_id = ${id} order by seq`;
+          assertOnlineFormat(stored.map((s) => s.kind));
+        }
         // Owner ruling 2026-11-21 (256 since 2026-11-23): an online chess division holds at most min(plan cap, 256) entrants (the plan
         // asked since cap-256 review m1), so a division already holding more cannot be turned online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
         // saved before the cap must still save), counted as every online-cap door counts: the places the division HOLDS - live entrants
@@ -1448,13 +842,51 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
+    // Online Chess (spec 2026-11-23 §7.6, P9, P19): a camera policy that TURNS cameras ON for a division whose package is paid
+    // without them is refused 422 ONLINE_CAMERAS_NEED_UPGRADE, the write rolling back with it. Judged on the derived state after the
+    // write (a stage's own policy counts), only on a transition off -> on (a save that leaves cameras on, or turns them off, is
+    // never asked), and only while the package is unfrozen. The division lock was taken by the camera prelude.
+    // Not asked of a save that turns online play OFF (fix round 1, M-1): switching off is never refused, the package is refunded in
+    // the epilogue, and a camera policy stored alongside it has no package left to be priced against.
+    if (camerasBefore === false && !turnsOnlineOff) await assertCamerasPaidFor(tx, [id]);
     // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
     rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;
     // W2c Task 15 fix round 1 (I-1): every unstarted match whose format this save moved gets a new version, so a pad open
     // on it before the save is refused on its first tap (409 FIXTURE_RULES_CHANGED) and reloads the format it will play.
     if (rulesBefore !== undefined) await bumpMovedRules(tx, rulesBefore);
+    if (onlineNamed) {
+      // Judged on the division as written (a refused or re-sent onlinePlay lands as stored), under the prelude's lock.
+      const onlineAfter = divisionPlaysOnline(written);
+      onlineSize = await decideOnlineSize(tx, {
+        divisionId: id,
+        onlineBefore: onlinePrelude!.storedOnline,
+        onlineAfter,
+        requested: patch.online_size,
+        // Fails closed (readPlanLimit): asked only of a size named for a division that plays online, whose guard was read.
+        planCap: patch.online_size !== undefined && onlineAfter ? readPlanLimit(onlineCapGuard) : null,
+      });
+    }
     return written;
-  }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
+  }, {
+    ...(cameraPolicyNamed || onlineNamed
+      ? {
+          privilegedPrelude: async (ptx: Tx) => {
+            if (cameraPolicyNamed) await cameraGate(ptx);
+            if (onlineNamed) onlinePrelude = await prepareOnlineSave(ptx, { orgId: auth.orgId, divisionId: id, turnsOff: turnsOnlineOff });
+          },
+        }
+      : {}),
+    ...(onlineNamed
+      ? {
+          privilegedEpilogue: async (etx: Tx, written: DivisionRow) => {
+            onlineRefunds = [];
+            onlineSaved = await applyOnlineSave(etx, {
+              orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize, refunded: onlineRefunds,
+            });
+          },
+        }
+      : {}),
+  }).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
     // PATCHes can each pass the merge-and-validate guard above against a
     // stale read, then both write; whichever commits second still hits
@@ -1469,6 +901,15 @@ export async function patchDivision(
     if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
   });
+  // Online Chess credits §14: the packages a switch-off refunded, reported after the commit (none for any other save). Never throws.
+  await captureRefundEvents(onlineRefunds as RefundedPackage[], { orgId: auth.orgId, actorId: auth.userId });
+  // P18 (Online Chess credits): an unpaid size moved UP by this save made room, so the waitlist is promoted into it - after the
+  // commit, best-effort, and only for a division that already had a live size (turning online play on with a default size is not a
+  // move). `onlinePrelude.liveSize` is the size read under the division lock before the write.
+  // (Both are assigned inside the write's closures, which control-flow analysis cannot see: read back through their declared types.)
+  const priorSize = (onlinePrelude as OnlineSavePrelude | null)?.liveSize ?? null;
+  const decidedSize = onlineSize as OnlineSize | null;
+  if (decidedSize !== null && priorSize !== null && decidedSize > priorSize) await promoteWaitlistAfterMoveUp(row.id, auth.userId);
   // W2c Task 11 (carry (b) of the batch-3 re-review): a format save that re-wrote a walkover's stored score must reach
   // the public pages now, not after their cache expires (15-300 s) - the same tags `putStageRules` fires after its own
   // re-write. Synchronous and after the commit, like that one (Next flushes a request's revalidations once).
@@ -1547,16 +988,5 @@ export async function patchDivision(
       peersExpired,
     );
   }
-  return { ...row, refused, stagesKeptPinned };
-}
-
-/** The sports this organisation has run divisions in, most recent first (C9 R2: the builder's Sport picker leads with
- *  them, and opens on the first). Archived divisions count - they were run. Divisions written in one transaction share
- *  `now()`, so ties break on the sport key (C9 review 3, m1): the order, and with it the builder's default sport, never
- *  flips between loads. Run inside the caller's tenant transaction. */
-export async function recentDivisionSports(tx: Tx, orgId: string): Promise<string[]> {
-  const rows = await tx<{ sport_key: string }[]>`
-    select sport_key from divisions where org_id = ${orgId}
-    group by sport_key order by max(created_at) desc, sport_key`;
-  return rows.map((r) => r.sport_key);
+  return { ...row, refused, stagesKeptPinned, online: onlineSaved };
 }

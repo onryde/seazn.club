@@ -241,7 +241,7 @@ export function AdminStreamCreditsPanel({
             <table className="w-full text-sm">
               <thead className="bg-slate-900 text-xs text-slate-400">
                 <tr>
-                  {["When", "Reason", "Delta", "Balance after", "Note", "By", "Session"].map((h) => (
+                  {["When", "Reason", "Delta", "Balance after", "Note", "By", "Session / package"].map((h) => (
                     <th key={h} className="whitespace-nowrap px-3 py-2 text-left">{h}</th>
                   ))}
                 </tr>
@@ -255,7 +255,9 @@ export function AdminStreamCreditsPanel({
                     <td className="px-3 py-2 font-mono text-slate-300">{r.balanceAfter}</td>
                     <td className="px-3 py-2 text-xs text-slate-300">{r.note ?? "—"}</td>
                     <td className="px-3 py-2 text-xs text-slate-300">{r.createdByEmail ?? r.createdBy ?? "—"}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-400">{r.sessionId ?? "—"}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-400" data-testid="stream-credits-subject">
+                      {r.sessionId ?? (r.onlinePackageId ? `package ${r.onlinePackageId}${r.divisionName ? ` · ${r.divisionName}` : ""}${r.packageSize !== null ? ` · size ${r.packageSize}` : ""}` : "—")}
+                    </td>
                   </tr>
                 ))}
               </tbody>

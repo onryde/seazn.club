@@ -644,7 +644,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     this.log("publicStandings");
     return { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: (await this.standings("s1", null)).rows }] };
   }
-  /** The distinct kinds of the division's ACTIVE entrants — divisions.ts:857-871
+  /** The distinct kinds of the division's ACTIVE entrants — divisions/patch.ts:725-741
    *  `select distinct kind from entrants where … status not in ('withdrawn',
    *  'disqualified')`. A row with no kind names none. The americano fake adds
    *  the pair entrants its stage mints. */

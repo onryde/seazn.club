@@ -123,6 +123,7 @@ import { getCompetitionDesk } from "../competition-desk";
 import { createDivision, listDivisions } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { __setBoardReadHookForTests, competitionFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
 import { loadFixtureMatchRules } from "../fixtures";
@@ -254,7 +255,7 @@ async function badmintonFixtures(day: Day, courtId: string): Promise<{ id: strin
   await putScheduleSettings(day.auth, d.id, {
     config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [courtId], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
   });
-  const [stage] = await createStages(day.auth, d.id, { seq: 1, kind: "league", name: "League", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(day.auth, d.id, { seq: 1, kind: "league", name: "League", config: {} });
   await generateStageFixtures(day.auth, stage!.id);
   return sql<{ id: string; home: string; away: string }[]>`
     select id, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;

@@ -1,0 +1,265 @@
+// The danger zone tells an organiser what happens to a paid Online Chess package (spec 2026-11-23 §11; final review m2 and Q7).
+//
+//   - The delete dialog says how many credits come back, and how many included credits of an earlier month do not — the figure the
+//     SERVER read (`divisionPackageRefund`, the refund's own split), never one the client works out. Only when the delete would
+//     take the package: a started division's delete is refused, so the dialog must not promise its refund.
+//   - Archive does NOT refund (archive holds the package). Once a division has started, delete is refused and pivots to archive —
+//     so the archive dialog sends the organiser to switch Online Chess off, which is the door that gives the credits back
+//     (danger-zone-refund.test.ts drives that door). Fix round 2 (owner): that money line LEADS WITH ITS REASON (no round has
+//     opened yet) and is its own paragraph, apart from the refused delete's sentence about results, so it does not read as a
+//     refund promised in the middle of an event.
+//   - A paid package a round has FROZEN is never refunded (P7): both dialogs say so, in one sentence of its own (fix round 2).
+//   - No package, or an unpaid one: no money line at all.
+//
+// Expected sentences are the English dictionary's own plurals with the count filled in; the server figure is the prop (the read
+// itself, rendered through these dialogs, is driven in danger-zone-refund.test.ts "the dialogs, rendered from the read").
+//
+// Mutant table (each run once by hand; results in the commit message):
+//   U1 the delete dialog's refund line ignores `onDelete`          -> "a started division's delete dialog promises nothing"
+//   U2 the forfeited sentence shown at 0                            -> "the delete dialog says how many credits come back …"
+//   U3 the money line hidden under the refused-delete pivot          -> "a refused delete pivots to archive: the results sentence, then …"
+//   U4 the archive hint shown when nothing would come back (back 0)  -> "nothing to get back: the archive copy is the generic one"
+//   U5 the money line folded into the results paragraph             -> "a refused delete pivots to archive: the results sentence, then …"
+//   U6 the frozen line dropped (fix round 2)                         -> "paid and frozen: both dialogs say …"
+import { describe, expect, it, vi } from "vitest";
+import type { ReactElement, ReactNode } from "react";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push, replace: vi.fn() }),
+  usePathname: () => "/o/org/c/comp/d/div",
+}));
+vi.mock("@/lib/client-v1", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/client-v1")>("@/lib/client-v1");
+  return { ...actual, apiV1: vi.fn() };
+});
+const api = vi.mocked(apiV1);
+
+const BASE = { divisionId: "d1", divisionName: "Open", orgSlug: "org", compSlug: "comp" };
+type Refund = { back: number; forfeited: number; onDelete: boolean } | { frozen: true } | null | undefined;
+
+const mount = (packageRefund: Refund) => renderIsland(DivisionDangerZone, { ...BASE, packageRefund });
+
+const en = uiEn as Record<string, string>;
+/** The English plural for `count`, from the dictionary (en: `one` for 1, `other` otherwise), the count filled in. */
+function plural(base: string, count: number): string {
+  const key = `${base}.${count === 1 ? "one" : "other"}`;
+  expect(en[key], `the dictionary has ${key}`).toBeTypeOf("string");
+  return en[key]!.replaceAll("{count}", String(count));
+}
+
+/** A dialog's body, read as the string the reader meets (renderIsland renders one level deep, so the dialog's children are built). */
+function dialogBody(h: ReturnType<typeof mount>, confirmKey: "danger.deleteConfirm" | "danger.archiveConfirm"): string {
+  const dialog = h.tree().find((el: ReactElement) => propsOf(el).confirmLabel === en[confirmKey]);
+  if (!dialog) throw new Error(`${confirmKey} dialog not found`);
+  return textOf(propsOf(dialog).children as ReactNode);
+}
+const deleteBody = (h: ReturnType<typeof mount>) => dialogBody(h, "danger.deleteConfirm");
+const archiveBody = (h: ReturnType<typeof mount>) => dialogBody(h, "danger.archiveConfirm");
+
+/** A dialog's paragraphs, each read on its own: "its own sentence" is a paragraph, not a substring of one. */
+function paragraphsOf(h: ReturnType<typeof mount>, confirmKey: "danger.deleteConfirm" | "danger.archiveConfirm"): string[] {
+  const dialog = h.tree().find((el: ReactElement) => propsOf(el).confirmLabel === en[confirmKey]);
+  if (!dialog) throw new Error(`${confirmKey} dialog not found`);
+  const out: string[] = [];
+  const walk = (n: ReactNode): void => {
+    if (Array.isArray(n)) for (const c of n) walk(c as ReactNode);
+    else if (n !== null && typeof n === "object" && "type" in n) {
+      const el = n as ReactElement;
+      if (el.type === "p") out.push(textOf(el as unknown as ReactNode));
+      else walk(propsOf(el).children as ReactNode);
+    }
+  };
+  walk(propsOf(dialog).children as ReactNode);
+  return out;
+}
+
+/** The refund-line fragments that must NOT appear when there is no refund to talk about. */
+const ONLINE_FRAGMENTS = () => [en["danger.refundedLabel"]!, en["danger.onlineFrozen"]!, ...["one", "other"].flatMap((f) => [
+  en[`danger.onlineRefund.${f}`]!.split("{count}")[0]!, en[`danger.archiveOnline.${f}`]!.split("{count}")[0]!,
+])];
+
+/** Press Delete's confirm and let the refused DELETE land (a 409 DIVISION_HAS_RESULTS: the division has started). */
+async function refusedDelete(h: ReturnType<typeof mount>): Promise<void> {
+  api.mockRejectedValueOnce(new ApiV1Error("started", 409, "DIVISION_HAS_RESULTS", { archive: true }));
+  const dialog = h.tree().find((el: ReactElement) => propsOf(el).confirmLabel === en["danger.deleteConfirm"])!;
+  (propsOf(dialog).onConfirm as () => void)();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  expect(push, "a refused delete navigates nowhere").not.toHaveBeenCalled();
+  expect(propsOf(h.tree().find((el: ReactElement) => propsOf(el).confirmLabel === en["danger.archiveConfirm"])!).open, "it pivoted to archive")
+    .toBe(true);
+}
+
+describe("the delete dialog says what a paid Online Chess package gives back", () => {
+  it("the delete dialog says how many credits come back, and no earlier-month sentence when none are lost", () => {
+    const body = deleteBody(mount({ back: 8, forfeited: 0, onDelete: true }));
+    expect(body).toContain(en["danger.refundedLabel"]);
+    expect(body).toContain(plural("danger.onlineRefund", 8));
+    for (const n of [0, 1, 8]) expect(body, `no forfeit sentence (${n})`).not.toContain(plural("danger.onlineForfeit", n));
+    // The singular is its own sentence, not the plural with a 1 in it.
+    expect(deleteBody(mount({ back: 1, forfeited: 0, onDelete: true }))).toContain(plural("danger.onlineRefund", 1));
+  });
+
+  it("an earlier month's included credits are counted as not coming back", () => {
+    const body = deleteBody(mount({ back: 3, forfeited: 2, onDelete: true }));
+    expect(body).toContain(plural("danger.onlineRefund", 3));
+    expect(body).toContain(plural("danger.onlineForfeit", 2));
+    // Nothing comes back but the loss is still said (every included credit was an earlier month's).
+    const lost = deleteBody(mount({ back: 0, forfeited: 5, onDelete: true }));
+    expect(lost).toContain(plural("danger.onlineRefund", 0));
+    expect(lost).toContain(plural("danger.onlineForfeit", 5));
+  });
+
+  it("a started division's delete dialog promises nothing (the delete would be refused, not refund)", () => {
+    const body = deleteBody(mount({ back: 8, forfeited: 0, onDelete: false }));
+    expect(body).not.toContain(en["danger.refundedLabel"]);
+    expect(body).not.toContain(plural("danger.onlineRefund", 8));
+    expect(body, "the dialog's own copy is untouched").toContain(en["danger.destroyedText"]);
+  });
+
+  it("no paid package (none or unpaid: the server reads null) or no answer at all: the dialogs read as they always did", () => {
+    let checked = 0;
+    for (const refund of [null, undefined] as const) {
+      const h = mount(refund);
+      const text = `${deleteBody(h)} ${archiveBody(h)}`;
+      for (const fragment of ONLINE_FRAGMENTS()) expect(text, `${String(refund)}: ${fragment}`).not.toContain(fragment);
+      expect(archiveBody(h)).toBe(en["danger.archiveBody"]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("archive keeps the package: the copy sends the organiser to switch Online Chess off", () => {
+  it("the archive dialog says archiving does not refund, and how to get the credits back", () => {
+    const h = mount({ back: 8, forfeited: 0, onDelete: true });
+    expect(archiveBody(h)).toContain(en["danger.archiveBody"]);
+    expect(archiveBody(h)).toContain(plural("danger.archiveOnline", 8));
+    // A started division too: archive is its only other way out.
+    expect(archiveBody(mount({ back: 2, forfeited: 1, onDelete: false }))).toContain(plural("danger.archiveOnline", 2));
+  });
+
+  it("nothing to get back: the archive copy is the generic one", () => {
+    const h = mount({ back: 0, forfeited: 5, onDelete: true });
+    expect(archiveBody(h)).toBe(en["danger.archiveBody"]);
+  });
+
+  it("a refused delete pivots to archive: the results sentence, then the money line as its own paragraph, led by its reason, once", async () => {
+    const h = mount({ back: 8, forfeited: 0, onDelete: false });
+    await refusedDelete(h);
+    const paras = paragraphsOf(h, "danger.archiveConfirm");
+    const money = plural("danger.archiveOnline", 8);
+    expect(paras[0], "the refused delete's reason comes first, about results only").toBe(en["danger.suggestArchive"]);
+    expect(paras.filter((p) => p === money), "the money line: one paragraph of its own, said once").toHaveLength(1);
+    expect(paras.filter((p) => p.includes(en["danger.suggestArchive"]!) && p.includes(money)), "never one paragraph").toHaveLength(0);
+    expect(paras.indexOf(money), "after the results sentence").toBeGreaterThan(0);
+  });
+
+  it("a refused delete of a division with no paid package keeps the copy it always had", async () => {
+    const h = mount(null);
+    await refusedDelete(h);
+    const body = archiveBody(h);
+    expect(body).toContain(en["danger.suggestArchive"]);
+    for (const fragment of ONLINE_FRAGMENTS()) expect(body, fragment).not.toContain(fragment);
+  });
+});
+
+describe("a paid package a round has frozen is never refunded, and the dialogs say so (fix round 2)", () => {
+  it("paid and frozen: both dialogs say it is not refunded, in a sentence of its own; nothing says credits come back or how to get them", async () => {
+    let checked = 0;
+    const NOT_SAID = [en["danger.refundedLabel"]!, ...["one", "other"].flatMap((f) => [
+      en[`danger.onlineRefund.${f}`]!.split("{count}")[0]!, en[`danger.archiveOnline.${f}`]!.split("{count}")[0]!,
+    ])];
+    const h = mount({ frozen: true });
+    for (const key of ["danger.deleteConfirm", "danger.archiveConfirm"] as const) {
+      const paras = paragraphsOf(h, key);
+      expect(paras.filter((p) => p === en["danger.onlineFrozen"]), `${key}: the frozen line, once, on its own`).toHaveLength(1);
+      for (const f of NOT_SAID) expect(paras.join(" "), `${key}: ${f}`).not.toContain(f);
+      checked += 1;
+    }
+    // ...and under the refused delete's pivot (a started division), after the results sentence.
+    await refusedDelete(h);
+    const pivot = paragraphsOf(h, "danger.archiveConfirm");
+    expect(pivot[0]).toBe(en["danger.suggestArchive"]);
+    expect(pivot.filter((p) => p === en["danger.onlineFrozen"]), "the pivot: the frozen line, once").toHaveLength(1);
+    checked += 1;
+    expect(checked, "delete, archive, the pivot").toBe(3);
+  });
+});
+
+describe("the way out the copy names is the screen's own words, in every locale", () => {
+  // The archive copy names where the switch is: the Fixtures tab, its Division rules, the Online Chess control. A rename of any
+  // of the three must move this copy with it, so each locale's sentence is checked against that locale's own labels.
+  it("each locale's switch-off copy names its Fixtures tab, Division rules and Online Chess labels", () => {
+    const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const labels = [dict["div.detail.tab.fixtures"], dict["rulesStrip.title"], dict["divset.onlinePlay.label"]];
+      for (const l of labels) expect(l, `${locale}: premise, the label exists`).toBeTypeOf("string");
+      for (const key of ["danger.archiveOnline.one", "danger.archiveOnline.other"]) {
+        const copy = dict[key];
+        expect(copy, `${locale} ${key}`).toBeTypeOf("string");
+        for (const l of labels) expect(copy, `${locale} ${key} names "${l}"`).toContain(l);
+        expect(copy, `${locale} ${key} carries the count`).toContain("{count}");
+        checked += 1;
+      }
+      // The frozen line names the product it is about, in this locale's words, and promises no count.
+      const frozen = dict["danger.onlineFrozen"];
+      expect(frozen, `${locale} danger.onlineFrozen`).toBeTypeOf("string");
+      expect(frozen, `${locale} danger.onlineFrozen names "${labels[2]}"`).toContain(labels[2]);
+      expect(frozen).not.toContain("{count}");
+      // P8 freezes the package at ANY round's first online open (round 1 scored by hand, round 2 opened online, included): the line names an
+      // Online Chess round, never a round number (fix round 3 m2: "Round 1 has opened" was false for that case).
+      expect(frozen, `${locale} danger.onlineFrozen names no round number`).not.toMatch(/\d/);
+      expect(frozen.toLowerCase(), `${locale} danger.onlineFrozen says a round opened`).toContain(({ en: "round", es: "ronda", fr: "ronde", nl: "ronde" } as Record<string, string>)[locale]!);
+      checked += 1;
+    }
+    expect(checked, "4 locales x (2 keys + the frozen line)").toBe(12);
+  });
+
+  // P8/P20: the package is paid and frozen at the first ONLINE open, whatever its number - round 1 may be scored by hand and round 2 opened
+  // online. So no line that names the money moment (when it is paid, when the size and camera are fixed, what a pay-and-open opens) names a
+  // round number (fix round 4). The frozen line above is one of them; these are the rest, in every locale.
+  it("no money-moment line names a round number, in any locale; and nothing under Online Chess says 'round 1'", () => {
+    const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    const MONEY_MOMENT = [
+      "danger.onlineFrozen",
+      "onlineChess.price.later",
+      "onlineChess.review.value.one",
+      "onlineChess.review.value.other",
+      "onlineChess.payLine.text",
+      "onlineChess.receipt.title.payAndOpen",
+      "onlineChess.receipt.line.moveUp",
+      "onlineChess.receipt.line.fixed",
+      "onlineChess.receipt.confirm.payOpen.one",
+      "onlineChess.receipt.confirm.payOpen.other",
+      "onlineChess.receipt.noInvitable",
+      "onlineChess.receipt.lateEntrants",
+    ];
+    let checked = 0;
+    let swept = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const key of MONEY_MOMENT) {
+        const copy = dict[key];
+        expect(copy, `${locale} ${key}`).toBeTypeOf("string");
+        expect(copy, `${locale} ${key} names no round number`).not.toMatch(/\d/);
+        checked += 1;
+      }
+      // The sweep by behaviour, not by list: every Online Chess and danger-zone online line, a round word next to a digit is refused.
+      for (const [key, copy] of Object.entries(dict)) {
+        if (!key.startsWith("onlineChess.") && !key.startsWith("danger.online")) continue;
+        expect(copy, `${locale} ${key}`).not.toMatch(/\b(?:round|ronda|ronde)\s*\d/i);
+        swept += 1;
+      }
+    }
+    expect(checked, "4 locales x 12 money-moment keys").toBe(48);
+    expect(swept, "anti-vacuity: the namespace sweep read every locale's Online Chess lines").toBeGreaterThanOrEqual(4 * 100);
+  });
+});

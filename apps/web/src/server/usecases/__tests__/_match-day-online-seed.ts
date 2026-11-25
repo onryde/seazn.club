@@ -20,7 +20,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { stampFixtureCheckIn } from "../me";
 import { startDivision } from "../schedule";
-import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import {
   putVideoMeeting,
   putVideoParticipant,
@@ -96,7 +96,7 @@ export async function addStage(
   name: string,
   pair: { home: SeedSide; away: SeedSide },
 ): Promise<{ stageId: string; fixtureId: string }> {
-  const [stage] = await createStages(r.owner, r.divisionId, { seq: 2, kind: "league", name, config: {} });
+  const [stage] = await createStagesOnLegacyOnline(r.owner, r.divisionId, { seq: 2, kind: "league", name, config: {} });
   const [row] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id, scheduled_at)
     values (${stage!.id}, ${r.divisionId}, ${r.orgId}, 1, 1, ${`md2-s2-${randomUUID().slice(0, 8)}`}, 'scheduled',
@@ -172,7 +172,7 @@ export async function seedOnlineDivisionIn(
     variant_key: "classical",
     config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
   });
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
   const side = async (name: string): Promise<SeedSide> => {
     const lichessId = `md-${randomUUID().slice(0, 10)}`;
     const p = await seedPlayer(owner.orgId, name, lichessId, true);

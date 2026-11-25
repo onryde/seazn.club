@@ -878,6 +878,31 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(again).toMatchObject({ id: b.sessionId, state: "live", creditUsed: true });
   });
 
+  // Online Chess credits (spec 2026-11-23, Task 10): the ledger now holds package rows beside session rows, and `current.ts` counts a
+  // session's own net spend by `session_id`. A package row has no session, so it is never a stream's credit used — whatever the org
+  // paid a division for this month. (There is no org-wide consume count in stream-sessions/; this pins that it stays that way.)
+  it("D3: a package's consume and refund in the same org are never THIS session's credit used — the empty case and the positive pair", async () => {
+    // 4 credits: the package's raw 2 below must leave the session's own one to spend (a 2-credit rig would fail the start).
+    const r = await rig({ credits: 4 });
+    const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "the empty case: warming, no consume row").toBe(false);
+    const [pkg] = await sql<{ id: string }[]>`
+      insert into division_online_packages (org_id, division_id, division_name, size, cameras_paid, credits_paid, paid_at, paid_by)
+      values (${r.auth.orgId}, null, 'Pay Open', 32, false, 2, now(), gen_random_uuid()) returning id`;
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.auth.orgId}, -2, 'consume', 'monthly', ${pkg!.id}, 32, 0)`;
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "a package consume names no session").toBe(false);
+    r.tick(STREAM_POLL_MS);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live).toMatchObject({ id: a.sessionId, state: "live", creditUsed: true });
+    // a package's return must not net the session's own consume out either
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.auth.orgId}, 2, 'refund', 'monthly', ${pkg!.id}, 32, 0)`;
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "the package's refund is not this session's").toBe(true);
+  });
+
   it("D3: a restart inside the reuse window consumed nothing, so its creditUsed is false — while the session that paid read true", async () => {
     const r = await rig({ credits: 1 });
     const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);

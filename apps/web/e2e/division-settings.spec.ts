@@ -552,7 +552,9 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
 
   test("a division WITH fixtures: the camera group still edits and saves (6)", async ({ page, request }) => {
     test.setTimeout(150_000);
-    const round = await seedOnlineRound(request, ["Cam Fix A", "Cam Fix B"], { open: false });
+    // Optional at seed: the package is then paid WITH the camera (the kit pays at the division's setting), so tightening to Required here
+    // is a settings change the package already covers (Online Chess credits Task 15: Off -> on over a package paid without it is refused, 422).
+    const round = await seedOnlineRound(request, ["Cam Fix A", "Cam Fix B"], { open: false, stage: "knockout", camera: "optional" });
     // The premise (it used to be Settings' read-only Format note, gone with FMT5): the division has fixtures.
     const fixtures = await withDb(async (sql) => {
       const [row] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where division_id = ${round.divisionId}`;
@@ -574,7 +576,7 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
 
   test("after a round opens: a tightening is refused in the viewer's language and the select snaps back; a relaxation saves (7)", async ({ page, request }) => {
     test.setTimeout(150_000);
-    const round = await seedOnlineRound(request, ["Cam Lock A", "Cam Lock B"], { camera: "optional" });
+    const round = await seedOnlineRound(request, ["Cam Lock A", "Cam Lock B"], { camera: "optional", stage: "knockout" });
     const settings = round.fixturesTab.replace("?tab=fixtures", "?tab=settings");
     await gotoSettings(page, settings);
     await setLocaleCookie(page, "es");

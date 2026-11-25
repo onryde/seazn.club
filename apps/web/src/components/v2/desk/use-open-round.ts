@@ -20,6 +20,7 @@
 import { useMemo, useReducer, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import type { OpenRoundView } from "@/lib/open-round";
+import type { PayBody } from "@/lib/online-receipt";
 import { initialOpenRoundUi, openRoundRunner, openRoundUi, type OpenRoundUiState } from "./open-round-state";
 
 export type OpenRoundHandle = {
@@ -32,12 +33,24 @@ export type OpenRoundHandle = {
   open(): void;
   /** Resend for one pairing's invite. */
   resend(fixtureId: string): void;
+  /** The receipt's confirm (Online Chess credits): the open again, with `pay`. Resolves when the open answered; rejects with what the door threw
+   *  (409 changed, 402 short, ...) for the receipt to word. */
+  pay(body: PayBody): Promise<void>;
+  /** Closes the receipt an unpaid open stood up. Sends nothing. */
+  closePay(): void;
 };
 
 type Presses = Omit<OpenRoundHandle, "state">;
 
 /** The presses of a handle with no round: every call does nothing. */
-const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
+const NO_PRESSES: Presses = {
+  ask: () => {},
+  cancel: () => {},
+  open: () => {},
+  resend: () => {},
+  pay: () => Promise.reject(new Error("NO_ROUND")),
+  closePay: () => {},
+};
 
 /** The handle for one round (a null view gives a no-op handle: initial state, every call does nothing), with the caller's own refresh after
  *  an answer. Match Day's round panel is the only caller (Task 7): the shell's page is a client island that re-reads the day itself, so it
@@ -70,6 +83,8 @@ export function useOpenRoundWith(view: OpenRoundView | null, refresh: () => void
             cancel: () => dispatch({ type: "cancel" }),
             open: () => void runner.open(stageId, roundNo),
             resend: (fixtureId) => void runner.resend(fixtureId),
+            pay: (body) => runner.payOpen(stageId, roundNo, body),
+            closePay: () => dispatch({ type: "closePay" }),
           },
     [runner, stageId, roundNo],
   );

@@ -150,6 +150,7 @@ export async function hardDeleteQuickMatchCompetition(
       await tx`delete from email_outbox where ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE} and ref_id = any(${ids}::text[])`;
     }
     await tx`delete from quick_matches where competition_id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+    // No Online Chess package to refund (spec 2026-11-23 §7.3): quick-match-create.ts sets no onlinePlay, so none was ever written.
     const removed = await tx`delete from competitions where id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
     return { deleted: removed.count > 0, kept: false };
   });

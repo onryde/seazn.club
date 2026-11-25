@@ -6,6 +6,8 @@
 // format) by `ruleRefusalText`. Null for any other code: the caller keeps its own copy for those.
 //
 // Client-safe: both callers are client components.
+import type { MessageKey } from "./messages";
+import { onlinePackageRefusalText } from "./online-package-refusal";
 import { ruleRefusalText } from "./rule-errors";
 import { SCHEDULE_LOCKED_CODE } from "./schedule-lock";
 import { swissRefusalText, type SwissRefusalMsg } from "./swiss-refusal-text";
@@ -20,5 +22,10 @@ export function swissDoorRefusalText(
 ): string | null {
   if (isSwissRefusalCode(code)) return swissRefusalText(code, extra, msg, plural);
   if (code === SCHEDULE_LOCKED_CODE) return msg("stage.error.scheduleFrozen");
+  // Online Chess credits (spec 2026-11-23 §7.6, §8.1): a rounds edit or an added round that the division's size does not include
+  // (ONLINE_ROUNDS_NEED_SIZE, with the size to move to) or that no size includes (ONLINE_ROUNDS_ABOVE_MAX) - said in the reader's
+  // language, never the server's English.
+  const online = onlinePackageRefusalText({ code, extra }, (key, vars) => msg(key as MessageKey, vars));
+  if (online !== null) return online;
   return ruleRefusalText(code, extra, msg);
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { requireUser } from "@/lib/auth";
+import { getOrgRole, requireUser } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
@@ -9,6 +9,9 @@ import { createRelayCheckout, StreamPackPriceDriftError } from "@/lib/relay-chec
 import { preferredCurrency } from "@/lib/currency-server";
 import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
+import { isEditorRole } from "@/lib/types";
+import { OnlineSizeS } from "@/server/api-v1/schemas/online-package";
+import { onlineChessDisabled, onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { NextResponse } from "next/server";
 import { captureError } from "@/lib/sentry";
 import { relayUnavailable } from "@/server/relay/drivers";
@@ -30,13 +33,41 @@ function stripeRequestError(err: unknown): { type: string; code?: string; reques
 
 const pack = z.union([z.literal(1), z.literal(5), z.literal(20)]);
 /** Exactly ONE return is named, by the body's own shape: a fixture (the Stream panel on that fixture's page — Stripe
- *  returns the buyer there) or `returnTo: "settings"` (Settings → Credits → Streaming, which has no fixture). Two strict
- *  objects in a union, so a body that names both — or neither — matches neither and is a 400: the route never has to
- *  pick which return the buyer meant. */
+ *  returns the buyer there), `returnTo: "settings"` (Settings → Credits → Streaming, which has no fixture) or
+ *  `returnTo: "division"` (an Online Chess division's own page, the receipt reopened — spec 2026-11-23 §7.6, §8.4). Three
+ *  strict objects in a union, so a body that names two — or none — matches none and is a 400: the route never has to
+ *  pick which return the buyer meant. `size` exists on the division arm alone and only from the ladder: it is an
+ *  upgrade's target riding in the return address (§8.4), never a price, and never a free-text value in a URL. `cameras` is the
+ *  same kind of rider: a boolean only, the receipt's Fair-play camera answer (Task 15: every receipt asks Yes or No), so the return
+ *  reopens the receipt on the answer the organiser gave, either way - a camera turned on at the paid size names nothing to pay on its
+ *  own, and an answer the division's setting does not say yet would otherwise be lost. */
 const schema = z.union([
   z.object({ orgId: z.string().uuid(), fixtureId: z.string().uuid(), pack }).strict(),
   z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("settings") }).strict(),
+  z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("division"), divisionId: z.string().uuid(), size: OnlineSizeS.optional(), cameras: z.boolean().optional() }).strict(),
 ]);
+
+/** Why this org cannot buy a pack for PHONE STREAMING, or null when it can: the refusal the route answers with unless Online
+ *  Chess is offered (the credits are one pool). Returned, not thrown, so the caller decides; order is the old route's.
+ *
+ *  I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts `disabledRelayDrivers`)
+ *  refuses every start with a 503, so a pack sold meanwhile is real money for a credit nothing can spend — and so (m1) does a LIVE
+ *  one missing a Cloudflare secret, whose drivers cannot be built. The code is the one the Phone tab already reads ("The streaming
+ *  service is unavailable"). Refused BEFORE the entitlement read and any Stripe call, after the ownership checks: a fixture that
+ *  is not this org's stays 404 whatever the deployment.
+ *
+ *  m5 (lane-close review): the same TWO keys createSession admits on, in admit's order — without the overlay no start is admitted
+ *  whatever the relay says, so a pack sold then is a credit nothing can spend. */
+async function refuseStreaming(orgId: string, competitionId: string | undefined): Promise<HttpError | null> {
+  if (relayUnavailable()) return new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+  const [overlay, relay] = await Promise.all([
+    hasFeature(orgId, "streaming.overlay", competitionId),
+    hasFeature(orgId, "streaming.relay", competitionId),
+  ]);
+  if (!overlay) return new HttpError(402, "The stream overlay is switched off for this organisation", "plan_lacks_overlay");
+  if (!relay) return new HttpError(402, "Phone streaming is switched off for this organisation", "plan_lacks_relay");
+  return null;
+}
 
 /**
  * POST /api/billing/relay-checkout — an EMBEDDED one-time Checkout Session for
@@ -45,7 +76,10 @@ const schema = z.union([
  * credit-pack-checkout/route.ts does. `return_url` depends on where the buyer started: the organiser FIXTURE page
  * (spec 2026-09-30 §2) with `?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}` for a fixture purchase, or
  * Settings → Credits → Streaming (`?kind=stream&checkout=success&session_id={CHECKOUT_SESSION_ID}`) for a body that
- * names `returnTo: "settings"` instead of a fixture.
+ * names `returnTo: "settings"` instead of a fixture, or the DIVISION page (`?tab=fixtures&oc=pay&checkout=success&session_id=
+ * {CHECKOUT_SESSION_ID}`, plus `&size=` when the buyer was upgrading) for `returnTo: "division"` — Online Chess pays for a
+ * division with the same Seazn credits (spec 2026-11-23 §7.6), so a division is a place a pack is bought FROM. The page reopens the
+ * receipt and reconciles the session before it reads the balance.
  *
  * Gate order, and why (P7, recorded at Task 0): `requireBillingOwner` — the
  * Stripe customer, the locked currency and the payer's card belong to the
@@ -53,12 +87,16 @@ const schema = z.union([
  * `orgId` must EQUAL the resolved org (400): the resolver reads a cookie, and
  * a stale one must not buy credits for a different organisation. Then, for a
  * fixture purchase, the fixture must be that org's (404, never "forbidden");
- * a Settings purchase has no fixture and its entitlements resolve for the org. Then — BEFORE any
+ * a Settings purchase has no fixture and its entitlements resolve for the org; a division purchase is behind the Online Chess
+ * flag (403 ONLINE_CHESS_DISABLED, asked first, whatever streaming says), then for an ORGANISER of the division's org only (403 —
+ * owner or admin, the people who may pay a package), and the division must be that org's (404). Then — BEFORE any
  * Stripe call — the deployment must have a relay at all (503
  * `ingest_unavailable`, Task 14b review I2), and the org's resolved
  * `streaming.overlay` and `streaming.relay` must both be true — the two keys
  * createSession admits on, in its order (m5) — or 402 `plan_lacks_overlay` /
- * `plan_lacks_relay`: nobody pays for a tier they cannot use. Never a redirect
+ * `plan_lacks_relay`: nobody pays for a tier they cannot use. UNLESS Online Chess is offered to the org (spec §7.6): the credits
+ * are one pool, and a club that plays chess online and does not stream still spends them. The flag is asked only once
+ * streaming has refused, so a club that streams never costs a PostHog call here. Never a redirect
  * (R8): JSON with the secret.
  *
  * The 402 carries a `code` and NO `extra`: `lib/http.ts`'s generic `HttpError`
@@ -81,6 +119,9 @@ export async function POST(req: Request) {
     let competitionId: string | undefined;
     let fixtureId: string | undefined;
     let landing: string;
+    // Set once the Online Chess flag has been asked and answered yes on this request (the division arm's own gate), so the streaming
+    // gates below do not ask the same remote question twice.
+    let chessOffered = false;
     if ("fixtureId" in body) {
       const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string; fixture_no: number }[]>`
         select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, f.fixture_no
@@ -95,6 +136,32 @@ export async function POST(req: Request) {
       // Spec 2026-09-30 §2: the panel lives on the fixture page now, so the pack checkout returns THERE. `stream=open`
       // opens the Stream panel on its Phone tab; the fixture page reconciles `session_id` before reading the balance.
       landing = `${routes.fixture(fx.org_slug, fx.comp_slug, fx.div_slug, fx.fixture_no)}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+    } else if (body.returnTo === "division") {
+      // The division return is a NEW door and belongs to Online Chess (§7.6): behind the same flag as every other start gate (403
+      // ONLINE_CHESS_DISABLED), asked FIRST and whatever streaming says — a club that streams but is not offered Online Chess has
+      // no package to pay for from a division, and the return page it names would not offer one.
+      if (!(await onlineChessOffered({ orgId, userId: user.id }))) throw onlineChessDisabled();
+      chessOffered = true;
+      // An organiser pays for a division's package (§7.6): the same role the pay door asks (`isEditorRole`, usecases/online-package/
+      // pay.ts), read for the RESOLVED org. A member who only views, and a billing payer who is no member of the org, are refused
+      // before the division is even looked up.
+      if (!isEditorRole(await getOrgRole(orgId, user.id))) {
+        throw new HttpError(403, "Only an owner or admin can buy credits for an Online Chess division");
+      }
+      // The org in the WHERE is the ownership check (404, never "forbidden"): a division id of another organisation, or one that
+      // does not exist, is the same answer. The slugs come from the row, never the body, so the return can only land on this
+      // org's own division page.
+      const [dv] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string }[]>`
+        select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
+          from divisions d
+          join competitions c on c.id = d.competition_id
+          join organizations o on o.id = c.org_id
+         where d.id = ${body.divisionId} and o.id = ${orgId}`;
+      if (!dv) throw new HttpError(404, "division not found");
+      competitionId = dv.competition_id;
+      // `oc=pay` reopens the receipt; `size` (an upgrade's target, from the ladder) rides next, then `cameras=1` or `cameras=0` (the camera answer) last. The division page reconciles
+      // `session_id` before it reads the balance.
+      landing = `${routes.division(dv.org_slug, dv.comp_slug, dv.div_slug, "fixtures")}&oc=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}${body.size !== undefined ? `&size=${body.size}` : ""}${body.cameras === undefined ? "" : `&cameras=${body.cameras ? 1 : 0}`}`;
     } else {
       // The slug of the RESOLVED org (`orgId`, equal to the body's by the check above — never the body's own), so the
       // return can only ever land on the buyer's own Credits tab. The tab reconciles `session_id` before it reads.
@@ -103,28 +170,10 @@ export async function POST(req: Request) {
       landing = `${routes.creditsStream(org.slug)}&checkout=success&session_id={CHECKOUT_SESSION_ID}`;
     }
 
-    // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts
-    // `disabledRelayDrivers`) refuses every start with this same 503, so a pack sold meanwhile is real money for a
-    // credit nothing can spend — and so (m1) does a LIVE one missing a Cloudflare secret, whose drivers cannot be built.
-    // Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab already reads ("The
-    // streaming service is unavailable"). After the ownership checks: a fixture that is not this org's stays 404
-    // whatever the deployment.
-    if (relayUnavailable()) {
-      throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
-    }
-
-    // m5 (lane-close review): the same TWO keys createSession admits on, in admit's order — without the overlay no start
-    // is admitted whatever the relay says, so a pack sold then is a credit nothing can spend.
-    const [overlay, relay] = await Promise.all([
-      hasFeature(orgId, "streaming.overlay", competitionId),
-      hasFeature(orgId, "streaming.relay", competitionId),
-    ]);
-    if (!overlay) {
-      throw new HttpError(402, "The stream overlay is switched off for this organisation", "plan_lacks_overlay");
-    }
-    if (!relay) {
-      throw new HttpError(402, "Phone streaming is switched off for this organisation", "plan_lacks_relay");
-    }
+    // The streaming gates, in order. Each is a refusal the buyer's Phone tab already reads; none is final while Online Chess is
+    // offered to the org (spec 2026-11-23 §7.6 — "Also allowed when Online Chess is offered to the org").
+    const streamingRefusal = await refuseStreaming(orgId, competitionId);
+    if (streamingRefusal && !(chessOffered || (await onlineChessOffered({ orgId, userId: user.id })))) throw streamingRefusal;
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
       select stripe_customer_id from subscriptions where id = ${subscriptionId}`;

@@ -740,7 +740,7 @@ export interface DlsGateProbeResult {
   readonly statsPlayerGranted: boolean;
   /** Whether the chosen plan grants `news.auto`, from the same selection.
    *  Without it `PATCH /divisions/{id}` refuses `auto_posts: true`
-   *  (`usecases/divisions.ts:652-654`), nothing drafts, and — because
+   *  (`usecases/divisions/patch.ts:201-203`), nothing drafts, and — because
    *  drafting is a side effect of FOLDING — there is no later point at which
    *  the run could recover. A run that finds this false must report the news
    *  step as having no subject rather than as passing on zero posts. */
@@ -900,7 +900,7 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   // B06a T7 — `news.auto` joins the SELECTION for the same reason
   // `stats.player` did, and it matters more here than for any of the three
   // above: `PATCH /divisions/{id}` REFUSES to set `auto_posts: true` without
-  // it (`usecases/divisions.ts:652-654`), so a run that provisioned a plan
+  // it (`usecases/divisions/patch.ts:201-203`), so a run that provisioned a plan
   // lacking it cannot even turn drafting on — and drafting is a side effect
   // of folding, so there is no later moment to notice. Read from the LIVE
   // catalog, never from the migrations: V295 seeded it, V393 flipped

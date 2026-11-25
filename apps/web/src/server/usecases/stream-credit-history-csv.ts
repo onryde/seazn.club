@@ -4,8 +4,10 @@
 // (settings/billing/credits.csv) and the participants export.
 import type { StreamHistoryRow } from "@/server/usecases/stream-credit-history";
 
-/** `activity` is the history kind key (`packPurchase`, `streamUsed`, …) — stable, never the localised label. */
-export const STREAM_HISTORY_CSV_HEADER = ["date", "activity", "change", "balance_after", "fixture_no", "match", "competition"] as const;
+/** `activity` is the history kind key (`packPurchase`, `streamUsed`, `onlinePackagePaid`, …) — stable, never the localised label.
+ *  `division` and `size` are an Online Chess package row's (spec 2026-11-23 §8.8); empty on every other row. Appended after the
+ *  seven columns a reader of the old file already knows, so none of them moved. */
+export const STREAM_HISTORY_CSV_HEADER = ["date", "activity", "change", "balance_after", "fixture_no", "match", "competition", "division", "size"] as const;
 
 /** A side not yet decided (a bracket slot, a TBD entrant) — the same word the screen shows, so a row never reads `Hawks v `. */
 const UNDECIDED = "TBD";
@@ -38,7 +40,9 @@ export function streamHistoryCsv(rows: readonly StreamHistoryRow[]): string {
       r.balanceAfter,
       r.fixture ? r.fixture.fixtureNo : "",
       r.fixture ? matchName(r.fixture) : "",
-      r.fixture?.competitionName ?? "",
+      r.fixture?.competitionName ?? r.onlinePackage?.competitionName ?? "",
+      r.onlinePackage?.divisionName ?? "",
+      r.onlinePackage ? r.onlinePackage.size : "",
     ]),
   ];
   return lines.map((cells) => cells.map(csvCell).join(",")).join("\r\n");

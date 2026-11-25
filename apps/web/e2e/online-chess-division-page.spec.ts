@@ -36,7 +36,8 @@ test("online chess division: the header says Chess; the fixtures tab says to sta
     { kind: "individual", display_name: `Hint Bo ${TAG}`, seed: 2, members: [] },
   ]);
   expect(ents.status, JSON.stringify(ents.error)).toBeLessThan(300);
-  await createStageAndGenerate(request, div.data!.id);
+  // A knockout: an online division takes Swiss and knockout only, and this spec reads the start hint, not a format.
+  await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Knockout" });
   const base = await competitionPath(request, comp.data!.id, `/d/${div.data!.slug}`);
 
   await page.setViewportSize({ width: 1280, height: 900 });

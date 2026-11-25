@@ -193,6 +193,7 @@ describe("the division hands the run sheet each fixture's stream state, and buil
     pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
     stagesSpies.listStages.mockReset().mockResolvedValue([]);
     relay.states.mockReset().mockResolvedValue({});
+    relay.reconcile.mockReset().mockResolvedValue(true);
     loader.calls.length = 0;
     scene.frozen = false;
     scene.fixtures = [fx("fx-2", 2), fx("fx-1", 1), fx("fx-3", 3)];
@@ -254,5 +255,61 @@ describe("the division hands the run sheet each fixture's stream state, and buil
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// Spec 2026-11-23 §7.6, §8.4 (Online Chess credits, Task 10): the division is a place Seazn credits are bought FROM, and Stripe returns
+// the buyer to it (`?tab=fixtures&oc=pay&checkout=success&session_id=…`, the relay-checkout route's `returnTo: "division"`). The page
+// reconciles the session before it reads anything else, so the credits are in the ledger even when the render beats the webhook.
+describe("the division reconciles a credits purchase made from it — organisers only, only a success return with a session (Online Chess Task 10)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.states.mockReset().mockResolvedValue({});
+    relay.reconcile.mockReset().mockResolvedValue(true);
+    scene.frozen = false;
+    scene.fixtures = [];
+    scene.entrants = [];
+  });
+
+  it("an organiser's success return reconciles THAT session for THEIR org, once, before the run sheet's own stream read", async () => {
+    relay.reconcile.mockImplementation(async () => {
+      expect(relay.states, "the reconcile runs before the run sheet's own read").not.toHaveBeenCalled();
+      return true;
+    });
+    await render({ tab: "fixtures", oc: "pay", checkout: "success", session_id: "cs_test_123", size: "64" });
+    expect(relay.reconcile).toHaveBeenCalledTimes(1);
+    expect(relay.reconcile).toHaveBeenCalledWith("org-1", "cs_test_123");
+  });
+
+  it("nothing else reconciles — a viewer, a cancelled return, no session, an empty one, an array, and a plain visit", async () => {
+    const cases: [string, Record<string, string | string[]>, boolean][] = [
+      ["a viewer on a success return", { tab: "fixtures", checkout: "success", session_id: "cs_1" }, false],
+      ["a cancelled return", { tab: "fixtures", checkout: "cancel", session_id: "cs_1" }, true],
+      ["a success with no session", { tab: "fixtures", checkout: "success" }, true],
+      ["a success with an empty session", { tab: "fixtures", checkout: "success", session_id: "" }, true],
+      ["a success with two sessions", { tab: "fixtures", checkout: "success", session_id: ["cs_1", "cs_2"] }, true],
+      ["a plain visit", { tab: "fixtures" }, true],
+    ];
+    let checked = 0;
+    for (const [name, sp, canEdit] of cases) {
+      relay.reconcile.mockClear();
+      pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit });
+      await render(sp);
+      expect(relay.reconcile, name).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+    // the positive pair for the viewer case: the same success return, an organiser — it does
+    pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
+    await render({ tab: "fixtures", checkout: "success", session_id: "cs_1" });
+    expect(relay.reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a reconcile that did not grant (processing, not ours) never blocks the page — it answers false and the page renders", async () => {
+    relay.reconcile.mockResolvedValue(false);
+    const tree = await render({ tab: "fixtures", checkout: "success", session_id: "cs_other_orgs" });
+    expect(tree).toBeTruthy();
+    expect(relay.reconcile).toHaveBeenCalledTimes(1);
   });
 });

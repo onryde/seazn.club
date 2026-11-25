@@ -13,12 +13,20 @@
 //   T6 audience         delete `assertCanReadStreamHistory`                     → "an API key and another org are refused"
 //   T7 upper clamp      drop `Math.min(freeAllowance, …)` from freeUsed          → "the meter never reads past its own scale"
 //   T8 lower clamp      drop `Math.max(0, …)` from freeUsed                       → "a refund written twice against one match cannot take the meter below nothing"
+//   T9 chess offer      `streamCreditsOffer` ignores the Online Chess flag                → "only Online Chess offered: the tab is on, and grants the month"
+//   T10 flag asked late  ask the flag before the streaming facts                           → "the flag is asked only when streaming does not already admit"
+//   T11 package netting  drop the per-package refund term from the used query              → "a package paid from the free credits is one used; the refund hands it back"
+//   T14 package period   drop `created_at >= periodStart` from the package term              → "last month's package credits are not this month's"
+//   T12 package bound    `least(refunded, consumed)` → `refunded`                          → "a refund booked against a package with no consume this month cannot take the meter below its other matches"
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { consumeForSession, recordPurchase, refundConsumeForSession } from "@/server/usecases/stream-credits";
+import { deleteDivision } from "@/server/usecases/divisions";
+import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
+import { ocCompetition, ocDivision, ocOrg, pay } from "@/server/usecases/online-package/__tests__/_oc-rig";
 
 const { relayOfferMock } = vi.hoisted(() => ({
   relayOfferMock: vi.fn<(orgId: string) => Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean; composedAvailable: boolean }>>(),
@@ -32,9 +40,21 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const auth = (orgId: string, via: AuthCtx["via"] = "session"): AuthCtx => ({ orgId, via, userId: null, role: "viewer", keyId: via === "api_key" ? randomUUID() : null });
 const ON = { entitled: true, relayEntitled: true, relayDisabled: false, composedAvailable: true };
 
+/** The Online Chess flag (`onlineChessOffered`): the vitest environment forces it ON for everyone (`ONLINE_CHESS_ALWAYS=1`), which
+ *  would make every "streaming is off, so nothing is offered" case below a sale. Each test starts with it OFF; one that needs a
+ *  club offered Online Chess says so. PostHog is not configured here, so OFF is the helper's own fallback, not a stub of it. */
+const chessOffered = (on: boolean): void => {
+  vi.stubEnv("ONLINE_CHESS_ALWAYS", on ? "1" : "");
+};
+
 beforeEach(() => {
   relayOfferMock.mockReset();
   relayOfferMock.mockResolvedValue(ON);
+  forgetOnlineChessFlagCache();
+  chessOffered(false);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 /** The community plan's declared monthly stream credits, READ from the catalogue (V426), never typed. */
@@ -207,5 +227,111 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
       expect(n!.n, "a refused read granted nothing").toBe(0);
     }
     expect(relayOfferMock, "the gate runs before the offer is even asked").not.toHaveBeenCalled();
+  });
+  it("only Online Chess offered: the tab is on, grants the month and offers packs — whichever way phone streaming is off (T9); neither offered, nothing (the T1 pair)", async () => {
+    const rate = await communityRate();
+    expect(rate, "premise: the month's free credit exists").toBeGreaterThan(0);
+    const cases = [
+      ["no relay on this deployment", { ...ON, relayDisabled: true }],
+      ["the plan lacks the relay", { ...ON, relayEntitled: false }],
+      ["the plan lacks the overlay", { ...ON, entitled: false, relayEntitled: false }],
+    ] as const;
+    let checked = 0;
+    for (const [name, offer] of cases) {
+      relayOfferMock.mockResolvedValue(offer);
+      chessOffered(true);
+      const r = await streamRig();
+      const view = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+      expect(view.offer, `${name}: chess offered`).toBe("on");
+      expect([view.freeAllowance, view.total, view.monthly], `${name}: the month is granted`).toEqual([rate, rate, rate]);
+      expect(view.history.rows.map((x) => x.kind), name).toEqual(["monthlyGrant"]);
+      // the pair: the SAME org and facts with the flag off is the refusal the tab always gave, and grants nothing more
+      chessOffered(false);
+      forgetOnlineChessFlagCache();
+      const r2 = await streamRig();
+      const refused = await getStreamCreditsTab(auth(r2.orgId), r2.orgId);
+      expect(refused.offer, `${name}: chess not offered`).not.toBe("on");
+      expect(refused.freeAllowance, name).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("the flag is asked only when streaming does not already admit (T10), and for the ORG — the rail, which has no person, must reach the same answer", async () => {
+    const asks: { orgId: string; userId: string | null }[] = [];
+    const flag = await import("@/server/usecases/external-play/online-chess-flag");
+    const spy = vi.spyOn(flag, "onlineChessOffered").mockImplementation(async (asker) => {
+      asks.push({ orgId: asker.orgId, userId: asker.userId });
+      return false;
+    });
+    try {
+      const on = await streamRig();
+      await getStreamCreditsTab(auth(on.orgId), on.orgId);
+      expect(asks, "streaming admits, so no PostHog call on the common path").toEqual([]);
+      relayOfferMock.mockResolvedValue({ ...ON, relayEntitled: false });
+      const off = await streamRig();
+      await getStreamCreditsTab(auth(off.orgId), off.orgId);
+      expect(asks).toEqual([{ orgId: off.orgId, userId: null }]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a package paid from the free credits is a free credit used; a move down and a refund hand them back — nets by package, never by session (T11)", async () => {
+    chessOffered(true);   // the pay door's own gate
+    const o = await ocOrg();
+    const compId = await ocCompetition(o);
+    const d = await ocDivision(o, compId);
+    const start = await getStreamCreditsTab(o.auth, o.orgId);   // the month's grant
+    expect(start.freeUsed).toBe(0);
+    expect(start.freeAllowance, "premise: the plan's month covers a 32-player package (2 credits)").toBeGreaterThanOrEqual(2);
+
+    await pay(o, d.id, 32);   // decision 5: 16 players cost 1 credit, so 32 cost 2 — drawn from the month's credits first
+    const paid = await getStreamCreditsTab(o.auth, o.orgId);
+    expect(paid.freeUsed, "two included credits went on the package").toBe(2);
+
+    await pay(o, d.id, 16);   // a move down: 1 credit comes back, in the month it was spent
+    const down = await getStreamCreditsTab(o.auth, o.orgId);
+    expect(down.freeUsed, "one of the two came back").toBe(1);
+    expect(down.monthly).toBe(start.monthly - 1);
+
+    await deleteDivision(o.auth, d.id);   // the full return
+    const gone = await getStreamCreditsTab(o.auth, o.orgId);
+    expect(gone.freeUsed, "the refund hands the free credit back to the meter").toBe(0);
+    expect(gone.monthly).toBe(start.monthly);
+  });
+
+  it("a refund booked against a package with no consume this month cannot take the meter below its other matches (T12)", async () => {
+    const r = await streamRig();
+    const fx = r.fixtureIds[0]!;
+    const s = await r.session(fx);
+    await getStreamCreditsTab(auth(r.orgId), r.orgId);   // the grant
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: fx, sessionId: s }));
+    // A package refund with NO consume of the package this month (a refund of last month's credit, which the writer forbids, so
+    // it can only be written raw): netted against the whole month it would cancel a MATCH's free credit.
+    const [pkg] = await sql<{ id: string }[]>`
+      insert into division_online_packages (org_id, division_id, division_name, size, cameras_paid, credits_paid, paid_at, paid_by)
+      values (${r.orgId}, null, 'Gone Open', 16, false, 1, now() - interval '70 days', gen_random_uuid()) returning id`;
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.orgId}, 1, 'refund', 'monthly', ${pkg!.id}, 16, 0)`;
+    const view = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+    expect(view.freeUsed, "the stream's free credit is still used").toBe(1);
+  });
+  it("last month's package credits are not this month's (T14) — the same row dated this month is (the positive pair)", async () => {
+    const r = await streamRig();
+    await getStreamCreditsTab(auth(r.orgId), r.orgId);   // the grant
+    const [pkg] = await sql<{ id: string }[]>`
+      insert into division_online_packages (org_id, division_id, division_name, size, cameras_paid, credits_paid, paid_at, paid_by)
+      values (${r.orgId}, null, 'Old Open', 16, false, 1, now() - interval '70 days', gen_random_uuid()) returning id`;
+    // A package's consume dated well before the UTC month began: hand-written because a clock cannot be moved under the writer.
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after, created_at)
+      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0, now() - interval '70 days')`;
+    expect((await getStreamCreditsTab(auth(r.orgId), r.orgId)).freeUsed, "last month's").toBe(0);
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0)`;
+    expect((await getStreamCreditsTab(auth(r.orgId), r.orgId)).freeUsed, "this month's").toBe(1);
   });
 });

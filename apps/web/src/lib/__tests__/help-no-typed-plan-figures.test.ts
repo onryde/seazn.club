@@ -244,14 +244,16 @@ describe("help articles type no plan figures", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Stray `{{`: only a valid `{{plan:<feature>:<plan>}}` token may contain one.
+// Stray `{{`: only a valid `{{plan:<feature>:<plan>}}` or Online Chess `{{online:...}}` token may contain one.
 // ---------------------------------------------------------------------------
-// The grammar is written out here (from the token spec), not imported from the code under test.
+// The grammars are written out here (from the token specs), not imported from the code under test.
 const VALID_TOKEN = /\{\{plan:[A-Za-z0-9_.-]+:[A-Za-z0-9_]+\}\}/g;
+/** Online Chess figures (server/help-tokens.ts): the ends of the ladder, or a row's size, price, camera price or included rounds. */
+const ONLINE_TOKEN = /\{\{online:(?:largest|smallest|row:[1-9]:(?:size|price|cameras|rounds))\}\}/g;
 
 /** Every `{{` left once valid tokens are removed, with a little context. */
 function strayBraces(text: string): string[] {
-  const rest = text.replace(VALID_TOKEN, "");
+  const rest = text.replace(VALID_TOKEN, "").replace(ONLINE_TOKEN, "");
   const out: string[] = [];
   for (let i = rest.indexOf("{{"); i !== -1; i = rest.indexOf("{{", i + 2)) out.push(rest.slice(i, i + 40));
   return out;
@@ -266,12 +268,20 @@ describe("strayBraces: hand-written cases", () => {
       "x {{plan:registration.fee_percent}} y",
       "x {{plan:}} y",
       "Fee {{plan:registration.fee_percent:pro}} and {{oops}}",
+      "x {{online:row:1}} y",
+      "x {{online:row:0:size}} y",
+      "x {{online:row:1:colour}} y",
+      "x {{Online:largest}} y",
+      "x {{ online:largest}} y",
+      "x {{online:}} y",
     ];
     const OK = [
       "",
       "No braces at all.",
       "Fee {{plan:registration.fee_percent:pro}}% and {{plan:registration.fee_percent:community}}%.",
       "A single { brace } is fine.",
+      "| {{online:row:1:size}} | {{online:row:1:rounds}} | {{online:row:1:price}} | {{online:row:1:cameras}} |",
+      "up to {{online:largest}} players, from {{online:smallest}}",
     ];
     expect(BAD.length, "anti-vacuity: positive cases exist").toBeGreaterThan(0);
     expect(OK.length, "anti-vacuity: negative cases exist").toBeGreaterThan(0);

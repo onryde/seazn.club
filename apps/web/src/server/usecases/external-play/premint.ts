@@ -135,8 +135,12 @@ function emptyReport(over: Partial<Pick<PremintReport, "skipped" | "disabled">> 
  * `effectivePolicy`: the nearest set level wins, the competition's is NOT NULL), the fixture is playable, it is not an UNSEATED
  * Swiss bye shell (a bye has nobody to meet: two creates and, once the round's first pass ends them, four more calls per bye per
  * round - `isSwissByeShellExtKey` and no seat filled, the SQL form of `isUnseatedSwissByeShell`; the `coalesce` is load-bearing: a
- * fixture with no ext_key reads NULL against the pattern, and `not (null and ...)` would drop the board), and its round has never been
- * opened.
+ * fixture with no ext_key reads NULL against the pattern, and `not (null and ...)` would drop the board), its round has never been
+ * opened, and (Online Chess credits, review m3) the division's live package can OPEN a round: paid, or frozen (a round opened
+ * before, or the backfill's grandfathered row). An unpaid, unfrozen package refuses the first open (402 ONLINE_CHESS_UNPAID), so
+ * its boards' rooms would be made for rounds that cannot open, spending the pass's shared call cap; the room is made once the
+ * package is paid (the next pass), or by the seat's own `ensureMeeting`, as for any board a pass did not reach. `exists` is never NULL, and a division
+ * with no live package (none after the migration) is no candidate either: its open is refused too.
  *
  * It is the ONE spelling of "a board the pre-mint job still wants": the sweep's teardown asks its NEGATION to decide that a
  * never-opened room belongs to a board that left the set (check-in capacity G2: the two jobs' predicates are disjoint by
@@ -149,7 +153,9 @@ export function premintBoardWhere() {
          and coalesce(s.camera_policy, d.camera_policy, c.camera_policy) <> 'off'
          and f.status in ${sql(PLAYABLE_STATUSES as string[])}
          and not (coalesce(f.ext_key ~ ${SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN}, false) and f.home_entrant_id is null and f.away_entrant_id is null)
-         and not exists (select 1 from stage_round_opens po where po.stage_id = f.stage_id and po.round_no = f.round_no)`;
+         and not exists (select 1 from stage_round_opens po where po.stage_id = f.stage_id and po.round_no = f.round_no)
+         and exists (select 1 from division_online_packages op
+                      where op.division_id = d.id and op.refunded_at is null and (op.paid_at is not null or op.frozen_at is not null))`;
 }
 
 /**

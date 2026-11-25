@@ -94,7 +94,7 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   ],
   "competition-schedule-apply.ts#applyCompetitionSchedule": [SWEEP, '"competition-schedule-apply.ts#applyCompetitionSchedule"'],
   "competitions.ts#patchCompetition": [SWEEP, '"competitions.ts#patchCompetition"'],
-  "divisions.ts#createDivision": [SWEEP, '"divisions.ts#createDivision"'],
+  "divisions/create.ts#createDivision": [SWEEP, '"divisions/create.ts#createDivision"'],
   "entrants.ts#createEntrants": [SWEEP, '"entrants.ts#createEntrants"'],
   "event-import.ts#runImport": [
     "server/usecases/__tests__/event-import-freeze.test.ts",
@@ -113,6 +113,12 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   "match-day-call.ts#callFixtureAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
   "match-day-call.ts#previewCallAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
   "match-day-call.ts#undoCallAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
+  // Online Chess Task 5: a package payment or upgrade CHARGES credits, so a frozen competition refuses it; a move down returns credits
+  // and is never refused by the freeze (the guard sits in `beforeCharge`, which runs only when the quote owes credits).
+  "online-package/pay.ts#payOnlinePackage": [
+    "server/usecases/online-package/__tests__/pay.test.ts",
+    "pay is refused on a billing-frozen competition; move down still works",
+  ],
   "registration-approval.ts#approveRegistration": [REGISTRATIONS, REG_SWEEP],
   "registration-approval.ts#promoteFromWaitlist": [REGISTRATIONS, "refuses promote on a frozen competition"],
   "registration-approval.ts#rejectRegistration": [REGISTRATIONS, "refuses reject on a frozen competition"],

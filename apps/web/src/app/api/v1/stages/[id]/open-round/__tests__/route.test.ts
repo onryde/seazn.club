@@ -51,7 +51,9 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { POST as openRoute } from "@/app/api/v1/stages/[id]/open-round/route";
 import { POST as resendRoute } from "@/app/api/v1/fixtures/[id]/external-play/resend/route";
-import { seedOnlineChessRound, seedOwner } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedOnlineChessRound, seedOnlineSwiss, seedOwner } from "@/server/usecases/__tests__/_external-play-seed";
+import { onlinePackageQuote } from "@/server/usecases/online-package";
+import { OpenRoundResult as OpenRoundResultSchema } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -103,7 +105,7 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round", () => {
     authState.userId = r.ownerUserId;
     const res = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(res.body.data).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(await stamps(r.stageId)).toHaveLength(1);
     expect(mail.sent).toHaveLength(2);
   });
@@ -188,6 +190,68 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round", () => {
   });
 });
 
+// Online Chess credits Task 9 (spec 2026-11-23-online-chess-credits-design.md §7.6): the route carries the 402 ONLINE_CHESS_UNPAID body
+// (the quote) to the receipt, and the receipt's confirmed `pay` back to the usecase - the seam itself, driven over HTTP. The gate's own
+// behaviour is open-round-package-gate.test.ts's.
+describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round - the first open needs a paid package, and `pay` rides the body", () => {
+  const packageOf = async (divisionId: string) =>
+    (await sql<{ paid: boolean; frozen: boolean; credits: number }[]>`
+      select paid_at is not null as paid, frozen_at is not null as frozen, credits_paid as credits
+        from division_online_packages where division_id = ${divisionId} and refunded_at is null`)[0]!;
+
+  it("unpaid and NOBODY has linked Lichess: the 402 over HTTP carries `invitable: 0` (the receipt's warning), and 0 is on the wire as a number, not left out", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    const gone = await sql`delete from user_external_accounts where provider = 'lichess' and user_id = any(${s.players.map((p) => p.userId)}::uuid[]) returning user_id`;
+    expect(gone.length, "premise: every player's link was there to remove").toBe(4);
+    authState.userId = s.ownerUserId;
+    const refused = await read(await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1 }), ctx(s.stageId)));
+    expect(refused.status).toBe(402);
+    const error = refused.body.error as unknown as { code: string; invitable?: unknown };
+    expect([error.code, error.invitable]).toEqual(["ONLINE_CHESS_UNPAID", 0]);
+  });
+
+  it("unpaid: 402 with the quote in the body; the same press with the quote's `pay` opens it, paid and frozen", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    authState.userId = s.ownerUserId;
+    const refused = await read(await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1 }), ctx(s.stageId)));
+    expect(refused.status).toBe(402);
+    const error = refused.body.error as unknown as { code: string; quote: { size: number; owed: number; covers: boolean }; next: unknown; invitable: number };
+    expect([error.code, error.quote.size, error.quote.covers, error.next]).toEqual(["ONLINE_CHESS_UNPAID", 16, false, null]);
+    expect(error.invitable, "4 linked players seat 2 boards: the receipt's count of boards the press would invite (fix round 1, ruling 3)").toBe(2);
+    // The receipt's own read agrees with what the 402 carried (one quote, one answer).
+    expect(error.quote.owed).toBe((await onlinePackageQuote(s.owner, s.divisionId, 16)).owed);
+    expect(await stamps(s.stageId), "no stamp").toHaveLength(0);
+    expect(mail.sent, "nobody mailed").toHaveLength(0);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: false, frozen: false, credits: 0 });
+
+    const paid = await read(await openRoute(
+      post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay: { size: 16, expectedOwed: error.quote.owed } }), ctx(s.stageId),
+    ));
+    expect([paid.status, (paid.body.data as { opened: boolean }).opened]).toEqual([200, true]);
+    // The receipt rides the answer (review m1), in the shape the OpenAPI schema declares: parsing it through the schema keeps it whole.
+    const payment = (paid.body.data as { payment: unknown }).payment;
+    expect(payment).toEqual({ applied: true, credits: error.quote.owed, size: 16, capacityLoweredTo: null });
+    expect(OpenRoundResultSchema.parse(paid.body.data), "the schema declares every field the route sends").toEqual(paid.body.data);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: true, frozen: true, credits: error.quote.owed });
+    expect(await stamps(s.stageId)).toHaveLength(1);
+  });
+
+  it("a malformed `pay` is refused before anything is written (the pay door's strict body)", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    authState.userId = s.ownerUserId;
+    let checked = 0;
+    for (const pay of [{ size: 48, expectedOwed: 1 }, { size: 16 }, { size: 16, expectedOwed: 1.5 }, { size: 16, expectedOwed: 1, addCameras: true }, { size: 16, expectedOwed: 1, cameras: "yes" }]) {
+      const res = await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay }), ctx(s.stageId));
+      expect(res.status, JSON.stringify(pay)).toBe(400);
+      checked++;
+    }
+    // Task 15: `cameras` is the receipt's answer now, a boolean; the retired `addCameras` and a non-boolean answer are the strict body's 400.
+    expect(checked).toBe(5);
+    expect(await stamps(s.stageId)).toHaveLength(0);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: false, frozen: false, credits: 0 });
+  });
+});
+
 describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/resend", () => {
   it("resolves: the organiser re-sends after the open; a viewer is refused", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
@@ -220,7 +284,7 @@ describe.skipIf(!HAS_DB)("Match Day O4 - a billing-frozen competition: the START
     expect(mail.sent, "nobody mailed").toHaveLength(0);
     await setLimit(r.orgId, 50);
     const lifted = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
-    expect([lifted.status, lifted.body.data], "the same round, the freeze lifted").toEqual([200, { opened: true, invited: 2, retrying: 0, skipped: [] }]);
+    expect([lifted.status, lifted.body.data], "the same round, the freeze lifted").toEqual([200, { opened: true, invited: 2, retrying: 0, skipped: [], payment: null }]);
     expect(await stamps(r.stageId)).toHaveLength(1);
   });
 

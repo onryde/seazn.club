@@ -42,6 +42,9 @@ export const STREAM_HISTORY_KINDS = [
   "packRefund",      // revoke, no author — a bought pack was refunded on the card (or lost in a dispute) and its credits taken back
   "staffAdjust",     // grant / revoke by Seazn support
   "expired",         // expire — last month's unused free credits
+  "onlinePackagePaid",     // consume naming a package, the one that FIRST paid it — an Online Chess division's size, in Seazn credits
+  "onlinePackageResized",  // consume naming a package after its first payment (an upgrade, added cameras), or a refund of part of it (a move down)
+  "onlinePackageRefunded", // refund naming a package that is now refunded in full — the division was deleted, or its package refunded
   "other",
 ] as const;
 export type StreamHistoryKind = (typeof STREAM_HISTORY_KINDS)[number];
@@ -59,6 +62,19 @@ export interface HistoryClassifyInput {
   byStaff: boolean;
   sessionId: string | null;
   idempotencyKey: string | null;
+  /** The `online_package_id` the row names (V561): an Online Chess package's debit or return. Only the presence leaves SQL. */
+  packageId: string | null;
+  /** The package row it names was found AND belongs to the ledger row's own org (V560 does not make them the same org). A row naming a
+   *  package that did not resolve is not shown as a division's: it is `other`, reported. */
+  packageFound: boolean;
+  /** SQL-derived, meaningful for a package row: this row was written by the package's FIRST payment (`c.created_at = p.paid_at`:
+   *  both are the payment transaction's own `now()`). */
+  packageFirstPayment: boolean;
+  /** SQL-derived, meaningful for a package row: this row is part of the package's FULL refund (`c.created_at = p.refunded_at`,
+   *  stamped in the refunding transaction). A move down leaves `refunded_at` null. */
+  packageFullRefund: boolean;
+  /** `stripe_payment_intent_id is not null` — the row names a payment. Only the boolean leaves SQL. */
+  hasPaymentIntent: boolean;
 }
 
 /**
@@ -75,6 +91,12 @@ export interface HistoryClassifyInput {
  *             recordStreamPackRefund key stream_pack_refund:* → packRefund
  *   refund    staffRow('refund')  created_by set   → refundStaff
  *             refundConsumeForSession (session, no author) → refundNoCamera
+ * and the Online Chess package writer (online-package/ledger.ts, spec 2026-11-23 §8.8):
+ *   consume   debitForPackage, first payment            → onlinePackagePaid
+ *             debitForPackage, any later payment        → onlinePackageResized
+ *   refund    refundForPackage, the full refund         → onlinePackageRefunded
+ *             refundForPackage, a move down             → onlinePackageResized
+ *   revoke    revokeForReversal (the settle of a reversed pack: no author, no key, the payment intent) → packRefund
  * `refundNoCamera` is read off a SHAPE (a refund, no author, a session), not off anything the writer stamps — so it is
  * only honest while `refundConsumeForSession` is the one thing that writes that shape, and it is pinned there:
  * stream-credit-ledger-writers.test.ts holds (a) the nine insert sites in stream-credits.ts to a registry, (b) the
@@ -87,6 +109,10 @@ export function streamHistoryKind(row: HistoryClassifyInput): StreamHistoryKind 
     case "purchase":
       return "packPurchase";
     case "consume":
+      if (row.packageId !== null) {
+        if (!row.packageFound) return "other";
+        return row.packageFirstPayment ? "onlinePackagePaid" : "onlinePackageResized";
+      }
       return "streamUsed";
     case "expire":
       return "expired";
@@ -98,9 +124,16 @@ export function streamHistoryKind(row: HistoryClassifyInput): StreamHistoryKind 
     case "revoke":
       if (row.byStaff) return "staffAdjust";
       if (row.idempotencyKey?.startsWith(CLAWBACK_KEY_PREFIX)) return "packRefund";
+      // The settle step's claw-back (online-package/settle.ts): the rest of a reversed pack, taken once a package returned its credits.
+      // No author and no key — the payment intent is what it carries, and the claw-back above carries one too.
+      if (row.idempotencyKey === null && row.hasPaymentIntent) return "packRefund";
       return "other";
     case "refund":
       if (row.byStaff) return "refundStaff";
+      if (row.packageId !== null) {
+        if (!row.packageFound) return "other";
+        return row.packageFullRefund ? "onlinePackageRefunded" : "onlinePackageResized";
+      }
       if (row.sessionId) return "refundNoCamera";
       return "other";
     default:
@@ -118,6 +151,16 @@ export interface StreamHistoryFixture {
   href: string;
 }
 
+/** The Online Chess package a row moved for: the division as the organiser knows it (its live name, else the name the package
+ *  kept when the division was deleted), the size the package had AT THE TIME OF THE ROW (V561 `package_size`, written at insert by
+ *  the package writer, on every package row), and the competition when the division
+ *  still exists. The UI formats the label — the words around the names are dictionary copy. */
+export interface StreamHistoryPackage {
+  divisionName: string;
+  size: number;
+  competitionName: string | null;
+}
+
 export interface StreamHistoryRow {
   id: string;
   /** ISO-8601, UTC. */
@@ -128,6 +171,8 @@ export interface StreamHistoryRow {
   /** The row's own snapshot of the org total after it — shown as a column, never read as the balance. */
   balanceAfter: number;
   fixture: StreamHistoryFixture | null;
+  /** Set on an Online Chess package's rows (the three `onlinePackage*` kinds), null on every other. */
+  onlinePackage: StreamHistoryPackage | null;
 }
 
 export interface StreamHistoryPage {
@@ -221,15 +266,25 @@ interface HistoryDbRow {
   fixture_no: number | null;
   home_name: string | null;
   away_name: string | null;
+  ledger_package_id: string | null;
+  package_id: string | null;
+  package_first_payment: boolean;
+  package_full_refund: boolean;
+  has_payment_intent: boolean;
+  package_division_name: string | null;
+  package_size: number | null;
+  package_comp_name: string | null;
 }
 
 /**
  * One page of `orgId`'s match-credit history, newest first. `limit` defaults to 25 and is 1..1000; `cursor` is a
  * previous page's `nextCursor`.
  *
- * Tenancy is the WHERE clause plus two join guards: the ledger row's org, and — for the match link — that the
- * session and the competition behind it belong to that SAME org. The ledger has no foreign key from a row to its
- * org's session, so the join is where a corrupt row would otherwise name another club's match.
+ * Tenancy is the WHERE clause plus join guards: the ledger row's org, and — for the match link — that the
+ * session and the competition behind it belong to that SAME org; for an Online Chess package row, that the package and
+ * its division's competition do. The ledger's `online_package_id` is a plain foreign key to a table whose own `org_id` may
+ * differ from the ledger row's (V560 only checks the package's), so the join is where a corrupt row would otherwise name
+ * another club's division.
  */
 export async function listStreamCreditHistory(
   auth: AuthCtx,
@@ -252,7 +307,11 @@ export async function listStreamCreditHistory(
            (c.created_by is not null) as by_staff, c.session_id, c.idempotency_key,
            o.slug as org_slug,
            comp.slug as comp_slug, comp.name as comp_name, d.slug as div_slug, f.fixture_no,
-           h.display_name as home_name, a.display_name as away_name
+           h.display_name as home_name, a.display_name as away_name,
+           c.online_package_id as ledger_package_id, p.id as package_id, (c.created_at = p.paid_at) as package_first_payment,
+           (p.refunded_at is not null and c.created_at = p.refunded_at) as package_full_refund,
+           (c.stripe_payment_intent_id is not null) as has_payment_intent,
+           coalesce(pd.name, p.division_name) as package_division_name, case when p.id is not null then c.package_size end as package_size, pcomp.name as package_comp_name
       from org_stream_credits c
       join organizations o on o.id = c.org_id
       left join fixture_stream_sessions s on s.id = c.session_id and s.org_id = c.org_id
@@ -261,6 +320,9 @@ export async function listStreamCreditHistory(
       left join competitions comp on comp.id = d.competition_id and comp.org_id = c.org_id
       left join entrants h on h.id = f.home_entrant_id
       left join entrants a on a.id = f.away_entrant_id
+      left join division_online_packages p on p.id = c.online_package_id and p.org_id = c.org_id
+      left join divisions pd on pd.id = p.division_id
+      left join competitions pcomp on pcomp.id = pd.competition_id and pcomp.org_id = c.org_id
      where c.org_id = ${orgId}
        ${cursor ? sql`and (c.created_at, (c.reason <> 'expire'), c.id) < (${cursor.at}::text::timestamptz, ${cursor.notExpiry}::boolean, ${cursor.id}::uuid)` : sql``}
      order by c.created_at desc, (c.reason <> 'expire') desc, c.id desc
@@ -270,8 +332,12 @@ export async function listStreamCreditHistory(
   const page = hasMore ? rows.slice(0, limit) : rows;
   const unmapped: HistoryDbRow[] = [];
   const mapped = page.map((r): StreamHistoryRow => {
+    // A package id the join could not resolve (a package of another org, or none: a corrupt row) is `other`, reported — never a
+    // division's row.
     const kind = streamHistoryKind({
       reason: r.reason, bucket: r.bucket, byStaff: r.by_staff, sessionId: r.session_id, idempotencyKey: r.idempotency_key,
+      packageId: r.ledger_package_id, packageFound: r.package_id !== null, packageFirstPayment: r.package_first_payment,
+      packageFullRefund: r.package_full_refund, hasPaymentIntent: r.has_payment_intent,
     });
     if (kind === "other") unmapped.push(r);
     const fixture: StreamHistoryFixture | null =
@@ -281,7 +347,11 @@ export async function listStreamCreditHistory(
             href: routes.fixture(r.org_slug, r.comp_slug, r.div_slug, r.fixture_no),
           }
         : null;
-    return { id: r.id, dateIso: new Date(r.created_at).toISOString(), kind, delta: r.delta, balanceAfter: r.balance_after, fixture };
+    const onlinePackage: StreamHistoryPackage | null =
+      r.package_id !== null && r.package_division_name !== null && r.package_size !== null
+        ? { divisionName: r.package_division_name, size: r.package_size, competitionName: r.package_comp_name }
+        : null;
+    return { id: r.id, dateIso: new Date(r.created_at).toISOString(), kind, delta: r.delta, balanceAfter: r.balance_after, fixture, onlinePackage };
   });
   if (unmapped.length > 0) {
     // A row the classifier has no branch for: shown under the neutral label, never under a real one, and reported — a new

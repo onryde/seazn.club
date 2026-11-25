@@ -6,12 +6,21 @@
 //   R3 org scope      drop `where c.org_id = ${orgId}`                                 → "only THIS org"
 //   R4 order          `c.created_at desc` → `c.created_at asc`                         → "the newest … rows"
 //   R6 limit          drop `limit ${STREAM_CREDIT_LEDGER_LIMIT}`                        → "the newest … rows"
+//   R7 package join   drop `and p.org_id = c.org_id` from the package join                → "an Online Chess package row names its package and division — a package of another org names none"
+//   R8 package field  drop `online_package_id` / `division_name` from the mapped row      → same test
+//   R10 size          `c.package_size` → `p.size`                                          → same test (the upgrade row says 32)
+//   R13 live name     `coalesce(pd.name, p.division_name)` → `p.division_name`              → same test (the renamed division's rows read the new name)
+//   R14 snapshot first `coalesce(p.division_name, pd.name)` (snapshot over the live name)     → same test
+//   R15 live only     `pd.name` alone (a deleted division loses its name)                    → same test (the rows after the delete)
+//   R11 size gate     `case when p.id is not null then c.package_size end` → `c.package_size` → same test (the crossed row's size reads null)
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { STAFF_CREDIT_MAX } from "@/server/usecases/stream-credits";
+import { deleteDivision } from "@/server/usecases/divisions";
+import { ocCompetition, ocDivision, ocOrg, pay } from "@/server/usecases/online-package/__tests__/_oc-rig";
 import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "../admin-stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -59,11 +68,11 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const read = await streamCreditsForOrg(orgId);
     expect(read.balance).toBe(6);
     expect(read.rows).toEqual([
-      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null,
+      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
-      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
     ]);
   });
 
@@ -114,5 +123,52 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const src = await readFile(new URL("../admin-stream-credits.ts", import.meta.url), "utf8");
     expect(src).toMatch(/export\s*\{\s*STAFF_CREDIT_MAX as STREAM_CREDIT_ADJUST_MAX\s*\}\s*from\s*"@\/server\/usecases\/stream-credits"/);
     expect(src, "the ceiling must be re-exported, never redeclared").not.toMatch(/const\s+STREAM_CREDIT_ADJUST_MAX/);
+  });
+  it("an Online Chess package row names its package and division — the name snapshot outlives the division, and a package of ANOTHER org names none (R7, R8)", async () => {
+    const o = await ocOrg();
+    const compId = await ocCompetition(o);
+    const d = await ocDivision(o, compId, { name: "Staff Look Open" });
+    await pay(o, d.id, 16);
+    await pay(o, d.id, 32);   // an upgrade: the package is at 32 now, and the first row was written at 16
+    const [pkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${d.id}`;
+    let read = await streamCreditsForOrg(o.orgId);
+    const paid = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(paid.length, "anti-vacuity: the payments wrote package rows").toBe(2);
+    for (const r of paid) expect([r.reason, r.divisionName, r.sessionId]).toEqual(["consume", "Staff Look Open", null]);
+    // I1: each row's own size (typed from the story), never the package's size now
+    expect(paid.map((r) => r.packageSize).sort((x, y) => x! - y!), "the sizes the rows were written at: 16, then 32").toEqual([16, 32]);
+    // M3: the division is renamed — the staff ledger reads it under its new name, like the org history (the snapshot is the fallback only)
+    await sql`update divisions set name = 'Staff Look Renamed' where id = ${d.id}`;
+    read = await streamCreditsForOrg(o.orgId);
+    const renamed = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(renamed.length, "anti-vacuity: the same two package rows").toBe(2);
+    for (const r of renamed) expect(r.divisionName, `${r.reason} after the rename`).toBe("Staff Look Renamed");
+    // the division is deleted (the full return): the rows keep the name the package snapshotted (when it was paid, before the rename)
+    await deleteDivision(o.auth, d.id);
+    read = await streamCreditsForOrg(o.orgId);
+    const all = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(all.map((r) => r.reason).sort(), "two debits and the return").toEqual(["consume", "consume", "refund"]);
+    for (const r of all) expect(r.divisionName, `${r.reason} after the delete`).toBe("Staff Look Open");
+    expect(all.find((r) => r.reason === "refund")!.packageSize, "the refund gives back the package as it stood: 32").toBe(32);
+
+    // a ledger row of org A that names org B's package (V560 does not forbid it): staff see the id to chase, never B's division name
+    const other = await ocOrg();
+    const otherComp = await ocCompetition(other);
+    const od = await ocDivision(other, otherComp, { name: "Somebody Else Open" });
+    await pay(other, od.id, 16);
+    const [foreign] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${od.id}`;
+    // each row reads the size it was written at, never the package's size now (V561: every package row carries one)
+    await pay(other, od.id, 64);   // the other org's package is at 64 now
+    const sizes = (await streamCreditsForOrg(other.orgId)).rows.filter((r) => r.onlinePackageId === foreign!.id).map((r) => r.packageSize).sort((x, y) => x! - y!);
+    expect(sizes, "the 16 it was paid at and the 64 it moved up to").toEqual([16, 64]);
+    // the crossed row carries a size of its own (V561's CHECK asks one of every package row); the reader still prints none
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${o.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, 16, 0)`;
+    read = await streamCreditsForOrg(o.orgId);
+    const crossed = read.rows.find((r) => r.onlinePackageId === foreign!.id);
+    expect(crossed, "the crossed row is listed").toBeDefined();
+    expect(crossed!.divisionName, "another org's division name is never read").toBeNull();
+    expect(crossed!.packageSize, "…nor its size").toBeNull();
   });
 });

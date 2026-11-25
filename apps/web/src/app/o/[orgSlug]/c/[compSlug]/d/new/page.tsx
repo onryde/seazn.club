@@ -13,7 +13,9 @@ import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
 import { withTenant } from "@/lib/db";
-import { competitionIsEnded, hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { competitionIsEnded, getLimit, hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { log } from "@/server/logger";
+import { projectedStreamCreditsTotal } from "@/server/usecases/stream-credits-tab";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
 import { DivisionBuilder } from "@/components/v2/division-builder";
@@ -63,6 +65,22 @@ export default async function NewDivisionPage({
   // m6 (C9 fix round 1): the competition's camera policy, named under the builder's camera select - read only where the
   // select is offered (online chess), as the division page reads it only for a chess division.
   const inheritedCameraPolicy = onlineChess ? await competitionCameraPolicy(id) : "off";
+  // Online Chess credits (spec 2026-11-23 §8.1): what the builder's "Players, up to" select is drawn from - the plan's per-division cap
+  // (which sizes this club may pick) and the credits the club holds, as the Settings rail would show them (the projected total).
+  // Nothing is spent in the builder; the line only says what the package will cost. A read that throws is logged and the select is
+  // not drawn (Create still sends the size that covers the drafted rounds), never a 500 over a courtesy.
+  let onlinePackage: { planCap: number | null; balance: number; buyMoreHref: string } | undefined;
+  if (onlineChess) {
+    try {
+      const [planCap, balance] = await Promise.all([
+        getLimit(auth.orgId, "entrants.per_division.max", id),
+        projectedStreamCreditsTotal(auth.orgId),
+      ]);
+      onlinePackage = { planCap, balance, buyMoreHref: routes.creditsStream(orgSlug) };
+    } catch (err) {
+      log.error({ err, competitionId: id }, "online chess package: reading the plan cap and balance failed; the builder renders without the size select");
+    }
+  }
   const locale = await resolveLocale();
   const [uiDict, publicDict] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
   // `templateLocks` above: template → the feature it needs and this organisation lacks (format-gates.ts templateLocksForOrg).
@@ -116,6 +134,7 @@ export default async function NewDivisionPage({
           viewerPlan={viewerPlan}
           onlineChessOffered={onlineChess}
           inheritedCameraPolicy={inheritedCameraPolicy}
+          onlinePackage={onlinePackage}
           ruleDict={rulesLineDict(publicDict)}
           pointsDict={pointsLineDict(publicDict)}
           templateLocks={templateLocks}

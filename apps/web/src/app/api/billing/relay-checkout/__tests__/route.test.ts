@@ -37,7 +37,7 @@
 //                           → "from Settings → Credits the checkout returns to the Streaming side…"
 //   RT11 drift refusal       the `instanceof StreamPackPriceDriftError` branch deleted (parked c)
 //                           → "the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report…"
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
@@ -124,6 +124,17 @@ async function deny(orgId: string): Promise<void> {
     insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
     values (${orgId}, 'streaming.relay', false, 'task-14b route test: staff switch-off')`;
 }
+
+// Task 10 (spec 2026-11-23 §7.6): a streaming refusal is no longer final — it stands only when Online Chess is NOT offered to the
+// org. The vitest environment forces the flag ON for everyone (`ONLINE_CHESS_ALWAYS=1`, vitest.config.ts), which would turn every
+// refusal below into a sale, so this file runs with it off (PostHog is unconfigured here, so the answer is the fallback: false).
+// The other half — the same refusals admitted when it is on — is route-online-chess.test.ts.
+beforeEach(() => {
+  vi.stubEnv("ONLINE_CHESS_ALWAYS", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
   it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture's own page — for a community org entitled by its PLAN alone (V426: no override row)", async () => {
@@ -347,6 +358,7 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     try {
       for (const c of cases) {
         vi.unstubAllEnvs();
+        vi.stubEnv("ONLINE_CHESS_ALWAYS", "");   // unstubAll took the file-level one with it: the 503 below is final only with chess off
         vi.stubEnv("RELAY_DRIVERS", "live");
         vi.stubEnv("ENV_NAME", "prod");
         vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", c.CLOUDFLARE_ACCOUNT_ID);

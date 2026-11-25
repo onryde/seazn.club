@@ -555,7 +555,7 @@ export function packLineupPair(stream: PackStream): LineupPair {
 
 /**
  * The cfg one division folds under, built exactly as `createDivision` builds
- * it (`usecases/divisions.ts:237-254`): the named variant PRESET, then the
+ * it (`usecases/divisions/create.ts:118-137`): the named variant PRESET, then the
  * pack's overrides spread over it, then the module's own `configSchema`. A
  * variant is a cfg preset, never a module selector.
  *

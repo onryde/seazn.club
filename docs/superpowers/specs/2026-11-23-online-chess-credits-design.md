@@ -100,7 +100,7 @@ P2, P6, P7, P9 and P11 are now owner decisions (decisions 10, 13 and 14) and kee
 | P16 | The stage kinds an online division may hold are `swiss`, `knockout`, `double_elim`, `page_playoff` and `stepladder`. Refused: `league`, `group`, `ladder` (`americano` is already refused for chess). | My call | Decision 9 names Swiss and knockout "including play-offs". Double elimination is a knockout; a ladder is open-ended and has no size. |
 | P17 | A plan cap that is not a ladder value (a size pack's 96) may choose the smallest size at or above it. min(plan cap, size, 256) still limits the seats. | My call (from review) | Otherwise a club allowed 96 could only buy 64. |
 | P18 | Moving up a size promotes the waitlist into the new room, by the same automatic promotion a freed place triggers. | My call (from review) | An organiser who pays for 64 must not still have 20 people waiting. |
-| P19 | Cameras turned OFF after the camera price was paid, before round 1: no partial refund, and they can be turned on again at no charge. A move down in size is priced at the camera rate on both sides when cameras are paid. | My call; stands | Decision 16 rules on size. Returning the camera half as well would need a way to un-pay cameras while the policy can still flip back, for a small sum. The full refund of decision 14 remains the way out. |
+| P19 | Cameras turned OFF in Division settings after the camera price was paid, before round 1: no partial refund, and they can be turned on again at no charge. A move down in size with no camera answer is priced at the camera rate on both sides when cameras are paid. **Amended 2026-11-25 (owner, Task 15):** the receipt's "Fair-play camera: Yes / No" is the door that un-pays the camera. No on a package paid with it, before round 1, is a move down at the same size: the camera price comes back under P21, and the answer is written to the division's setting in the same transaction (§7.4, §8.4). The settings door keeps the rule above. **Fix I2 (controller, 2026-11-25):** every receipt opens at the division's setting, so after a settings Off over a paid camera the receipt opens at No and confirming it returns the camera price; Yes at the paid size moves no credits and writes Required back ("Turn camera on", fix round 3). A request with no camera answer is priced at the setting too, so the sentence on a move down with no answer holds while the setting is on. | My call; amended by the owner | Decision 16 rules on size. The receipt's answer is the way to un-pay cameras: it writes the setting with the money, so the policy cannot flip back for free afterwards (back on is a Yes, which charges). The full refund of decision 14 remains the way out. |
 | P20 | An unpaid online division can be Started and scored by hand; only opening an online round needs payment. | My call (from review) | It costs Seazn nothing (no invites, no games, no cameras), and scoring is free. |
 | P21 | On a move down, bought credits are returned first, then included credits spent in the current month. Included credits from an earlier month are the last to be counted, and return nothing. | My call | Decision 16 fixes WHICH credits can return, not the order when a package was paid from both. This order returns the most the rule allows. |
 
@@ -313,8 +313,8 @@ So:
 
 | Write | Where it runs |
 |---|---|
-| Pay, upgrade | Its own usecase on the privileged `sql.begin`, as every ledger writer does. Never inside `withTenant`. |
-| Pay and open round 1 | Inside `openRound`'s existing privileged transaction (§7.6). |
+| Pay, upgrade | Its own usecase on the privileged `sql.begin`, as every ledger writer does. Never inside `withTenant`. Locks, in order: `division:`, the org money lock, the package row `for update`, then - when the camera answer writes the setting (Task 15) - the division row `for no key update` (the tail). |
+| Pay and open the round | Inside `openRound`'s existing privileged transaction (§7.6). Locks, in order: `division:`, the bridge rows it reads and holds, the org money lock, the package row `for update`, the division row `for no key update` (the tail); the invites' bridge rows are written after those, still under `division:` (every other taker of the money lock that reaches them - a delete's cascade - holds `division:` first). |
 | Choose or change an unpaid size; delete an unpaid row | The division save's `privilegedEpilogue`. The checks run in the tenant callback, under the division lock the prelude took. |
 | Refund on division delete, competition delete, online switched off | The same transaction's `privilegedEpilogue`, so the refund commits or rolls back with the delete. The prelude reads and locks first (below). |
 
@@ -328,7 +328,7 @@ Two consequences, both intended:
 
 ### 7.4 Writers and reads
 
-The two that move money take the `division:` lock, then the org money lock, in that order. The monthly rollover runs under the money lock before the balance is read, as `consumeForSession` does (`stream-credits.ts:211-221`). The plan cap and the monthly rate are read before the transaction; the rate comes from `streamMonthlyRate` (`stream-credits.ts:844`), which reads the plan and does not depend on streaming being offered.
+The two that move money take the `division:` lock, then the org money lock, then the package row, in that order; a payment whose camera answer writes the setting takes the division row last (`for no key update`, §7.3). The monthly rollover runs under the money lock before the balance is read, as `consumeForSession` does (`stream-credits.ts:211-221`). The plan cap and the monthly rate are read before the transaction; the rate comes from `streamMonthlyRate` (`stream-credits.ts:844`), which reads the plan and does not depend on streaming being offered.
 
 1. **The quote, `onlinePackageQuote(division, size)`.** A read. The SERVER derives everything except the size:
    - cameras, from the effective policy of the division's stages (P9);
@@ -344,15 +344,15 @@ The two that move money take the `division:` lock, then the org money lock, in t
    - After a move UP commits, the waitlist is promoted into the new room (P18).
 3. **`payOnlinePackage(division, size, expectedOwed)`**: first payment, upgrade, and move down (decision 16).
    - The request carries the size and the total the organiser confirmed. It carries no rounds, and no way to ask for a LOWER price than the policy needs.
-   - It may carry one intent, `addCameras: true`: "charge the camera price even though the policy is still off". The server's camera figure is then (derived from the policy) OR (`addCameras`) OR (`cameras_paid` already true). This only ever raises the price, so the server still never trusts the client downward. It exists because a paid package cannot otherwise gain cameras: the policy save is refused until cameras are paid (§7.6), and without the intent nothing would be owed until the policy is on. After it is paid, `cameras_paid` is true and the policy save goes through free (P19).
+   - It carries the receipt's Fair-play camera answer, `cameras: true | false` (Task 15, owner 2026-11-25; it replaced the raise-only `addCameras` intent). The server's camera figure is the answer; with no answer (an API caller), it is the division's camera SETTING as it stands (derived from the policy, P9) - never `cameras_paid` (Task 15 fix I2). The answer can lower the price, and that is safe because the server does not trust it as a price: it WRITES it. Paying writes the answer to the division's own camera policy (`writeDivisionCameraChoice`, `server/usecases/division-camera-policy.ts`) in the payment's transaction, under the division save's own gate and audit row: Yes writes `required` when the division is effectively off (a division already on keeps its setting), No writes `off`; nothing is written when the division already says the answer. After the write the server asks the division back and refuses a mismatch (500 `online_package_camera_not_written`). An answer a stage's own policy contradicts is refused 409 `online_camera_set_by_stage` (no door writes a stage policy today). So a payment always leaves the setting saying what it paid for, and the policy save of §7.6 is free after a Yes. The two can differ afterwards, by one door only: Division settings may turn the camera off over a paid camera (free, nothing returned, P19). Every receipt then opens at that setting, No, and quotes against what was paid (R6): No at the paid size is the camera refund; Yes at the paid size owes 0 and writes Required back (fix round 3: the row is at the target, so no money moves and `applied` is false, but the answer the setting does not say is written on the locks the payment already holds, the division row last, and returned as `cameraPolicy`; a refused quote, a frozen package included, writes nothing). The receipt writer writes only before any round has opened: asserted, a named 500 `online_package_camera_after_open` (fix m1), never the settings door's 409 `POLICY_LOCKED`, which no product state reaches through it.
    - Under the locks the server recomputes the quote. If its owed figure differs from `expectedOwed`, it answers **409 `ONLINE_QUOTE_CHANGED`** with the fresh quote and writes nothing. The receipt redraws and the organiser confirms again.
    - Refused: frozen; size below the places held; size not allowed by the plan; counted rounds above the size's included rounds. A smaller size on a paid row is NOT refused: it is the move down, below.
    - Short balance: **402 `ONLINE_CHESS_NO_CREDITS`**, carrying `owed` and `balance`. Not `no_credits`: that code carries `featureKey: "streaming.relay"` and the stream UI keys on it (`stream-credits.ts:52-56`).
    - Owed 0 with the row already at the target writes nothing and answers `applied: false`. This is the idempotency rule: exactly-once by state under the locks, not by a key.
    - The debit takes `monthly` first, then `pack`. A debit spanning both writes two rows, one per bucket.
-   - Sets `cameras_paid` to the derived value (true is never lowered: P19), `paid_at`, `paid_by`.
+   - Sets `cameras_paid` to the quote's camera figure (the answer; with none, the division's setting as it stands, fix I2), `paid_at`, `paid_by`. The answer is the receipt's result field `cameraPolicy` (`{from, to}` or null).
    - After an upgrade commits, the waitlist is promoted (P18).
-   - **Move down** (owed negative, row paid, not frozen). `expectedOwed` is the negative figure the receipt showed, and the same 409 applies if it has moved. The server returns D = −owed credits' worth of value, in P21's order: bought credits first (always return), then included credits debited in the current UTC month (return), then included credits from an earlier month (forfeited: counted, nothing written). It writes `refund` rows to the bucket each credit came from, adds to `credits_refunded` and `credits_forfeited`, lowers `size`, lowers a stored registration capacity that is above the new size, and runs the settle step (§7.5). `cameras_paid` does not change (P19). The row stays live.
+   - **Move down** (owed negative, row paid, not frozen). `expectedOwed` is the negative figure the receipt showed, and the same 409 applies if it has moved. The server returns D = −owed credits' worth of value, in P21's order: bought credits first (always return), then included credits debited in the current UTC month (return), then included credits from an earlier month (forfeited: counted, nothing written). It writes `refund` rows to the bucket each credit came from, adds to `credits_refunded` and `credits_forfeited`, lowers `size`, lowers a stored registration capacity that is above the new size, and runs the settle step (§7.5). `cameras_paid` does not change (P19) unless the answer is No: then it becomes false and the camera price is part of D. A size change and a camera change in one receipt are ONE payment, one net figure, one ledger row per bucket. The row stays live.
    - What can still return is read from the package's own ledger rows: bought = pack consumes − pack refunds; included this month = monthly consumes dated this month − monthly refunds dated this month.
 4. **`refundOnlinePackage(package)`**: the full refund of decision 14; only a paid, unfrozen, unrefunded row. It returns whatever a move down has not already returned.
    - Returns each `pack` consume in full.
@@ -394,9 +394,9 @@ Not verified: how the webhook caller treats a PARTIAL card refund. The writer is
 | Online switch, off→lichess (`divisions.ts:1268-1280`) and create (`divisions.ts:346`) | flag, cap, time control | Also takes a size and writes the unpaid row (epilogue, §7.3). A request with no size gets P14's default. No payment is asked. lichess→off before the freeze: refund a paid row, delete an unpaid one. |
 | Swiss Generate and rounds save, while `frozen_at` is null | hard maximum | Also refused when the counted rounds exceed the size's included rounds: 422 `ONLINE_ROUNDS_NEED_SIZE`, carrying `nextSize`; above 10, `ONLINE_ROUNDS_ABOVE_MAX` (P10). While unpaid, the strip's size select simply moves up. |
 | Format (decision 9): the online switch and create, AND every door that adds or changes a stage on an online division | chess refuses pair-minting kinds only (`lib/chess-individual-only-rule.ts:35-37`) | A division holding a stage kind outside P16 cannot turn online play on, and an online division cannot gain one: 422 `ONLINE_FORMAT_NOT_SUPPORTED`, carrying the offending kind. Both directions, or one covers for the other. |
-| Camera policy save while `frozen_at` is null: division (`divisions.ts:917-928`), stage, and competition | sport check, lock rule | Unpaid divisions: allowed; the quote follows, because the quote derives cameras every time. A paid division with `cameras_paid` false whose effective policy would become on: 422 `ONLINE_CAMERAS_NEED_UPGRADE`. A competition-level save is refused WHOLE and the error lists every such division with its difference; the organiser upgrades them, or sets their own policy to `off`, and saves again. Turning cameras off is never refused (P19). |
+| Camera policy save while `frozen_at` is null: division (`divisions.ts:917-928`), stage, and competition | sport check, lock rule | Unpaid divisions: allowed; the quote follows, because the quote derives cameras every time. A paid division with `cameras_paid` false whose effective policy would become on: 422 `ONLINE_CAMERAS_NEED_UPGRADE`, whose copy sends the organiser to the receipt's "Fair-play camera: Yes" (which pays for it and turns it on). A competition-level save is refused WHOLE and the error lists every such division with its difference; the organiser upgrades them, or sets their own policy to `off`, and saves again. Turning cameras off here is never refused and returns nothing (P19); the receipt's No is the door that returns the camera price. |
 | `openRound`, whenever `frozen_at` is null (`open-round.ts:304`) | role, online, started | The payment door. The gate sits INSIDE the transaction, after the division lock (`:379`), not with the refusals that run before it. The row must be paid AND cover the places held, the counted rounds and the cameras; otherwise 402 `ONLINE_CHESS_UNPAID`, carrying the quote. "Paid" alone is not enough: a paid row that no longer covers is refused the same way. Then freeze. Once `frozen_at` is set, no round asks anything. This is "no round of the division has been opened", not "round number 1": a division whose first stage is a knockout meets the same gate. |
-| Pay and open (§8.5) | none | `openRound` accepts `pay: { size, expectedOwed }`. The debit is written inside the same transaction, on the path that writes the open, immediately before the stamp at `:532`. Any decision that does not open the round (not paired, no fixtures, clock not playable, boards held for a Lichess link) writes no debit. The payment and the open commit together or not at all. |
+| Pay and open (§8.5) | none | `openRound` accepts `pay: { size, expectedOwed, cameras }`. The debit is written inside the same transaction, on the path that writes the open. On a round's FIRST open the payment and its camera answer are written BEFORE the stamp and before the stagger decision (Task 15 fix I1): the answer is the policy the round opens under, so its check-in batches follow it, and "has a round opened" is honestly no when it is written. The cover and the freeze run last, after the invites (review m4); a re-stamp of an opened round pays there too (it is frozen: nothing). Any decision that does not open the round (not paired, no fixtures, clock not playable) writes no debit. Boards held for a Lichess link do not stop the open (fix round 3, the spec corrected to the code and the help): a first open stamps the round, pays and freezes even when every board is held, and the receipt warns first (the 402's `invitable` 0: "No player has linked Lichess yet…"); the held boards are invited free when the round is re-opened once they link. The payment and the open commit together or not at all. |
 | Division delete; competition delete; online switched off | none | Not frozen and paid: refund (§7.3, §7.4). Unpaid: delete the row. Frozen: nothing. |
 | Division archive | none | Nothing. An archive is reversible, so a paid package is held and comes back with an un-archive. A purge of an archived division is a delete, and refunds if not frozen. |
 | Checkout route (`app/api/billing/relay-checkout/route.ts:119-120`, `:33-38`) | needs both streaming features; returns to a fixture or Settings | Also allowed when Online Chess is offered to the org. A third return target, `returnTo: "division"` with the division id, lands on the division page with the receipt reopened. |
@@ -442,7 +442,7 @@ Online Chess: 8 credits · You have 11 · Buy more
 The builder's Review list gains one line beside the existing Lichess and camera lines (`components/v2/division-builder.tsx:852`):
 
 ```
-Online Chess · up to 64 players · 8 credits, paid before round 1
+Online Chess · up to 64 players · 8 credits, paid before the first Online Chess round
 ```
 
 There is no spend on this step. The Create button creates the division with its size chosen and unpaid. (The mockup's "Create · spend" button is superseded.)
@@ -453,7 +453,7 @@ In the Fixtures tab's rules strip, an unpaid online division shows an amber line
 
 ```
 ! Online Chess not paid. 41 registered, up to 64.
-  Round 1 can't open until it's paid.
+  No Online Chess round can open until it's paid.
   [ Change size ]  [ Pay 8 credits ]
 ```
 
@@ -467,6 +467,7 @@ Pay opens the house confirm (`useConfirm`, `components/ui/confirm-provider.tsx:4
 
 ```
 Online Chess
+Fair-play camera          [ Yes ]  [ No ]
 Up to 64 players · up to 8 rounds
 Fair-play camera                      on
 
@@ -475,18 +476,19 @@ From bought credits                    5
 Total                                  8 credits
 
 Knockout, play-off and tie-break games are included.
-You can move up a size until round 1 opens.
+You can move up a size until the first Online Chess round opens.
                           [ Cancel ]  [ Pay 8 credits ]
 ```
 
+- **Fair-play camera: Yes / No** (Task 15, owner 2026-11-25) heads EVERY receipt, first payment and change alike: a two-option radio group, not a checkbox. It opens at the division's camera setting (`facts.cameras`) in EVERY mode, a change included (fix I2: opening a change at what was paid made a settings Off re-charge the camera and write Required again on a confirm that only meant to resize); a change still quotes against what was paid (R6). Before the confirm, a Yes over a setting that is off (the Yes that writes Required) says under the pair "With Yes, players need a live camera to take their seat." (fix m4); a division already on keeps the setting it has (it may be Optional), so nothing is said for it. The quote follows the answer live (the size list re-prices at 1 or 2 credits per 16), and a quote is drawn only for the exact size AND answer it was read for. Paying writes the answer to the division's "Camera during online play" setting in the same transaction (§7.4); the receipt then says "Camera during online play is now set to Required." (or Off). The Yes note shows only while the Yes can be confirmed (fix round 3 m1: never over a "Choose a size" button). A change with the size and the answer both unchanged asks nothing - unless the setting says the other answer: then the confirm reads "Turn camera on" (or "Turn camera off"), owes 0, and writes the setting back (fix round 3).
 - The two "from" rows come from the quote read (§7.4), so the receipt shows what the debit will actually take. A row with 0 is not shown.
 - Confirming sends the size and the total shown. If the server's total has moved (someone changed the cameras or the rounds), it answers `ONLINE_QUOTE_CHANGED`; the receipt redraws with the new figures and a line, "The price changed. Check it and confirm again." Nothing is taken until the organiser confirms the figure they see.
 - Phone: the confirm is a bottom sheet, rows full width. Desktop: the centred confirm dialog.
-- **Short balance.** The confirm button reads "Buy credits". It opens the existing credits chooser (`creditsCard`, `components/v2/fixture-stream-panel.tsx:1562`; `components/buy-stream-credits.tsx:42`), renamed to Seazn credits, with the shortfall preselected: the smallest pack that covers it. After checkout it returns to the division page with the receipt reopened (the checkout route's new `returnTo: "division"`, §7.6). The size needs no keeping on the client for a first payment, because it is stored on the unpaid row; an upgrade's target size rides in the return address. The camera choice is never kept: the server derives it.
+- **Short balance.** The confirm button reads "Buy credits". It opens the existing credits chooser (`creditsCard`, `components/v2/fixture-stream-panel.tsx:1562`; `components/buy-stream-credits.tsx:42`), renamed to Seazn credits, with the shortfall preselected: the smallest pack that covers it. After checkout it returns to the division page with the receipt reopened (the checkout route's new `returnTo: "division"`, §7.6). The size needs no keeping on the client for a first payment, because it is stored on the unpaid row; an upgrade's target size rides in the return address, and so does the camera answer (`cameras=1` or `cameras=0`), so the receipt reopens at the answer the organiser gave, in either direction.
 
-### 8.5 "Open round 1" on an unpaid division
+### 8.5 "Open round" on an unpaid division
 
-Pressing Open round 1 opens the same receipt inline, with the confirm button **"Pay 8 credits and open round 1"**.
+Pressing Open round on an unpaid division opens the same receipt inline, with the confirm button **"Pay 8 credits and open the round"**. That is the division's first Online Chess round, whatever its number: round 1 may have been scored by hand (P20), and the package is paid and frozen at the first ONLINE open (P8). So no receipt line names "round 1" as the moment it is paid or fixed (fix round 4).
 
 - **Preselect (owner decision 15): the size the organiser chose.** It is the stored size on the unpaid row. That size already holds the places held and covers the counted rounds, because every door that grows either one checks it (§7.6).
 - **They can change it in the receipt.** The other sizes are listed, each with its price. A smaller one that still fits shows what it saves and what it costs them:
@@ -499,7 +501,7 @@ Pressing Open round 1 opens the same receipt inline, with the confirm button **"
 
   A size that does not hold the places held, or does not cover the rounds, is listed disabled with its reason.
 - **One confirm pays and opens.** They commit together (§7.6). If the round does not open, for any reason, nothing is paid, and the organiser sees the round's own reason (not paired, a board waiting on a Lichess link, and so on).
-- Paying freezes the limit for the whole event, and the receipt says so in one line: "The size is fixed once round 1 opens."
+- Paying freezes the limit for the whole event, and the receipt says so in one line: "The size and the camera are fixed once the first Online Chess round opens."
 
 ### 8.6 Once paid
 
@@ -509,7 +511,7 @@ The amber line is replaced by a green chip:
 Online Chess · up to 64 · paid          Change size
 ```
 
-- **Change size** opens the receipt with every size that fits, larger and smaller, and with "Add Fair-play camera" if it was bought without. A larger size shows the difference to pay. A smaller size shows what comes back, split as the server's quote gives it:
+- **Change size** opens the receipt with every size that fits, larger and smaller, and with the Fair-play camera answer opened at what was paid. A larger size, or Yes over a package paid without it, shows the difference to pay. A smaller size, or No over a package paid with it, shows what comes back, split as the server's quote gives it:
 
 ```
 Move down to 32 players
@@ -520,13 +522,13 @@ Not returned                           0
 ```
 
   When some included credits are from an earlier month, the "Not returned" row carries the number and the reason, "included credits from October have expired", before the organiser confirms.
-- "Add Fair-play camera": ticking it sends `addCameras` (§7.4); once paid, the receipt's last line is "Fair-play camera is paid. Turn it on in Division rules.", and the camera select then saves. Each option shows the difference, and the total is the difference.
+- "Fair-play camera: Yes / No" (Task 15): the answer is sent as `cameras` (§7.4) and written to the division's setting with the payment, so no "turn it on in Division rules" step follows. Yes over a package paid without it charges the camera difference; No over a package paid with it is a move down at the same size ("Turn camera off · 2 credits back"), with the same split and the same "Not returned" row as a smaller size. Each size option shows the difference at the answer chosen, and the total is the net of both changes. A size whose difference is 0 reads "same price": the paid size itself is not in the list, so such a row is another size priced as what was paid (No over 16 with the camera prices 32 without it at the same 2 credits).
 - The "Players, up to" select shows the paid size and offers the others that fit, each labelled with its difference, to pay or to get back. On a paid division, picking one opens the receipt. It never saves through the strip: the strip's save refuses a paid row (§7.4).
 - Adding an entrant past the size, or saving more rounds than the size includes, is refused with a message that carries the next size and its difference, and offers Change size.
 
 ### 8.7 After round 1 opens
 
-The chip stays, without the Change size link: "Online Chess · up to 64 · paid". The select is read-only. There is no price and no prompt anywhere on Match Day.
+The chip stays, without the Change size link: "Online Chess · up to 64 · paid". The select is read-only, and so is the Fair-play camera answer: a receipt whose quote is refused `frozen` shows it disabled, beside "The size and the camera are fixed once the first Online Chess round opens." There is no price and no prompt anywhere on Match Day.
 
 ### 8.8 Credit history
 
@@ -626,7 +628,7 @@ Not verified: the display names of the three pack products in Stripe. The lookup
 | **Move down, then up again** | Each step is measured against the row's value, price(size, cameras paid). A forfeited credit is not credited back by a later move up. |
 | **Move down below the places held, or below what the rounds need** | Refused, with the reason. |
 | **Move down after round 1** | Refused: the size is fixed (decision 7). Unused size is then not refunded (decision 10). |
-| **Cameras turned off after paying the camera price** | No partial refund. They can be turned on again at no charge until round 1 (P19). |
+| **Cameras turned off after paying the camera price** | Through the receipt's "Fair-play camera: No", before round 1: the camera price comes back like a move down (P21; an earlier month's included credits are forfeited). Through Division settings: no refund, and back on is free until round 1 (P19 as amended). After round 1: fixed, like the size. |
 | **Division archived** | Paid and unopened: held, not refunded. Un-archived: the package is as it was. Purged: a delete. |
 | **Organisation deleted** | Both tables cascade from the organisation. Everything goes and nothing is refunded. Nobody plans a refund here. |
 | **Organiser never pays** | Registration runs up to the chosen size. The division can be Started and scored by hand (P20). No online round can open. No player sees why. Not verified by driving the product: that no sweep acts on boards of a round that was never opened. |
@@ -649,7 +651,7 @@ Not verified: the display names of the three pack products in Stripe. The lookup
 | **Online divisions that exist at rollout** | The migration writes a row for each (§7.1): unpaid at the smallest size that holds its places if no round has opened, grandfathered (frozen, never asked) if one has. Prod has none. |
 | **Flag turned off for a club** | Nothing is refunded automatically, and with the flag off no round can open. The way out for a paid, unopened package is to switch online play off or delete the division, either of which refunds it. Switching off is never gated by the flag (`divisions.ts:1262-1264`). |
 
-**Lock order.** `division:` (ascending id when more than one) then org money. The reviewer found one caller of the money lock outside the ledger file, the stream session apply (`stream-sessions/apply.ts:99`), which takes no `division:` lock. That looks safe; the builder confirms it by test, not by reading.
+**Lock order.** `division:` (ascending id when more than one), then org money, then the package row, then the division row (a camera answer's write, the tail). The reviewer found one caller of the money lock outside the ledger file, the stream session apply (`stream-sessions/apply.ts:99`), which takes no `division:` lock. That looks safe; the builder confirms it by test, not by reading.
 
 ## 12. Cost risk to watch (owner decision 6)
 
@@ -713,7 +715,7 @@ House rules apply (`docs/superpowers/TEST-STRATEGY.md`): every sweep reports how
 - Another sport and over-the-board chess: no door asks for a package. The sweep reports how many sports it checked.
 - **Card refund and package refund, both orders** (§7.5): buy 20, pay 16, card refund, delete the division; and buy 20, pay 16, delete the division, card refund. In both the club ends with no credits from that pack. Then a third: the package ran (frozen), card refund: the 16 are not reversed.
 - **Settle takes nothing from a different pack** (§7.5, worked example 2): the reversed pack's credits were spent on streams; a later pack pays for a package that is refunded; assert zero revoke rows and the later pack's full balance. Mutation: replace the attribution with `purchased − revoked`.
-- **Adding cameras to a paid package:** paid without cameras → policy save refused → pay with `addCameras` (the difference) → policy save allowed and free → open. And `addCameras` on a package already paid with cameras owes 0.
+- **The camera answer on a paid package (Task 15):** paid without cameras → policy save refused → receipt Yes (the difference; the setting written `required` in the payment) → policy save free → open. Yes on a package already paid with cameras owes 0. No on a package paid with cameras before round 1 → the camera price back (this month's included credits return; an earlier month's are forfeited); refused once frozen. Size and camera together → one payment, one net row. The same answer twice → written once. A failure after the setting write rolls the setting, the audit row, the package and the ledger back together.
 - **Competition delete with unpaid rows:** no package row of the competition survives with a null `division_id` unless it is paid.
 - **A refund that fails blocks the delete:** force a ledger error in the epilogue; the division still exists.
 - **Quote changed** (§7.4): open a quote, change the camera policy, pay with the old total: 409, and the ledger has no new row. The same with the rounds raised.
@@ -804,7 +806,7 @@ Not verified: which columns of `fixture_external_play` hold the check-in and gam
 - How the receipt body is shared between the confirm and the inline "Open round 1" use, and how the chooser returns to it after checkout.
 - How "the shortfall preselected" maps to a pack when no single pack equals it. My call: the smallest pack that covers it.
 - Whether the three rows in the credit history show the fixture column empty or a division link.
-- Where the "turn it on" link lands when the camera policy is set at competition or stage level, not on the division. The payment itself is the same `addCameras` intent at every level.
+- Where the "turn it on" link lands when the camera policy is set at competition or stage level, not on the division. Settled by Task 15: there is no link; the receipt's answer writes the DIVISION's own setting, which overrides the competition's; a stage's own policy that contradicts the answer is refused by name (no door writes one).
 - The OpenAPI entries.
 - The migration number.
 - The helper that reads the monthly rate before the transaction (the pattern is `openOnlineCapGuard`).
@@ -834,6 +836,7 @@ The two points the review raised were ruled on the same day:
 |---|---|
 | What does "Open round 1" preselect? | The size the organiser chose (decision 15). |
 | Can a paid size move down? | Yes, before round 1, with the difference refunded under the standard rule (decision 16). |
+| Fair-play camera on every receipt; can it be turned off for credits back? (2026-11-25) | Yes / No on every receipt, written to the division's setting with the payment; No before round 1 is a move down (Task 15, P19 amended). |
 
 **No owner question is open.** What the owner approves by approving this document: the decisions in §3 as written, and the controller's calls in §4.
 

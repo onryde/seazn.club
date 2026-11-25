@@ -69,7 +69,9 @@ import {
 import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
-import { isOnlineEntrantCapCode } from "@/components/v2/online-entrant-cap-refusal";
+import { isOnlineEntrantCapCode, onlineEntrantCapText } from "@/components/v2/online-entrant-cap-refusal";
+import type { MessageKey } from "@/lib/messages";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 import { ENTRANT_KIND_NOT_ALLOWED, divisionTakesKind } from "@/lib/division-entrant-kinds";
 import {
   useRegistrationConfigPanelState,
@@ -291,14 +293,18 @@ export function RegistrationHubConfigPanel({
   // useLocaleOrDefault's own doc comment, dict-provider.tsx).
   const locale = useLocaleOrDefault();
   const { state, saved, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save, reset, clearFailure } =
-    useRegistrationConfigPanelState(division, onSaved, (code) =>
+    useRegistrationConfigPanelState(division, onSaved, (code, extra) =>
       code === CHESS_INDIVIDUAL_ONLY
         ? msg("divset.err.chessIndividualOnly")
         : code === ENTRANT_KIND_NOT_ALLOWED
           ? msg("reg.settings.entrant.notAllowedError")
-          : isOnlineEntrantCapCode(code)
-            ? msg("onlineChess.entrantCap", { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION })
-            : null,
+          : code === ONLINE_PACKAGE_CODES.sizeFull
+            // The size's sentence names the size and the next one up, so it is said from the refusal's own numbers; without both,
+            // null leaves the server's sentence (which also names the size).
+            ? onlineEntrantCapText({ code, extra }, (key, vars) => msg(key as MessageKey, vars))
+            : isOnlineEntrantCapCode(code)
+              ? msg("onlineChess.entrantCap", { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION })
+              : null,
     );
   // From md up: every section open, with the index beside them (spec §9.3). Null until the browser has been asked; the
   // sections only render once the GET has answered, by which time it has.

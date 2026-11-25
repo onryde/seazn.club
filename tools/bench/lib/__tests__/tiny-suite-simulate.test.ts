@@ -806,7 +806,7 @@ function fakeServer(
       }
       // B06a T7 — `news.auto` on the plan this run buys. Without it the
       // enable step correctly REFUSES (`PATCH /divisions/{id}` would answer
-      // 402, `usecases/divisions.ts:652-654`) and the whole news step reports
+      // 402, `usecases/divisions/patch.ts:201-203`) and the whole news step reports
       // no subject — which is what this fake did before the row existed.
       if (featureKey === "news.auto") {
         return [
@@ -1749,7 +1749,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
 
   it("B06a T7 — an org that cannot buy news.auto never turns drafting on, and says so", async () => {
     // `PATCH /divisions/{id}` refuses `auto_posts: true` without the
-    // entitlement (`usecases/divisions.ts:652-654`). Because drafting is a
+    // entitlement (`usecases/divisions/patch.ts:201-203`). Because drafting is a
     // side effect of FOLDING there is no later moment at which the run could
     // recover, so this has to be visible rather than inferred from an empty
     // draft list much later.

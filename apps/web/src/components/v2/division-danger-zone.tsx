@@ -4,12 +4,19 @@
 // name and states exactly what is destroyed vs kept; a 409
 // DIVISION_HAS_RESULTS pivots the dialog to the archive suggestion. Archive
 // uses a plain danger confirm — it is reversible from competition settings.
+// A paid Online Chess package (spec 2026-11-23 §11): the delete dialog says what
+// its refund gives back, and archive — which holds the package — says how to
+// get the credits back (switch Online Chess off), off the server's own figure,
+// led by WHY it can still come back (no round has opened) and in a paragraph of
+// its own (Task 15 fix round 2, owner: read inside the refused delete's results
+// sentence it promised a refund mid-event). A paid package a round has frozen is
+// never refunded, and both dialogs say so.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { routes } from "@/lib/routes";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 
 interface Props {
   divisionId: string;
@@ -37,6 +44,16 @@ interface Props {
    * warning rather than an unconditional one.
    */
   slotHeldOnArchive?: boolean;
+  /**
+   * The division's paid Online Chess package, as the SERVER reads its refund
+   * (`divisionPackageRefund`, the refund's own split — never worked out here):
+   * unfrozen, the credits that come back, the included credits of an earlier
+   * month that do not, and whether a delete would take it (`onDelete`: false
+   * once the division has started, when the delete is refused); frozen (a round
+   * has opened), `{ frozen: true }` and no figure — it is never refunded (P7).
+   * Null or absent: no money was paid (none, unpaid), and no money line shows.
+   */
+  packageRefund?: { back: number; forfeited: number; onDelete: boolean; frozen?: never } | { frozen: true } | null;
 }
 
 export function DivisionDangerZone({
@@ -45,8 +62,16 @@ export function DivisionDangerZone({
   orgSlug,
   compSlug,
   slotHeldOnArchive = false,
+  packageRefund = null,
 }: Props) {
   const msg = useMsg();
+  const plural = useMsgPlural();
+  // A frozen package has no figure: it is never refunded, and the dialogs say exactly that.
+  const frozen = packageRefund?.frozen === true;
+  const refund = packageRefund !== null && packageRefund.frozen !== true ? packageRefund : null;
+  // Archive holds the package (§11), so wherever archive is offered and credits would come back, the organiser is told the
+  // door that gives them back. Nothing to get back (every credit an earlier month's) is nothing to say.
+  const switchOffBack = refund !== null && refund.back > 0 ? refund.back : null;
   const router = useRouter();
   const [dialog, setDialog] = useState<"none" | "delete" | "archive">("none");
   const [busy, setBusy] = useState(false);
@@ -148,6 +173,15 @@ export function DivisionDangerZone({
         <p>
           <strong>{msg("danger.keptLabel")}</strong> {msg("danger.keptText")}
         </p>
+        {/* Only when the delete would take the package: a started division's delete is refused, and a refund it never makes
+            is not promised here (the refused delete's pivot below says what to do instead). */}
+        {refund !== null && refund.onDelete && (
+          <p data-online-refund>
+            <strong>{msg("danger.refundedLabel")}</strong> {plural("danger.onlineRefund", refund.back, { count: refund.back })}
+            {refund.forfeited > 0 && <> {plural("danger.onlineForfeit", refund.forfeited, { count: refund.forfeited })}</>}
+          </p>
+        )}
+        {frozen && <p data-online-frozen>{msg("danger.onlineFrozen")}</p>}
         <p>{msg("danger.cannotUndo")}</p>
       </ConfirmDialog>
 
@@ -159,6 +193,7 @@ export function DivisionDangerZone({
         onConfirm={() => void doArchive()}
         onCancel={() => setDialog("none")}
       >
+        {/* The refused delete's reason, about results only: the money is its own paragraph below (fix round 2). */}
         {suggestArchive && (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-amber-700">{msg("danger.suggestArchive")}</p>
         )}
@@ -172,6 +207,14 @@ export function DivisionDangerZone({
             staff-waived division, which is exactly right — support has handed
             the slot back, so that archive really is free. */}
         <p>{msg(slotHeldOnArchive ? "danger.archiveBodySlotHeld" : "danger.archiveBody")}</p>
+        {/* The way to get the credits back, led by why they still can (no round has opened yet): from the Archive button and
+            under the refused delete's pivot alike, once. A frozen package has no way back, and says so. */}
+        {switchOffBack !== null && (
+          <p data-online-archive-hint className="rounded-md bg-amber-50 px-3 py-2 text-amber-700">
+            {plural("danger.archiveOnline", switchOffBack, { count: switchOffBack })}
+          </p>
+        )}
+        {frozen && <p data-online-frozen>{msg("danger.onlineFrozen")}</p>}
       </ConfirmDialog>
     </section>
   );

@@ -30,11 +30,14 @@ import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
 import { processStripeEvent, runEvent, type StreamClawbackAlert } from "../billing-events";
-import { creditBalance } from "../stream-credits";
+import { creditBalance, recordStreamPackRefund } from "../stream-credits";
 import { staffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
+import { deleteDivision } from "../divisions";
+import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
+import { balance, liveOf, ocCompetition, ocDivision, ocOrg, pay, packageById, spendTheMonth } from "../online-package/__tests__/_oc-rig";
 
 // The claw-back alert is queued on the email outbox (phase 3 wave 5, kind
 // `staff_stream_credit_clawback`, once per incident: `<charge>:partial:<amount
@@ -58,6 +61,12 @@ vi.mock("@/lib/email", async (importOriginal) => {
 vi.mock("@/lib/sentry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/sentry")>();
   return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+// The Online Chess cases below open their divisions through the real create door, which asks the `online-chess` flag; PostHog
+// answers OFF here and ONLINE_CHESS_ALWAYS=1 (set in that describe only) forces it on.
+vi.mock("@/lib/posthog-server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
+  return { ...actual, isServerFeatureEnabled: vi.fn(async () => false) };
 });
 const clawbackAlert = vi.mocked(streamCreditClawbackAlertEmail);
 const disputeAlert = vi.mocked(staffDisputeAlertEmail);
@@ -794,6 +803,120 @@ describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
     ).rejects.toThrow(/matched no registration\/sponsor\/platform charge/);
     expect(await creditBalance(sql, auth.orgId)).toBe(5);
     expect(await revokeRows(auth.orgId)).toHaveLength(0);
+  });
+});
+
+// ---- Online Chess (spec 2026-11-23-online-chess-credits-design.md §7.5, review C1). A package can hold a pack's credits when
+// its card payment is refunded; they come back when the package is refunded or moved down. The claw-back nets those returns
+// (item 1) and records the reversal on EVERY matched call (item 2), so the package refund's settle step takes what the claw-back
+// could not, in either order. Driven through the REAL webhook (`processStripeEvent`) and the REAL doors (`createDivision`,
+// `payOnlinePackage`, `deleteDivision`). Expected numbers: the Global Constraints' 256 package costs 16 (online-package suites
+// hold the leaf to the table); the month is spent to 0, so it draws bought credits only.
+//
+// Mutant table (each run once by hand; results in the commit message):
+//   C1 the marker written only when something is clawed           -> "a zero claw-back writes the reversal marker …"
+//   C2 the marker insert without `on conflict do nothing`          -> same test (the redelivery and the dispute 500 on the key)
+//   C3 the netting dropped (consumes only)                         -> "a package refunded BEFORE the card refund …"
+//   C4 the replay path reports its own row's delta (review m3)     -> "worked example 1, then a redelivered refund …"
+describe.skipIf(!HAS_DB)("Online Chess packages and the claw-back (§7.5)", () => {
+  const ALWAYS = process.env.ONLINE_CHESS_ALWAYS;
+  const reversals = (orgId: string) =>
+    sql<{ intent: string; purchased: number }[]>`
+      select stripe_payment_intent_id as intent, purchased from stream_pack_reversals where org_id = ${orgId}`;
+  beforeEach(() => {
+    stripeMock.retrieveIntent.mockReset();
+    stripeMock.retrieveIntent.mockResolvedValue({ metadata: {} });
+    staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_dummy");
+    errors = vi.spyOn(log, "error");
+    process.env.ONLINE_CHESS_ALWAYS = "1";
+    forgetOnlineChessFlagCache();
+  });
+  afterEach(() => {
+    errors.mockRestore();
+    vi.unstubAllEnvs();
+    if (ALWAYS === undefined) delete process.env.ONLINE_CHESS_ALWAYS;
+    else process.env.ONLINE_CHESS_ALWAYS = ALWAYS;
+    forgetOnlineChessFlagCache();
+  });
+
+  it("a zero claw-back writes the reversal marker; a redelivered refund and a lost dispute after it write no second, and nothing throws", async () => {
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 5);
+    expect(await reversals(auth.orgId), "premise: no marker before the refund").toEqual([]);
+    const chargeId = `ch_${uniq()}`;
+    let deliveries = 0;
+    for (const event of [
+      refundEvent({ paymentIntent: intent, chargeId }),
+      refundEvent({ paymentIntent: intent, chargeId }),
+      disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost" }),
+    ]) {
+      await processStripeEvent(event);
+      deliveries += 1;
+    }
+    expect(deliveries).toBe(3);
+    expect(await reversals(auth.orgId), "one marker, on the zero claw-back").toEqual([{ intent, purchased: 5 }]);
+    expect(await revokeRows(auth.orgId)).toHaveLength(0);
+  });
+
+  it("a package refunded BEFORE the card refund: the webhook's claw-back takes the credits it returned (20, not 4)", async () => {
+    const o = await ocOrg();
+    await spendTheMonth(o.orgId);
+    const { intent } = await buyPack(o.orgId, 20);
+    const d = await ocDivision(o, await ocCompetition(o));
+    await pay(o, d.id, 256);
+    await deleteDivision(o.auth, d.id);
+    expect((await balance(o.orgId)).pack, "premise: the package returned its 16").toBe(20);
+    await processStripeEvent(refundEvent({ paymentIntent: intent }));
+    expect((await revokeRows(o.orgId)).map((r) => r.delta)).toEqual([-20]);
+    expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
+  });
+
+  it("a package refunded AFTER the card refund: the delete settles the 16 the webhook could not take", async () => {
+    const o = await ocOrg();
+    await spendTheMonth(o.orgId);
+    const { intent } = await buyPack(o.orgId, 20);
+    const d = await ocDivision(o, await ocCompetition(o));
+    await pay(o, d.id, 256);
+    const pkg = await liveOf(d.id);
+    await processStripeEvent(refundEvent({ paymentIntent: intent }));
+    expect((await revokeRows(o.orgId)).map((r) => r.delta), "the webhook takes the 4 left").toEqual([-4]);
+    await deleteDivision(o.auth, d.id);
+    const rows = await revokeRows(o.orgId);
+    expect(rows.map((r) => [r.delta, r.idempotency_key, r.stripe_payment_intent_id])).toEqual([
+      [-4, `stream_pack_refund:${intent}`, intent],
+      [-16, null, intent],
+    ]);
+    expect((await packageById(pkg.id))!.refunded_at).not.toBeNull();
+    expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
+  });
+
+  // Review m3: the replay path reports what is taken back IN TOTAL (the claw-back's 4 and the settle row's 16), not its own row's
+  // 4 — so once the settle step has taken the rest, a redelivery sees the pack fully clawed and pages nobody.
+  it("worked example 1, then a redelivered refund: the replay reports all 20 taken back, and no staff alert", async () => {
+    const o = await ocOrg();
+    await spendTheMonth(o.orgId);
+    const { intent } = await buyPack(o.orgId, 20);
+    const d = await ocDivision(o, await ocCompetition(o));
+    await pay(o, d.id, 256);
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    const ev = refundEvent({ paymentIntent: intent, chargeId });
+    clawbackAlert.mockClear();
+    await processStripeEvent(ev);
+    expect(clawbackAlert, "premise: the first delivery takes 4 of 20 and alerts").toHaveBeenCalledTimes(1);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 20, clawedBack: 4 });
+    await deleteDivision(o.auth, d.id);
+    expect((await revokeRows(o.orgId)).map((r) => r.delta), "premise: the settle row took the 16").toEqual([-4, -16]);
+
+    clawbackAlert.mockClear();
+    await processStripeEvent(ev); // the same charge, redelivered
+    expect(clawbackAlert, "every credit of the pack is back: nothing short to page").not.toHaveBeenCalled();
+    const replay = await recordStreamPackRefund({ paymentIntentId: intent, via: "refund", reference: chargeId });
+    expect(replay).toMatchObject({ matched: true, purchased: 20, clawedBack: 20, applied: false });
+    expect((await revokeRows(o.orgId)).map((r) => r.delta), "no row written by either replay").toEqual([-4, -16]);
+    expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
   });
 });
 

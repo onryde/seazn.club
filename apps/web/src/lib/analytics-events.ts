@@ -101,6 +101,16 @@ export const EVENTS = {
    *  `QUICK_MATCH_CREATED`. Carries { quick_match_id, via, sport_key, kind } (`quick_match_id` the row's uuid, the name the
    *  created and saved events use, so the three join); never the match's name, an address, a user id or the home token. */
   QUICK_MATCH_DELETED: "quick_match_deleted",
+  /** Online Chess credits (spec 2026-11-23 §14): a division's package was PAID for the first time (the pay door, or the first open's
+   *  "Pay and open"). Carries { size, cameras, credits, monthly, pack, forfeited, plan, at_round_one }; `credits` is signed (a debit
+   *  is positive, a return negative); never an id, a division's name or an address. Sent after the commit, never on a no-op. */
+  ONLINE_CHESS_PACKAGE_BOUGHT: "online_chess_package_bought",
+  /** Online Chess credits: a package that was already paid moved - a bigger size, cameras added, or a move down (a negative `credits`
+   *  returns them). Same properties as `ONLINE_CHESS_PACKAGE_BOUGHT`. */
+  ONLINE_CHESS_PACKAGE_RESIZED: "online_chess_package_resized",
+  /** Online Chess credits: a paid, unfrozen package was refunded in full - a division delete, a competition delete, online play
+   *  switched off. One event per package. Same properties as `ONLINE_CHESS_PACKAGE_BOUGHT`. */
+  ONLINE_CHESS_PACKAGE_REFUNDED: "online_chess_package_refunded",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];

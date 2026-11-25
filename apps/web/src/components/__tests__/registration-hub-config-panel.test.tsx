@@ -83,7 +83,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 import { ApiV1Error } from "@/lib/client-v1";
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
-import { onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
+import { onlineDivisionFullError, onlineSizeFullError } from "@/server/external-play/online-entrant-cap";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 import { plural, t } from "@/lib/i18n-runtime";
 import { SECTION_IDS, type SectionId } from "@/components/registration-hub-config-panel-sections";
 import { configDirty, type ConfigDirty } from "@/components/use-config-dirty";
@@ -1605,6 +1606,32 @@ describe("RegistrationHubConfigPanel — individual-only (chess)", () => {
     expect(shown, "the refusal is shown against the capacity field").toBeTruthy();
     expect(expandedText([shown!])).toBe(t(uiEn, "onlineChess.entrantCap", { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION }));
     expect(expandedText([shown!]), "never the server's wording").not.toContain("server wording");
+  });
+
+  it("a capacity above the SIZE the organiser paid for lands on the capacity field, in the dictionary's words with both numbers (the real 422, not the server's English)", async () => {
+    // The refusal the capacity save really throws (settings.ts: assertSizeRoom), carried as the client receives it.
+    const refusal = onlineSizeFullError(16);
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    net.putRejection = new ApiV1Error(refusal.message, refusal.status, refusal.code!, refusal.extra as Record<string, unknown>);
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "capacity");
+    expect(shown, "the refusal is shown against the capacity field, not as a banner").toBeTruthy();
+    // 16 and 32 are typed from the ladder (spec 5.2), not read back from the error under test.
+    expect(expandedText([shown!])).toBe(t(uiEn, "onlineChess.sizeFull", { size: 16, nextSize: 32 }));
+    expect(expandedText([shown!]), "never the server's own English").not.toContain(refusal.message);
+  });
+
+  it("a size refusal that arrives without its numbers keeps the server's sentence, still on the capacity field", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    net.putRejection = new ApiV1Error("sized for 16 (server English)", 422, ONLINE_PACKAGE_CODES.sizeFull);
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "capacity");
+    expect(shown).toBeTruthy();
+    expect(expandedText([shown!])).toBe("sized for 16 (server English)");
   });
 
   it("EligibilitySection hides the solo sign-up checkbox for individual-only even when handed a team state", () => {

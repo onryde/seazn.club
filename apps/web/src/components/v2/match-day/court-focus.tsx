@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
+import type { Currency } from "@/lib/currency";
 import { fmtPublicTime } from "@/lib/format";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -86,6 +87,9 @@ export interface MatchDayCtx {
   /** The organisation, for the channels a court may stream to (`/orgs/{id}/stream-targets`). Absent where the mount has none to
    *  give: "Stream this court" is then not offered (the page passes it). */
   orgId?: string;
+  /** The currency the organisation is charged in (`preferredCurrency`), for the credits chooser inside Online Chess's pay-and-open receipt. Absent
+   *  where the mount has none to give: a short balance then links to the credits page instead. */
+  currency?: Currency;
   /** The view's server `now` (ISO): what a linked court's tail countdown (O16) is anchored to. Absent where the mount has none: the
    *  court then draws no countdown. */
   viewNow?: string;

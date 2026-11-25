@@ -22,8 +22,9 @@ import { expectStageToolsSheet } from "../helpers/stage-tools-sheet";
 import { moduleOf, summaryFormatText } from "../helpers/stage-summary";
 import { RULEBOOK_SPLITS } from "../../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
-import { openPanels } from "../helpers/rules-strip";
+import { openPanels, saveFormat } from "../helpers/rules-strip";
 import { withDb } from "../rs007-money-kit";
+import { payThroughPayDoor } from "../match-room-kit";
 import { openConsolePanel } from "../helpers/console-panels";
 import { assertTapFloor } from "./_shared";
 
@@ -430,6 +431,206 @@ test("Division rules strip field layout at every width: labels above their contr
     measured++;
   }
   expect(measured, "every visible select measured").toBeGreaterThanOrEqual(3);
+  await expectNoHorizontalScroll(page);
+});
+
+// Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §8.1; plan Task 11): on a division that plays online the Division
+// rules strip's Match rules panel carries a "Players, up to" select and the price line under it; on a division holding a league the
+// Lichess option is greyed with the reason. Every width owes: the select holds the 44px floor, nothing clips or scrolls, the price line
+// and its Buy more link are on screen, a pick saves and survives a reload, and the refusal reads as a note, not a dead control.
+// Prices and rounds are the spec's table (Global Constraints), typed here: 16/32/64/128/256 players include 6/7/8/9/10 rounds, 1/2/4/8/16 credits.
+test("Online Chess size select and format refusal in the Division rules strip at every width: 44px floor, the price follows the pick and is saved, the league division's Lichess option is greyed with its reason, no scroll", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `OC size ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const chess = { variant: "classical", clock: { base: 600, increment: 5 } };
+
+  // An online division with a 7-round Swiss: 32 players is the smallest size that includes 7 rounds.
+  const online = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Online Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { ...chess, onlinePlay: "lichess" },
+    online_size: 32,
+  });
+  expect(online.status, `online division: ${JSON.stringify(online.error)}`).toBeLessThan(300);
+  const swiss = await apiJson(request, `/api/v1/divisions/${online.data!.id}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 7 } });
+  expect(swiss.status, `swiss stage: ${JSON.stringify(swiss.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, online.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format");
+
+  const select = strip.getByTestId("online-size-select");
+  await expect(select, "the select is drawn under a Lichess division").toBeVisible();
+  await assertTapFloor(select, "the size select");
+  await expect(select).toHaveValue("32");
+  const options = select.locator("option");
+  expect(await options.count(), "the ladder: five sizes").toBe(5);
+  // 16 includes 6 rounds; the division holds 7: that size is greyed, and says why.
+  // `toBeDisabled` does not read an <option> (it reports enabled for `<option disabled>`): assert the DOM property itself.
+  await expect(select.locator('option[value="16"]'), "16 players include only 6 rounds").toHaveJSProperty("disabled", true);
+  await expect(select.locator('option[value="32"]'), "the stored 32 is open").toHaveJSProperty("disabled", false);
+  await expect(select.locator('option[value="16"]')).toContainText("fewer than your 7 rounds");
+  const price = strip.getByTestId("online-price-line");
+  await expect(price).toBeVisible();
+  await expect(price, "32 players cost 2 credits").toContainText("Online Chess: 2 credits");
+  await expect(price).toContainText(/You have \d+ credits?/);
+  const buy = strip.getByTestId("online-buy-more");
+  await expect(buy).toBeVisible();
+  await expect(buy, "Seazn credits are bought on the Streaming side").toHaveAttribute("href", /\/settings\/credits\?kind=stream$/);
+  await expect(buy).toHaveAttribute("target", "_blank");
+  await expectNoHorizontalScroll(page);
+  const clip = await overflowingIn(page, '[data-testid="division-rules-strip"]', "*", "the Division rules strip is missing");
+  expect(clip.clipped, "nothing in the strip is clipped").toEqual([]);
+
+  // A pick follows into the price line at once, saves, and survives a reload.
+  await select.selectOption("64");
+  await expect(price, "64 players cost 4 credits").toContainText("Online Chess: 4 credits");
+  await saveFormat(strip).click();
+  await expect(strip.getByTestId("division-rules-saved")).toBeVisible({ timeout: 20_000 });
+  await page.reload({ waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const again = page.getByTestId("division-rules-strip");
+  await openPanels(again, "format");
+  await expect(again.getByTestId("online-size-select"), "the saved size is read back").toHaveValue("64");
+  await expect(again.getByTestId("online-price-line")).toContainText("Online Chess: 4 credits");
+
+  // A division holding a league cannot be switched to Lichess: the option is greyed, with the reason beside it.
+  const league = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Club League",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: chess,
+  });
+  expect(league.status, `league division: ${JSON.stringify(league.error)}`).toBeLessThan(300);
+  const leagueStage = await apiJson(request, `/api/v1/divisions/${league.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(leagueStage.status, `league stage: ${JSON.stringify(leagueStage.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, league.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  const leagueStrip = page.getByTestId("division-rules-strip");
+  await expect(leagueStrip).toBeVisible({ timeout: 20_000 });
+  await openPanels(leagueStrip, "format");
+  await expect(leagueStrip.getByTestId("division-online-play").locator('option[value="lichess"]'), "Lichess is greyed over a league").toHaveJSProperty("disabled", true);
+  await expect(leagueStrip.getByTestId("division-online-play").locator('option[value="off"]'), "Off stays open").toHaveJSProperty("disabled", false);
+  await expect(leagueStrip.getByTestId("division-online-format-refused")).toHaveText(
+    "Online Chess runs Swiss and knockout events. Change the format to play online.",
+  );
+  await expect(leagueStrip.getByTestId("online-size-select"), "no size select while online play is off").toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+// Online Chess credits (spec §8.1, §7.4 item 4; T11 fix round 1, review I3 and its gap): (a) a division that starts with online play OFF
+// draws the "Players, up to" select the moment Lichess is chosen; (b) switching a PAID package off asks first - the confirm names the
+// size and the amount, says what may not come back, and a no saves nothing - and after the yes the refund is said on one line whose
+// numbers are the package row's own (credits_refunded, credits_forfeited), not the screen's. Every width: the select holds the 44px
+// floor, both confirm buttons do, nothing scrolls.
+test("Online Chess: choosing Lichess draws the size select; switching a PAID package off asks first, then says what came back, at every width", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `OC switch-off ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const chess = { variant: "classical", clock: { base: 600, increment: 5 } };
+  const seed = async (name: string, config: Record<string, unknown>, size?: number): Promise<string> => {
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name, sport_key: "boardgame", variant_key: "classical", config, ...(size === undefined ? {} : { online_size: size }),
+    });
+    expect(div.status, `${name}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const stage = await apiJson(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 7 } });
+    expect(stage.status, `${name} swiss stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    return div.data!.id;
+  };
+
+  // (a) A division that starts OFFLINE: no select; Lichess chosen, the select and its price line are drawn (nothing is saved or spent).
+  const offline = await seed("Offline Open", chess);
+  await page.goto(await divisionPath(request, offline, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const offStrip = page.getByTestId("division-rules-strip");
+  await expect(offStrip).toBeVisible({ timeout: 20_000 });
+  await openPanels(offStrip, "format");
+  await expect(offStrip.getByTestId("online-size-select"), "no select while online play is off").toHaveCount(0);
+  await offStrip.getByTestId("division-online-play").selectOption("lichess");
+  const chosen = offStrip.getByTestId("online-size-select");
+  await expect(chosen, "Lichess chosen: the select is drawn").toBeVisible();
+  await assertTapFloor(chosen, "the size select");
+  await expect(chosen, "7 rounds: 32 players is the smallest size that includes them").toHaveValue("32");
+  await expect(offStrip.getByTestId("online-price-line")).toContainText("Online Chess: 2 credits");
+  await expectNoHorizontalScroll(page);
+  await offStrip.getByTestId("division-online-play").selectOption("off");
+  await expect(offStrip.getByTestId("online-size-select"), "off again: gone").toHaveCount(0);
+
+  // (b) A PAID 32 switched off.
+  const paidId = await seed("Paid Open", { ...chess, onlinePlay: "lichess" }, 32);
+  await payThroughPayDoor(request, paidId);
+  const stored = () =>
+    apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${paidId}`).then((r) => r.data!.config.onlinePlay);
+  expect(await stored(), "premise: online and paid").toBe("lichess");
+  await page.goto(await divisionPath(request, paidId, "?tab=fixtures"), { waitUntil: "load" });
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format");
+  await expect(strip.getByTestId("online-size-select"), "a paid package shows its own size").toHaveValue("32");
+  await strip.getByTestId("division-online-play").selectOption("off");
+  await saveFormat(strip).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog, "switching a paid package off asks first").toBeVisible();
+  await expect(dialog).toContainText("Switch off Online Chess?");
+  await expect(dialog).toContainText(/\d+ credits? for up to 32 players/);
+  await expect(dialog, "what may not come back is said").toContainText("Included credits from an earlier month may not come back");
+  // The house confirm's `size: "touch"` is the 44px floor BELOW md (confirm-provider: `max-md:min-h-11`); from md up its buttons are the
+  // dialog's own size, so the floor is owed on the phone widths only.
+  if (page.viewportSize()!.width < 768) {
+    await assertTapFloor(dialog.getByRole("button", { name: "Switch off and refund" }), "the confirm button");
+    await assertTapFloor(dialog.getByRole("button", { name: "Cancel" }), "the cancel button");
+  } else {
+    await expect(dialog.getByRole("button", { name: "Switch off and refund" })).toBeVisible();
+  }
+  await expectNoHorizontalScroll(page);
+
+  // A no changes nothing: the division is still online, still paid, and the strip says nothing.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  expect(await stored(), "a no saved nothing").toBe("lichess");
+  await expect(strip.getByTestId("division-rules-feedback")).toHaveCount(0);
+
+  // A yes saves, refunds, and says so on one line - read against the package row.
+  await saveFormat(strip).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Switch off and refund" }).click();
+  const line = strip.getByTestId("division-online-refunded");
+  await expect(line, "the refund is said").toBeVisible({ timeout: 20_000 });
+  expect(await stored(), "the switch-off was saved").toBeUndefined();
+  const row = await withDb(async (sql) => {
+    const [r] = await sql<{ credits_refunded: number; credits_forfeited: number; credits_paid: number; refunded_at: Date | null }[]>`
+      select credits_refunded, credits_forfeited, credits_paid, refunded_at from division_online_packages where division_id = ${paidId}`;
+    return r!;
+  });
+  expect(row.refunded_at, "the package is refunded").not.toBeNull();
+  expect(row.credits_paid, "premise: something was paid").toBeGreaterThan(0);
+  const plural = (n: number, one: string, other: string) => `${n} ${n === 1 ? one : other}`;
+  const want = [
+    "Online Chess switched off.",
+    row.credits_refunded > 0 ? `${plural(row.credits_refunded, "credit", "credits")} returned to your balance.` : null,
+    row.credits_forfeited > 0
+      ? `${plural(row.credits_forfeited, "included credit from an earlier month was", "included credits from an earlier month were")} not returned.`
+      : null,
+  ].filter((x) => x !== null).join(" ");
+  await expect(line).toHaveText(want);
+  expect(row.credits_refunded + row.credits_forfeited, "everything paid came back or is said as not returned").toBe(row.credits_paid);
+  await expect(strip.getByTestId("online-size-select"), "switched off: the select is gone").toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 

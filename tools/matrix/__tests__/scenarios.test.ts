@@ -7,6 +7,7 @@ import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { divisionsSource } from "./divisions-source.ts";
 import { stagesSource } from "./stages-source.ts";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
@@ -328,14 +329,14 @@ describe("shared assertions — empty case first, then each way to go red", () =
   });
   it("m-3 (W2c, P-2 A): FORMAT_LOCK is the product's own PATCH lock answer — the code the per-started-stage lock emits for a match-format key, with the status the rule-error table gives it (derived, not typed)", () => {
     const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
-    const divisions = read("apps/web/src/server/usecases/divisions.ts");
+    const divisions = divisionsSource(REPO);
     const locks = read("apps/web/src/server/usecases/rule-locks.ts");
     const table = read("apps/web/src/lib/rule-errors.ts");
     // 1. The PATCH door throws the FIRST refusal's own code, with that code's table status (so the answer is whatever
     //    rule-locks.ts emitted, not a literal in divisions.ts).
     //    Final review M2: the details may add `match_edits` beside `refused` (`cond ? { refused } : { refused, ... }`).
     const door = /throw new HttpError\(\s*RULE_ERROR_STATUS\[(\w+)\.code\],[^;]*?\b\1\.code,[^;]*?\{\s*refused\s*[,}]/.exec(divisions);
-    expect(door, "divisions.ts no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
+    expect(door, "usecases/divisions/ no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
     // 2. The code rule-locks.ts emits for a key that is NOT a table rule: the false arm of `table ? TABLE : FORMAT`.
     const picks = [...locks.matchAll(/code:\s*table\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/g)];
     expect(picks, "rule-locks.ts no longer picks a code by table-vs-format").toHaveLength(1);
@@ -347,7 +348,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect({ status: Number(status), code: formatCode }).toEqual({ ...FORMAT_LOCK });
     // 4. The paired negative: the old division-wide literal is gone from this door. If it returns, FORMAT_LOCK has to
     //    be re-read against it, not silently stay on the new code.
-    expect([...divisions.matchAll(/"FORMAT_LOCKED"/g)], "divisions.ts mentions the old FORMAT_LOCKED again").toHaveLength(0);
+    expect([...divisions.matchAll(/"FORMAT_LOCKED"/g)], "usecases/divisions/ mentions the old FORMAT_LOCKED again").toHaveLength(0);
   });
 
   it("loopBounded (I-1): only a loop that ran dry AND left every fixture finished passes", () => {
@@ -392,7 +393,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
   });
 
   // T12-R1: the probe saves the kinds the product's ACTIVE entrants hold
-  // (divisions.ts:857-871 checks a narrowed model against exactly those). On
+  // (divisions/patch.ts:725-741 checks a narrowed model against exactly those). On
   // a league that is the one kind the harness registered — the engine's
   // declared default — so the save is unchanged there. Empty first.
   it("T12-R1 empty case: no active entrant with a kind in the product's list → no entrants-only save is sent, it is noted, and the check fails as vacuous", async () => {
@@ -432,8 +433,8 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     await runOn(driver, "LIFECYCLE");
     expect((bodies.filter((b) => b.entrants !== undefined)[0]!.entrants as { kinds: string[] }).kinds).toEqual([entrantKindFor("generic", resolveSportCfg("generic", "score"))]);
   });
-  it("T12-R1: the fake's guard is the product's — divisions.ts still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+  it("T12-R1: the fake's guard is the product's — usecases/divisions/ still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
+    const src = divisionsSource(REPO);
     expect(src).toContain("select distinct kind from entrants");
     expect(src).toContain("status not in ('withdrawn', 'disqualified')");
     // FU1 throws the shared constant, not a literal; pin the identifier here and its wire value below, so the fake's

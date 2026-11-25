@@ -27,6 +27,10 @@ import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { RETIRED_EXTEND_REASONS, RETIRED_EXTEND_REASON_LEADS } from "@/lib/__tests__/_retired-extend-reasons";
 import type { MatchDayCtx } from "../court-focus";
 import { OpenRoundBlockView, RoundFocus, WaitingList, type RoundFocusProps } from "../round-focus";
+import { OpenPayReceipt } from "../../online-chess/open-pay-receipt";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { quoteOf } from "@/lib/__tests__/_receipt-quote";
+import { openNoticeText } from "../../desk/open-round-control";
 import { arbiterRound, board, done, held, iso, live, NOW, openWindow, overRound, playingRound, round, withState } from "./_online-fixtures";
 
 type Call = { url: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
@@ -194,7 +198,7 @@ describe("RoundFocus: before - paired, waiting to be opened", () => {
     expect(blockProps().state.confirming, "empty case: not asked").toBe(false);
     expect(blockProps().panel).toEqual({ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" });
     const confirming = underEnglish(
-      <OpenRoundBlockView view={view} mayPress state={{ confirming: true, busy: null, notice: null, rowNotice: null }} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />,
+      <OpenRoundBlockView view={view} mayPress state={{ confirming: true, busy: null, notice: null, rowNotice: null, pay: null }} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />,
     );
     expect(count(confirming, "md-round-confirm"), "the dialog carries the panel's id").toBe(1);
     expect(count(confirming, "arbiter-column-confirm"), "and not the column's").toBe(0);
@@ -423,7 +427,7 @@ describe("RoundFocus: Open round - the row's own stage and round, answered throu
     block().on.open();
     block().on.open();
     expect(net.calls.map((c) => [c.url, c.json]), "one POST, this row's own stage").toEqual([["/api/v1/stages/stage-old/open-round", { roundNo: 2 }]]);
-    const answer: OpenRoundResult = { opened: true, invited: 6, retrying: 0, skipped: [] };
+    const answer: OpenRoundResult = { opened: true, invited: 6, retrying: 0, skipped: [], payment: null };
     net.calls[0]!.resolve(answer);
     await flush();
     expect(onChanged, "the shell's read, once").toHaveBeenCalledTimes(1);
@@ -873,3 +877,151 @@ describe("RoundFocus: M5 - one card after Pair next round, a full-width press, a
     expect(count(html(checkinFixture().r), "arbiter-extend-round-cta"), "positive pair: an open round still has its +5").toBe(1);
   });
 });
+
+// ---- Online Chess credits: an Open on an UNPAID package (spec 2026-11-23-online-chess-credits-design.md §7.6, §8.4; plan Task 12) ------------------------
+// The press is the panel's own `useOpenRoundWith`; the 402 it answers with stands the receipt up over the panel on the division the ROW names, its confirm
+// is the open again with `pay`, and the round's notice - not the receipt - says what came of it. Driven through the real chain with the network doubled.
+describe("RoundFocus: an unpaid package stands the pay-and-open receipt up", () => {
+  const paidCtx = { ...ctx, viewerPlan: "pro", currency: "eur" } as unknown as MatchDayCtx;
+  const QUOTE = quoteOf({ size: 64, held: 41, rounds: 5, cameras: true });
+  const unpaid = () => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: QUOTE, next: null } as unknown as Record<string, unknown>);
+  type Block = { on: { ask(): void; open(): void }; state: { pay: unknown; notice: { kind: string; result?: OpenRoundResult } | null; busy: unknown } };
+  const mount = (o: Partial<RoundFocusProps> = {}) => {
+    const ui = renderIsland(RoundFocus, props(paired("stage-1:3", VIEW()), { ctx: paidCtx, ...o }));
+    const block = () => propsOf(ui.tree().find((e) => e.type === OpenRoundBlockView)!) as unknown as Block;
+    const receipt = () => ui.tree().find((e) => e.type === OpenPayReceipt);
+    const receiptProps = () => propsOf(receipt()!) as unknown as { ask: { quote: unknown; next: unknown }; divisionId: string; viewerPlan: string; buy: unknown; buyMoreHref: string; onPay(b: unknown): Promise<void>; failureWords(code: string): string | null; onClose(): void };
+    return { ui, block, receipt, receiptProps };
+  };
+  const openAndAskToPay = async (m: ReturnType<typeof mount>) => {
+    m.block().on.ask();
+    m.block().on.open();
+    net.calls[0]!.reject(unpaid());
+    await flush();
+  };
+
+  it("the empty case first: no receipt until an open is answered unpaid, and the press is the ordinary open", () => {
+    const m = mount();
+    expect(m.receipt()).toBeUndefined();
+    m.block().on.ask();
+    expect(m.receipt(), "a confirmation is not a receipt").toBeUndefined();
+    m.block().on.open();
+    expect(net.calls.map((c) => [c.url, c.json])).toEqual([["/api/v1/stages/stage-1/open-round", { roundNo: 3 }]]);
+  });
+
+  it("the 402 stands the receipt up with the server's quote, the ROW's division, the plan, the currency and the credits page; no notice, nothing refreshed", async () => {
+    const onChanged = vi.fn();
+    const m = mount({ onChanged });
+    await openAndAskToPay(m);
+    expect(m.receiptProps()).toMatchObject({
+      ask: { quote: QUOTE, next: null },
+      divisionId: "div-chess",
+      viewerPlan: "pro",
+      buy: { orgId: "org-1", currency: "eur" },
+      buyMoreHref: "/o/club/settings/credits?kind=stream",
+    });
+    expect(m.block().state.notice, "an unpaid answer is not a failure").toBeNull();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("with no currency from the page the chooser is the credits link (buy null), never a chooser that would charge in a guessed currency", async () => {
+    const m = mount({ ctx: { ...paidCtx, currency: undefined } as MatchDayCtx });
+    await openAndAskToPay(m);
+    expect(m.receiptProps().buy).toBeNull();
+    net.calls.length = 0;
+    const noOrg = mount({ ctx: { ...paidCtx, orgId: undefined } as MatchDayCtx });
+    await openAndAskToPay(noOrg);
+    expect(noOrg.receiptProps().buy).toBeNull();
+  });
+
+  it("the receipt's confirm is the open AGAIN with the pay body; the answer closes the receipt and the notice names the payment ONLY because it was applied", async () => {
+    const onChanged = vi.fn();
+    const m = mount({ onChanged });
+    await openAndAskToPay(m);
+    const body = { size: 64, expectedOwed: 8 };
+    const done = m.receiptProps().onPay(body);
+    expect(net.calls[1]!.json).toEqual({ roundNo: 3, pay: body });
+    const applied: OpenRoundResult = { opened: true, invited: 6, retrying: 0, skipped: [], payment: { applied: true, credits: 8, size: 64, capacityLoweredTo: null } };
+    net.calls[1]!.resolve(applied);
+    await done;
+    await flush();
+    expect(m.receipt(), "answered: the receipt is gone").toBeUndefined();
+    const notice = m.block().state.notice!;
+    expect(notice).toEqual({ kind: "answered", result: applied });
+    const lines = openNoticeText(notice as never, VIEW(), ((k: string, v?: Record<string, string | number>) => t(k, v)) as never, ((k: string, n: number, v?: Record<string, string | number>) => pl(k, n, v)) as never);
+    expect(lines[0]).toBe(pl("onlineChess.openRound.paid", 8, { round: 3 }));
+    expect(onChanged, "the day is re-read once").toHaveBeenCalledTimes(1);
+  });
+
+  it("a round that still does not open after the pay shows the round's OWN reason and no payment line (the pay is not claimed)", async () => {
+    const m = mount();
+    await openAndAskToPay(m);
+    const done = m.receiptProps().onPay({ size: 64, expectedOwed: 8 });
+    net.calls[1]!.resolve({ opened: false, reason: "not_paired" } satisfies OpenRoundResult);
+    await done;
+    await flush();
+    expect(m.receipt()).toBeUndefined();
+    const lines = openNoticeText(m.block().state.notice as never, VIEW(), ((k: string, v?: Record<string, string | number>) => t(k, v)) as never, ((k: string, n: number, v?: Record<string, string | number>) => pl(k, n, v)) as never);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/Paid/);
+  });
+
+  it("the receipt's failure words ARE the round's own: every refusal the open door names reads as the run sheet's notice for it, and no answer or another code reads none (m2, spec 8.5)", async () => {
+    const m = mount();
+    await openAndAskToPay(m);
+    const words = m.receiptProps().failureWords;
+    const NAMED: [string, string][] = [
+      ["PAYMENT_REQUIRED", "runsheet.round.err.frozen"],
+      ["ONLINE_CHESS_DISABLED", "runsheet.round.err.disabled"],
+      ["ROUND_CHANGED", "runsheet.round.err.roundChanged"],
+      ["ROUND_NOT_ONLINE", "runsheet.round.err.notOnline"],
+    ];
+    let checked = 0;
+    for (const [code, key] of NAMED) {
+      expect(words(code), code).toBe(t(key));
+      expect(openNoticeText({ kind: "failed", code } as never, VIEW(), ((k: string, v?: Record<string, string | number>) => t(k, v)) as never, ((k: string, n: number, v?: Record<string, string | number>) => pl(k, n, v)) as never), `${code}: the same sentence the run sheet says`).toEqual([t(key)]);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(words("UNKNOWN")).toBeNull();
+    expect(words("INTERNAL")).toBeNull();
+  });
+
+  it("a refused pay (409 changed) leaves the receipt standing for it to redraw: it rejects to the receipt, no notice, no refresh; the next confirm is sent", async () => {
+    const onChanged = vi.fn();
+    const m = mount({ onChanged });
+    await openAndAskToPay(m);
+    const changed = new ApiV1Error("Changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: QUOTE } as unknown as Record<string, unknown>);
+    const first = m.receiptProps().onPay({ size: 64, expectedOwed: 8 });
+    net.calls[1]!.reject(changed);
+    await expect(first).rejects.toBe(changed);
+    await flush();
+    expect(m.receipt(), "still standing").toBeDefined();
+    expect(m.block().state.notice).toBeNull();
+    expect(onChanged).not.toHaveBeenCalled();
+    void m.receiptProps().onPay({ size: 64, expectedOwed: 7 });
+    expect(net.calls[2]!.json).toEqual({ roundNo: 3, pay: { size: 64, expectedOwed: 7 } });
+  });
+
+  it("Close takes the receipt away and sends nothing; the same open can be pressed again and asks again", async () => {
+    const m = mount();
+    await openAndAskToPay(m);
+    m.receiptProps().onClose();
+    expect(m.receipt()).toBeUndefined();
+    expect(net.calls, "nothing since the open").toHaveLength(1);
+    m.block().on.ask();
+    m.block().on.open();
+    expect(net.calls).toHaveLength(2);
+    net.calls[1]!.reject(unpaid());
+    await flush();
+    expect(m.receipt()).toBeDefined();
+  });
+
+  it("the round on screen changing takes the receipt with it: a receipt for round 3 is never confirmed for round 4", async () => {
+    const m = mount();
+    await openAndAskToPay(m);
+    m.ui.rerender(props(paired("stage-1:4", VIEW({ roundNo: 4 }), { round_no: 4 }), { ctx: paidCtx }));
+    expect(m.receipt()).toBeUndefined();
+  });
+});
+

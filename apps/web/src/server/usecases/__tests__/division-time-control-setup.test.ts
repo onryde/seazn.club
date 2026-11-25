@@ -317,6 +317,9 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     const { auth, divisionId } = await lockedPreGateDivision(TWENTY_PLUS_ZERO);
     // PRE-GATE LEGACY DATA, continued: the same division saved over the board.
     await sql`update divisions set config = config - 'onlinePlay' where id = ${divisionId}`;
+    // The fixture's stage is a league, which Online Chess does not run (422 ONLINE_FORMAT_NOT_SUPPORTED answers first, Task 8);
+    // this test is about the CLOCK arm, so the stage is a knockout, a format online play takes.
+    await sql`update stages set kind = 'knockout' where division_id = ${divisionId}`;
     const before = (await getDivision(auth, divisionId)).config as Record<string, unknown>;
     expect(before.onlinePlay, "premise: online play is off (absent)").toBeUndefined();
     expect(

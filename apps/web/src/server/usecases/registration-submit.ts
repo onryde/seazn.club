@@ -62,7 +62,7 @@ import {
   type EligibilityIssue,
 } from "./registration-eligibility";
 import { divisionPlaysOnline, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { countOnlineHeld, effectiveEntrantCap, lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
+import { countOnlineHeld, effectiveEntrantCap, lockDivisionForCap, sizeForDoor } from "@/server/external-play/online-entrant-cap";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
@@ -939,8 +939,12 @@ export async function submitRegistrationGroup(
         // above, with this cart's own earlier entries already in. Past it the entry waits, exactly as it does past the plan's limit.
         // Whatever the plan: a plan below the online cap (a size pack's 96) judges the SAME count against ITS limit, so direct adds
         // and sign-ups share one allowance (re-review N2); `hardCap` above is the registrations-only count.
+        // The size the organiser bought is a third line (spec §5.2, §7.6): min(plan limit, size, 256), the size read here under the same
+        // lock. A full size waits on the ORDINARY waitlist - the registrant is never told about a size, a plan or a credit.
         if (!waitlisted && onlineDivisionIds.has(p.input.division_id)) {
-          waitlisted = (await countOnlineHeld(tx, p.input.division_id)) >= effectiveEntrantCap(true, planLimit)!;
+          waitlisted =
+            (await countOnlineHeld(tx, p.input.division_id)) >=
+            effectiveEntrantCap(true, planLimit, await sizeForDoor(tx, p.input.division_id))!;
         }
       }
       // On a TEAM division `fee_cents` is the price of a team. Someone

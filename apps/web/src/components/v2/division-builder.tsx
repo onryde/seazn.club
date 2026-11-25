@@ -53,6 +53,10 @@ import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy"
 import { rulesChipText } from "@/lib/rules-line";
 import { selectedTimeControlKey, timeControlOptions } from "@/lib/online-time-control";
 import { onlinePlayShown } from "@/lib/online-chess";
+import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
+import { onlineRefusedKind } from "@/lib/online-format-refusal";
+import { onlineSizeChoice, swissRoundsOf } from "@/lib/online-size-options";
+import { ONLINE_MAX_ROUNDS } from "@/lib/online-package-refusal";
 // RS007/V380: the builder and the registration hub config panel edit the SAME first-class `category` column; the value
 // union is imported rather than redeclared so the two screens can never drift onto two different "valid category" lists.
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
@@ -112,7 +116,7 @@ function unitPhrases(text: string): ReactNode {
   ));
 }
 /** The receipt rows the division POST already saved (I1): read-only once the division exists. */
-const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks"];
+const SAVED_WITH_DIVISION: readonly string[] = ["who", "rules", "points", "tiebreaks", "online"];
 
 /** Who plays and Division rules, once saved: what they show is what the division holds, and where to change it. */
 export function SavedNote({ name }: { name: string }) {
@@ -305,6 +309,7 @@ export function DivisionBuilder({
   viewerPlan,
   onlineChessOffered = false,
   inheritedCameraPolicy = "off",
+  onlinePackage,
   ruleDict,
   pointsDict,
   templateLocks = {},
@@ -332,6 +337,11 @@ export function DivisionBuilder({
   /** The competition's camera policy (`competitionCameraPolicy`): what a division that sets none plays, named under the
    *  camera select. The column is NOT NULL, default "off". */
   inheritedCameraPolicy?: CameraPolicy;
+  /** Online Chess credits (spec 2026-11-23 §8.1), read by the page for a club offered Online Chess: the plan's per-division cap, what
+   *  the club holds (net of what its other drafts and unpaid packages will need), and where to buy more. Absent: the strip draws no
+   *  size select, but a Create still sends the size that covers the drafted rounds (a division is never made online with a size
+   *  its own stages would be refused on). */
+  onlinePackage?: { planCap: number | null; balance: number; buyMoreHref: string };
   /** The public dictionary's `format.*` / `format.points.*` slices, for the rules' words (the strip and the receipt). */
   ruleDict?: Dict;
   pointsDict?: Dict;
@@ -420,6 +430,8 @@ export function DivisionBuilder({
   const [variantKey, setVariantKey] = useState(sport ? pickVariant(sport.key, sport.variants) : "");
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
   const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">("off");
+  // Online Chess size: the organiser's pick (null untouched - the size then follows the drafted rounds, `onlineSizeChoice`).
+  const [onlineSizePicked, setOnlineSizePicked] = useState<OnlineSize | null>(null);
   // m6 (C9 fix round 1): the server's default - absent ⇒ NULL ⇒ the competition's policy (CreateDivision.camera_policy).
   const [cameraChoice, setCameraChoice] = useState<CameraChoice>(CAMERA_INHERIT);
   const [pointsValues, setPointsValues] = useState<Record<string, string> | null>(null);
@@ -475,6 +487,7 @@ export function DivisionBuilder({
     setPointsValues(null);
     setTiebreakOrder(null);
     setOnlinePlay("off");
+    setOnlineSizePicked(null);
     setCameraChoice(CAMERA_INHERIT);
     // A kind the organiser never picked follows the sport; a picked one is kept where the new sport allows it.
     const nextKind = next?.entrants && entrantKind !== null ? entrantKindAfterSportChange(entrantKind, entrantKindTouched, next.entrants) : (next?.entrants?.defaultKind ?? null);
@@ -540,6 +553,17 @@ export function DivisionBuilder({
   const onlineShown = onlinePlayShown(sportKey, onlineChessOffered);
   const lichess = onlineShown && onlinePlay === "lichess";
   const timeControlKey = lichess ? selectedTimeControlKey(ruleValues, builderCfg) : "";
+  // --- Online Chess credits (§8.1, §8.2): the facts the size select is drawn from and the size Create sends. A draft holds no
+  // entrants yet, so no places are held; the rounds are the drafted Swiss stages' own (`formatStagesFor` stamps them); the camera
+  // is the division's effective policy (its own pick, else the competition's). Nothing is spent here.
+  const draftRounds = swissRoundsOf(stagesNow);
+  const draftStageKinds = stagesNow.map((s) => s.kind);
+  const draftCameras = (cameraChoice === CAMERA_INHERIT ? inheritedCameraPolicy : cameraChoice) !== "off";
+  const onlineSize = lichess
+    ? onlineSizeChoice({ planCap: onlinePackage?.planCap ?? null, held: 0, rounds: draftRounds, cameras: draftCameras, paid: null, picked: onlineSizePicked, locked: null })
+    : null;
+  const onlinePrice = onlineSize === null ? 0 : packagePrice(onlineSize, draftCameras);
+  const onlineFormatRefused = lichess && onlineRefusedKind(draftStageKinds) !== null;
   // m8 (C9 fix round 1): an online division plays its Lichess control, so its slot is that control's length (both clocks
   // spent) - until the organiser types a length, which always stands. The seed, the estimates and Review all read this.
   const matchMinutes = (!matchMinutesTouched ? timeControlMatchMinutes(timeControlKey) : undefined) ?? sportMatchMinutes;
@@ -596,6 +620,9 @@ export function DivisionBuilder({
       // N1: a format the division's kinds cannot play (a stale pick that outlived a change of kind) never passes.
       if (!divisionPlaysTemplate(template, divisionKinds)) return msg("divBuilder.err.formatKind", { format: templateLabel(template) });
       if (carryLocked) return msg("divBuilder.err.carryLocked");
+      // Online Chess runs Swiss and knockout events: a division that plays online cannot be made with another format (the stage door
+      // would refuse it AFTER the division exists, leaving an online division with no stages).
+      if (onlineFormatRefused) return msg("onlineChess.format.stripLine");
     }
     if (s === "rules") {
       if (!variantKey) return msg("wizard.err.variant");
@@ -604,6 +631,9 @@ export function DivisionBuilder({
       if (ruleProblem !== null) return ruleProblem;
       // Lichess plays only its eight controls; the create refuses any other clock (assertTimeControl).
       if (lichess && timeControlKey === "") return msg("divBuilder.err.timeControl");
+      // The Swiss rounds no size includes (§8.2). The refused FORMAT is the Format step's: it precedes this step, so a jump or Next
+      // that would pass it lands there, naming the refusal.
+      if (lichess && draftRounds > ONLINE_MAX_ROUNDS) return msg("onlineChess.roundsAboveMax", { max: ONLINE_MAX_ROUNDS });
       if (!(matchMinutes >= 1)) return msg("wizard.err.matchLength");
       // `endDateIsBackwards` and the end input's `min=` are one expression (`startDay`), so the input cannot permit what
       // this then rejects. The seed PUT is non-fatal and swallows a refusal, so this is the only message there would be.
@@ -728,6 +758,9 @@ export function DivisionBuilder({
             ...(sentOrder === null ? {} : { tiebreakers: sentOrder }),
             // m6: only an online division, and only a picked policy - untouched, the server's default (inherit) stands.
             ...(lichess && cameraChoice !== CAMERA_INHERIT ? { camera_policy: cameraChoice } : {}),
+            // Online Chess credits: the size the select shows (the default covers the drafted Swiss rounds), so the stages sent next are
+            // never refused for rounds the size does not include. Nothing is paid here: the package is paid before the first Online Chess round.
+            ...(onlineSize !== null ? { online_size: onlineSize } : {}),
             ...eligibilityPatch({ maxAge, cutoffMonth, cutoffDay, category, customNote }),
           },
         });
@@ -773,7 +806,8 @@ export function DivisionBuilder({
         } else if (err instanceof ApiV1Error && err.code === SWISS_ROUNDS_REQUIRED_CODE) {
           text = msg("stage.err.swissRoundsRequired");
         } else {
-          // Every other refusal says itself in the reader's language off its code and issues.
+          // Every other refusal says itself in the reader's language off its code and issues - the Online Chess package doors' four
+          // (format, rounds need a size, rounds above the most, camera not paid for) included: `settingsSaveErrorText` is their one reader.
           text = settingsSaveErrorText(err, msg, msg("wizard.failed"));
         }
         setStep(at);
@@ -857,6 +891,18 @@ export function DivisionBuilder({
         .join(" · "),
       later: msg("divBuilder.review.later.rules"),
     },
+    // Online Chess credits (§8.1): the size and what it costs, paid before the first Online Chess round - the line says so and the row has no pay control.
+    ...(onlineSize !== null
+      ? [
+          {
+            id: "online",
+            step: "rules" as const,
+            label: msg("onlineChess.review.label"),
+            value: msgPlural("onlineChess.review.value", onlinePrice, { size: onlineSize, count: onlinePrice }),
+            later: msg("divBuilder.review.later.rules"),
+          },
+        ]
+      : []),
     ...(draftTableKinds.length > 0
       ? [
           {
@@ -1204,6 +1250,7 @@ export function DivisionBuilder({
             guidanceEntrants: plan.entrants,
             templateLocks,
             viewerPlan,
+            onlineChess: lichess,
           })}
 
           <div className="flex flex-wrap items-center gap-3">
@@ -1303,6 +1350,20 @@ export function DivisionBuilder({
               setPointsValues,
               order: tiebreakOrder,
               setOrder: setTiebreakOrder,
+              onlinePackage:
+                onlinePackage === undefined
+                  ? undefined
+                  : {
+                      planCap: onlinePackage.planCap,
+                      held: 0,
+                      rounds: draftRounds,
+                      cameras: draftCameras,
+                      balance: onlinePackage.balance,
+                      buyMoreHref: onlinePackage.buyMoreHref,
+                      stageKinds: draftStageKinds,
+                      size: onlineSizePicked,
+                      setSize: setOnlineSizePicked,
+                    },
               cameraControl: (
                 <div>
                   <label className="block">

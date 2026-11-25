@@ -20,7 +20,8 @@ import { STREAM_HISTORY_CSV_HEADER } from "../src/server/usecases/stream-credit-
 // it runs with --no-deps.
 //
 // The Streaming side is walked two ways: with a realistic ledger (every row kind, a long entrant name, past one page, the
-// export, the buy tiles opening the checkout), and for an org whose plan does not stream (the empty state). Each at 1280,
+// export, the buy tiles opening the checkout), and for an org whose phone streaming is off but who is offered Online Chess (the tab
+// on, the month granted). Each at 1280,
 // 768 and 320 (the ledger also at 1024, where the table starts) with no horizontal page scroll — the ledger and the pack tiles are exactly where a long name or a 3-up grid
 // would push the page wider.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -458,40 +459,61 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Streaming side — a plan that does not stream: the empty state
+// Streaming side — an org that does not stream but is offered Online Chess: the Seazn credits are still its to hold and buy
 // ---------------------------------------------------------------------------------------------------------------------
+//
+// Spec 2026-11-23 §7.6: the Seazn credits are one pool, bought on this tab or from a division, so a club whose phone streaming is
+// off but to whom Online Chess is offered gets the tab ON — the month's included credits granted, the packs for sale. EVERY e2e
+// server runs ONLINE_CHESS_ALWAYS=1 (e2e.yml), so the flag is on here and the REFUSAL ("this plan does not include streaming",
+// `settings.credits.stream.notIncluded`: neither streaming nor Online Chess offered) is unreachable from a browser; it is pinned by
+// the unit pair in server/usecases/__tests__/stream-credits-tab.test.ts and stream-credits-rail-projection.test.ts, which stub the
+// flag off. This test was the refusal's browser witness until the flag existed; asserting it here would be red on every push to main.
 
-test("Credits tab, Streaming side: a plan without phone streaming shows the reason and an empty history — no page scroll at 1280, 768 and 320", async ({ page }) => {
-  test.setTimeout(budget({ seeds: 0, navs: 6, acts: 12 }));
+test("Credits tab, Streaming side: streaming switched off but Online Chess offered — the tab is on, the month is granted, the packs are for sale; no page scroll at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ seeds: 0, navs: 6, acts: 24 }));
 
   const email = `delivered+credits-stream-${Date.now()}@resend.dev`;
   await loginUi(page, email, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", { name: `Credits Stream Off ${Date.now()}` });
   await apiJson(page.request, "/api/orgs/active", "POST", { org_id: created.data!.id });
   const org = await activeOrg(page);
-  // Switch the relay off for this org (a staff override — the only way the gate is reachable). That read then grants nothing
-  // and writes no row, so the history is genuinely empty.
+  // Switch the relay off for this org (a staff override — the only way streaming's own gate is reachable). The tab is on anyway:
+  // Online Chess is offered to every org on this server.
   await setBoolEntitlementOverrideSql(org.id, "streaming.relay", false);
   await invalidateOrgEntitlements(page.request, org.id);
 
+  let granted = -1;
   for (const width of [1280, 768, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await open(page, `/o/${org.slug}/settings/credits?kind=stream`);
-    await expect(page.getByTestId("credits-stream-balance")).toHaveText(credits(0));
-    await expect(page.getByTestId("credits-stream-notice")).toHaveText(en("settings.credits.stream.notIncluded"));
-    await expect(page.getByTestId("credits-stream-empty")).toHaveText(en("settings.credits.stream.empty"));
-    // Nothing to buy, nothing to export, no free meter, no table, no pager.
-    for (const pack of STREAM_CREDIT_PACKS) await expect(page.getByTestId(`credits-stream-buy-pack-${pack.size}`)).toHaveCount(0);
-    await expect(page.getByTestId("credits-stream-export")).toHaveCount(0);
-    await expect(page.getByTestId("credits-stream-free-used")).toHaveCount(0);
-    await expect(page.getByTestId("credits-stream-history")).toHaveCount(0);
-    await expect(page.getByTestId("credits-stream-pager")).toHaveCount(0);
-    await expectNoPageScroll(page, `Streaming side, empty, at ${width}`);
-    if (width === 320) await expectNoSeriousAxe(page, "on the empty Streaming side at 320");
-    await shot(page, `stream-empty-${width}`);
-  }
+    await expect(page.getByTestId("credits-stream-history"), "the tab is on: its history is a table, not the empty state").toBeVisible({ timeout: NAV_MS });
 
-  // The read wrote nothing: an org that cannot stream is not granted free credits by looking at the page.
-  const [count] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${org.id}`);
-  expect(count!.n).toBe(0);
+    // What the page's own read did to the ledger, read from the table (the screen is asserted against the ledger, not itself):
+    // the month's included credits, granted ONCE — a second and third visit write nothing more.
+    const ledger = await withDb((sql) => sql<{ reason: string; bucket: string; delta: number }[]>`
+      select reason, bucket, delta from org_stream_credits where org_id = ${org.id}`);
+    expect(ledger.length, `one row after the visit at ${width}: the month's grant, once`).toBe(1);
+    expect(ledger[0], "a monthly grant").toMatchObject({ reason: "grant", bucket: "monthly" });
+    expect(ledger[0]!.delta, "the plan includes some credits (the grant is never a zero row)").toBeGreaterThan(0);
+    if (granted === -1) granted = ledger[0]!.delta;
+    expect(ledger[0]!.delta, "the same grant at every width").toBe(granted);
+
+    await expect(page.getByTestId("credits-stream-balance")).toHaveText(credits(granted));
+    // The Settings rail's header (desktop only) prints the same number: its projection asks the same offer question as the tab.
+    if (width === 1280) await expect(page.getByTestId("settings-nav-stream-credits")).toHaveText(en("settings.nav.streamCreditsLeft", { count: granted }));
+    await expect(page.getByTestId("credits-stream-free-used"), "the free meter: none used").toHaveText(en("settings.credits.stream.freeUsed", { used: 0, cap: granted }));
+    // No refusal notice and no empty state; the packs are for sale and tappable; the one row is the grant, and it can be exported.
+    await expect(page.getByTestId("credits-stream-notice"), "no 'not included' notice: Online Chess is offered").toHaveCount(0);
+    await expect(page.getByTestId("credits-stream-empty")).toHaveCount(0);
+    for (const pack of STREAM_CREDIT_PACKS) await expect(page.getByTestId(`credits-stream-buy-pack-${pack.size}`)).toBeEnabled();
+    const rows = page.getByTestId("credits-stream-row");
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveAttribute("data-kind", "monthlyGrant");
+    await expect(page.getByTestId("credits-stream-export")).toHaveCount(1);
+    await expect(page.getByTestId("credits-stream-pager")).toHaveCount(0);
+    await expectNoPageScroll(page, `Streaming side, Online Chess only, at ${width}`);
+    if (width === 320) await expectNoSeriousAxe(page, "on the Online-Chess-only Streaming side at 320");
+    await shot(page, `stream-online-only-${width}`);
+  }
+  expect(granted, "anti-vacuity: the grant was read at least once").toBeGreaterThan(0);
 });

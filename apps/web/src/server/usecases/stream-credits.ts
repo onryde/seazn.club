@@ -38,6 +38,7 @@ import { utcMonthStart } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
 import { isPassKey, type PassKey } from "@/lib/currency";
 import { InsufficientCredits, credit, debit, neverLiveRefundCapped, restartIsFree, withinReuseWindow } from "@/server/relay/domain/credits";
+import { markReversal, netPackSpendSince, revokedForIntent } from "@/server/usecases/online-package/reversals";
 import type { FailReason } from "@/server/relay/domain/session";
 import { FREE_RESTARTS_PER_WINDOW, NEVER_LIVE_REFUNDS_PER_WINDOW } from "@/server/relay/config";
 import { sessionsWhoseCameraWasLive } from "@/server/relay/telemetry";
@@ -403,9 +404,12 @@ export interface StreamPackRefundResult {
  * This is ALSO what closes the zero-claw replay hole. A fully-spent pack writes
  * no row (V410's `delta <> 0`), so it mints no idempotency key, and a lost
  * dispute arriving weeks later carries a DIFFERENT Stripe event id that the
- * `billing_events` claim does not stop. `consumedSince` only ever grows, so
- * `outstanding` only ever shrinks: that dispute can never claw more than the
- * refund already did, with no sentinel row and no schema change. The two guards
+ * `billing_events` claim does not stop. The net spend only ever shrinks by a
+ * package return (Online Chess, §7.5), and every return runs the settle step
+ * (online-package/settle.ts) under the same lock, which takes what it freed and
+ * counts it as revoked for the intent; so a later call's `outstanding` is never
+ * more than what the settle step could not take for want of pack credits, and
+ * that dispute can never claw more than the purchase. The two guards
  * cover DIFFERENT hazards and neither stands in for the other — the key is what
  * stops a double-claw after a claw-back that DID write a row (attribution alone
  * would still see the same outstanding), so both are mutated separately.
@@ -425,10 +429,13 @@ export interface StreamPackRefundResult {
  * an org that has since bought a NEW pack has a non-zero balance again, and a
  * replay reaching the cap would revoke the new pack's credits.
  *
- * **Zero claw-back writes NO row.** V410 constrains `delta <> 0`, so there is no
- * row to write when everything was already spent; `matched: true, applied:
- * false, clawedBack: 0` is how the caller tells that apart from "not our
- * charge". It also means a fully-spent claw-back mints no idempotency key —
+ * **Zero claw-back writes NO ledger row** — but it writes the reversal MARKER
+ * (`stream_pack_reversals`, once per intent, every matched call), so a package
+ * refund later settles the credits it frees (§7.5 item 2). V410 constrains
+ * `delta <> 0`, so there is no ledger row to write when everything was already
+ * spent; `matched: true, applied: false, clawedBack: 0` is how the caller tells
+ * that apart from "not our charge" (`clawedBack` is the intent's revoked TOTAL,
+ * settle rows included). It also means a fully-spent claw-back mints no idempotency key —
  * which is safe only because the attribution bound above is independent of the
  * key, and is what the "lost dispute after a refund that clawed NOTHING" test
  * pins.
@@ -457,8 +464,18 @@ export async function recordStreamPackRefund(args: {
 
     await lockOrg(tx, match.orgId);
 
+    // THE REVERSAL MARKER (Online Chess spec §7.5 item 2), on EVERY matched call —
+    // a zero claw-back included — so a package refund later settles what this
+    // call could not take. `on conflict do nothing`: a replayed webhook, or a
+    // dispute after a refund, writes no second row and raises nothing.
+    await markReversal(tx, { intent, orgId: match.orgId, purchased: match.purchased });
+    // Everything already taken back against this intent: this writer's keyed row
+    // and every settle row (online-package/settle.ts). Counted out of what is
+    // outstanding below, and reported as the claw-back's size.
+    const alreadyRevoked = await revokedForIntent(tx, match.orgId, intent);
+
     // THE KEY CHECK — under the lock, ahead of the cap (staffRow's order). It
-    // reports the EARLIER claw-back's size rather than zero, so the caller's
+    // reports what has been taken back IN TOTAL rather than zero, so the caller's
     // `clawedBack < purchased` alert decision is a function of ledger STATE and
     // not of call history: a redelivery must reach the same verdict as the
     // first delivery. (A deliberate departure from the donor, whose caller does
@@ -466,7 +483,7 @@ export async function recordStreamPackRefund(args: {
     const [prior] = await tx<{ delta: number }[]>`
       select delta from org_stream_credits where idempotency_key = ${key}`;
     if (prior) {
-      return { matched: true, clawedBack: -prior.delta, purchased: match.purchased, orgId: match.orgId, applied: false };
+      return { matched: true, clawedBack: alreadyRevoked, purchased: match.purchased, orgId: match.orgId, applied: false };
     }
 
     // V426: a claw-back takes back BOUGHT credits, so it is a PACK debit — read, attributed, capped
@@ -500,21 +517,23 @@ export async function recordStreamPackRefund(args: {
     // not spend this purchase, and counting it would shield a refunded pack
     // from its own claw-back (buy 3, stream 3 on the monthly allowance, refund:
     // every-consume attribution claws back 0 and the customer keeps both).
-    const [spent] = await tx<{ consumed: number }[]>`
-      select coalesce(-sum(delta), 0)::int as consumed from org_stream_credits
-       where org_id = ${match.orgId} and reason = 'consume' and bucket = 'pack'
-         and created_at >= ${match.purchasedAt}`;
+    //
+    // Online Chess (spec §7.5 item 1): NET of the package returns of those
+    // credits. A package refunded or moved down is not spent, so its returned
+    // credits are taken back, whichever came first, the card refund or the
+    // package refund (`netPackSpendSince`, online-package/reversals.ts).
+    const spent = await netPackSpendSince(tx, match.orgId, match.purchasedAt);
     // May go NEGATIVE when later packs' credits were also spent (consumedSince
     // counts every pack consume after this purchase, not just this pack's). The
     // `clawback <= 0` guard below is the single place that answers that, so
     // there is no second clamp here to cover for it.
-    const outstanding = match.purchased - spent!.consumed;
+    const outstanding = match.purchased - spent - alreadyRevoked;
     // Capped by the PACK, not the total: a staff revoke (also pack) lowers the
     // pack without a consume, and a total cap would then reach into the monthly
     // credits and drive the pack negative behind a non-negative balance_after.
     const clawback = Math.min(outstanding, pack);
     if (clawback <= 0) {
-      return { matched: true, clawedBack: 0, purchased: match.purchased, orgId: match.orgId, applied: false };
+      return { matched: true, clawedBack: alreadyRevoked, purchased: match.purchased, orgId: match.orgId, applied: false };
     }
     // FS10 in memory before the row, as every other writer here does — against
     // the PACK, which is the floor that matters; the balance_after CHECK is the
@@ -529,7 +548,7 @@ export async function recordStreamPackRefund(args: {
       values (${match.orgId}, ${-clawback}, 'revoke', 'pack', ${balanceAfter},
               ${`Stripe claw-back — ${CLAWBACK_CAUSE[args.via]} ${args.reference}, payment intent ${intent}`},
               ${intent}, ${key})`;
-    return { matched: true, clawedBack: clawback, purchased: match.purchased, orgId: match.orgId, applied: true };
+    return { matched: true, clawedBack: alreadyRevoked + clawback, purchased: match.purchased, orgId: match.orgId, applied: true };
   }) as Promise<StreamPackRefundResult>;
 }
 
@@ -973,6 +992,22 @@ export async function projectMonthlyRollDelta(exec: Executor, orgId: string, rat
   if (plan.kind === "none") return 0;
   if (plan.kind === "topUp") return plan.topUp;
   return plan.grant - plan.expire;
+}
+
+/** The rollover for a caller that ALREADY runs its own money transaction, UNDER the org's money lock (`lockOrg`, which
+ *  the caller took), and must not open a second one — `rollMonthlyLocked`'s own contract, exported. Its one caller is
+ *  the Online Chess package debit (online-package/ledger.ts `debitForPackage`, spec 2026-11-23 §7.4 — "the monthly
+ *  rollover runs under the money lock before the balance is read, as consumeForSession does"), which takes the lock as
+ *  its first statement; that ONE take is the lock, so mutating it away is visible to that module's lock tests. The body
+ *  is unchanged: `rate` is the org's resolved plan rate, a POOLED read the caller makes before its transaction
+ *  (`streamMonthlyRate`; lib/db.ts refuses one nested inside). `now` picks the UTC month and is the DATABASE's clock —
+ *  the transaction's own `now()`, the instant every ledger row it writes is dated by — never a JS Date, so the month a
+ *  package is debited in and the month its rows are dated in cannot disagree. Unlike consumeForSession it does NOT
+ *  swallow a failed rollover in a savepoint: a refusal (`ledger_negative`, `monthly_rate_invalid`) reaches the caller,
+ *  whose transaction it rolls back. The stream writers keep their own path (`consumeForSession` and
+ *  `grantMonthlyStreamCredits` call `rollMonthlyLocked` with their wall clock, unchanged). */
+export async function rollMonthlyUnderLock(tx: Tx, orgId: string, rate: number, now: Date): Promise<void> {
+  await rollMonthlyLocked(tx, orgId, rate, now);
 }
 
 async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date): Promise<number> {

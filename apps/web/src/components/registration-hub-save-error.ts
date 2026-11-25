@@ -17,6 +17,7 @@ import type { ApiV1Error } from "@/lib/client-v1";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { ENTRANT_KIND_NOT_ALLOWED } from "@/lib/division-entrant-kinds";
 import { ONLINE_DIVISION_FULL } from "@/lib/online-chess";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 
 /** Every field this panel writes, across both endpoints. */
 export type ConfigFieldKey =
@@ -78,6 +79,8 @@ export interface SaveErrorInfo {
   /** The server's stable code, when the refusal is one the panel localises
    *  itself (the server's `message` is English-only). */
   code?: string;
+  /** The refusal's own numbers, kept for a code whose sentence names them (ONLINE_SIZE_FULL: `size` and `nextSize`). */
+  extra?: Record<string, unknown>;
 }
 
 interface ZodIssueLike {
@@ -97,7 +100,7 @@ const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   // (usecases/divisions.ts), which compares the patch against the STORED row
   // and throws its own 422. That merge-check is the only REACHABLE producer of
   // this sentence at 422 — not the only producer in the code.
-  // `isAgeCutoffCheckViolation` (usecases/divisions.ts:914) raises the same
+  // `isAgeCutoffCheckViolation` (usecases/divisions/patch.ts:168) raises the same
   // AGE_CUTOFF_BOTH_OR_NEITHER string, but only for a RANGE violation of
   // divisions_age_cutoff_check, and PatchDivision's own `.min`/`.max` bound
   // every half before one can be sent, so nothing reaches it over /api/v1
@@ -133,6 +136,11 @@ export function mapSaveError(err: unknown): SaveErrorInfo {
   // A capacity above what an online chess division holds (256, on every plan): it belongs against the capacity field.
   if ((err as Partial<ApiV1Error>)?.code === ONLINE_DIVISION_FULL) {
     return { field: "capacity", message, code: ONLINE_DIVISION_FULL };
+  }
+  // A capacity above the SIZE the organiser paid for (Online Chess credits, spec §7.6): the same field, one line lower. The code and the
+  // refusal's numbers (`size`, `nextSize`) are kept, because the sentence names them and the server's own words are English-only.
+  if ((err as Partial<ApiV1Error>)?.code === ONLINE_PACKAGE_CODES.sizeFull) {
+    return { field: "capacity", message, code: ONLINE_PACKAGE_CODES.sizeFull, extra: (err as Partial<ApiV1Error>).extra };
   }
   // FU1: a kind outside the division's Entrant kinds (a stale page, or kinds narrowed while the panel was open).
   if ((err as Partial<ApiV1Error>)?.code === ENTRANT_KIND_NOT_ALLOWED) {

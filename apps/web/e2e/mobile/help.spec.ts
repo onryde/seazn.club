@@ -27,7 +27,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const LONG = "/help/registration/card-payments";
 /** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6); read from the posts. */
 const WITH_POSTS = helpPageWithPosts();
-const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
+/** The two Online Chess credits pages (content/help/sports/chess.md: a table of sizes and prices, wide pictures; content/help/billing/match-credits.md). */
+const ONLINE_CHESS = ["/help/sports/chess", "/help/billing/match-credits"] as const;
+const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS, ...ONLINE_CHESS] as const;
 
 /**
  * axe's serious and critical findings, none excused. A prose code block and a prose table both scroll sideways, and

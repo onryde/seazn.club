@@ -414,7 +414,7 @@ describe("seatOutcome - the seat's answer, read from row STATUS (R6, R11)", () =
 describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", () => {
   it("one chess_invite row per recipient per claimed seat: ref fixture_seat/<id>:<colour>, the board's own deadline, the stamp in meta", async () => {
     const r = await seedOnlineChessRoundWithRankedBoard({ roundNo: 1, cameraPolicy: "required" }, 2 * CHECKIN_BATCH_SIZE);
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
 
     let checked = 0;
     for (const [b, rank] of [[r.boards[0]!, 0], [r.ranked, 2 * CHECKIN_BATCH_SIZE]] as const) {
@@ -465,7 +465,7 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
     await addMember(r, b.home.entrantId, mate);
     mail.fail.add(mate); // the second member's address is refused for good
 
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const homeColour = await colourOf(b.fixtureId, b.home.email);
     const seat = await rowsForSeat(b.fixtureId, homeColour);
     expect(seat.map((x) => x.recipient).sort(), "both members of the seat have a row").toEqual([b.home.email, mate].sort());
@@ -485,7 +485,7 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
     expect(shouted, "premise: a different string for the same mailbox").not.toBe(b.home.email);
     await addMember(r, b.home.entrantId, shouted);
 
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const homeColour = await colourOf(b.fixtureId, b.home.email);
     const seat = await rowsForSeat(b.fixtureId, homeColour);
     expect(seat, "one row for the mailbox, not two").toHaveLength(1);
@@ -502,7 +502,7 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
       insert into persons (org_id, full_name, user_id, lane) values (${r.orgId}, 'Same login', ${u!.id}, 'official') returning id`;
     await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${b.home.entrantId}, ${p!.id}, ${r.orgId})`;
 
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const homeColour = await colourOf(b.fixtureId, b.home.email);
     expect(await rowsForSeat(b.fixtureId, homeColour), "one row for the address, not two").toHaveLength(1);
     expect(mail.sent.filter((m) => m.to === b.home.email), "one email delivered to it").toHaveLength(1);
@@ -517,6 +517,7 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
       invited: 1,
       retrying: 0,
       skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     const rows = await rowsOf(b.fixtureId);
     expect(rows.map((x) => x.recipient), "the away seat only").toEqual([b.away.email]);
@@ -540,6 +541,7 @@ describe.skipIf(!HAS_DB)("openRound writes the invite rows beside the stamps", (
         invited: 0,
         retrying: 0,
         skipped: r.boards.map((b) => ({ fixtureId: b.fixtureId, reason: "send_failed" })).sort(byId),
+        payment: null,
       });
       let checked = 0;
       for (const b of r.boards) {
@@ -580,6 +582,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       invited: seats - 1 - 1,
       retrying: 1,
       skipped: [{ fixtureId: refused.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
 
     // the untouched board is the positive control: one sent row per seat, both seats stamped.
@@ -613,7 +616,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
     mail.throws.add(b.away.email);
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [], payment: null });
     const colour = await colourOf(b.fixtureId, b.away.email);
     expect((await rowsForSeat(b.fixtureId, colour))[0]!.status).toBe("queued");
     expect(stampOf(await bridgeOf(b.fixtureId), colour)).not.toBeNull();
@@ -624,7 +627,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
     const all = r.boards.flatMap((b) => [b.home.email, b.away.email]);
     for (const e of all) mail.rateLimit.add(e); // the provider slows down at the very first request
     const res = await open(r, OPENED);
-    expect(res, "four seats, none sent, none lost").toEqual({ opened: true, invited: 0, retrying: 4, skipped: [] });
+    expect(res, "four seats, none sent, none lost").toEqual({ opened: true, invited: 0, retrying: 4, skipped: [], payment: null });
     const rows = (await Promise.all(r.boards.map((b) => rowsOf(b.fixtureId)))).flat();
     expect(rows).toHaveLength(4);
     expect(rows.every((x) => x.status === "queued")).toBe(true);
@@ -662,6 +665,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       invited: SLOW_SEND,
       retrying: seats - SLOW_SEND,
       skipped: [],
+      payment: null,
     });
     expect(sleeps, "one interval before each attempt but the first, and none after the budget was spent").toEqual(
       Array.from({ length: SLOW_SEND - 1 }, () => MIN_SEND_INTERVAL_MS),
@@ -717,7 +721,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
     mail.afterDeliver = null;
     const rows = await rowsOf(r.boards[0]!.fixtureId);
     expect(rows.map((x) => x.status), "premise: the webhook won the race, so the attempt could not record 'sent'").toEqual(["delivered", "delivered"]);
-    expect(res).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(res).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
   });
 
   it("when the dispatch (or the status read) FAILS after the commit, a seat with rows reads retrying - not failed - and the worker still sends it; a seat with no row reads failed", async () => {
@@ -731,6 +735,7 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       invited: 0,
       retrying: 1,
       skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     expect(pacing.rejectNext, "premise: the failing dispatch was reached").toBeNull();
     const awayColour = await colourOf(b.fixtureId, b.away.email);
@@ -756,13 +761,14 @@ describe.skipIf(!HAS_DB)("the first attempt: accepted, retried later, or refused
       invited: 0,
       retrying: 1,
       skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     const rowsBefore = (await rowsOf(b.fixtureId)).length;
     mail.fail.clear();
     mail.retry.clear();
     mail.sent.length = 0;
     // Only the dead seat is owed: the retrying one is still stamped, and its queued row is the worker's.
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(mail.sent.map((m) => m.to), "exactly one email, to the released seat").toEqual([b.away.email]);
     expect((await rowsOf(b.fixtureId)).length, "one new row, for the released seat only").toBe(rowsBefore + 1);
     expect(await open(r, OPENED)).toEqual({ opened: false, reason: "already_open", skipped: [] });
@@ -798,7 +804,7 @@ describe.skipIf(!HAS_DB)("rollback: nothing is queued that the open did not comm
     expect(await stageRows(r.stageId), "the round was not stamped as opened").toHaveLength(0);
     expect(mail.sent, "and dispatch never ran").toHaveLength(0);
     // Positive pair: with the trigger gone the same open succeeds and queues the rows.
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: SEATS_PER_BOARD, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: SEATS_PER_BOARD, retrying: 0, skipped: [], payment: null });
     expect(await rowsOf(b.fixtureId)).toHaveLength(SEATS_PER_BOARD);
   });
 
@@ -811,7 +817,7 @@ describe.skipIf(!HAS_DB)("rollback: nothing is queued that the open did not comm
     // been written when the seat's savepoint fails.
     mail.renderThrowsOnSecond.add(b.home.email).add(mate);
     const res = await open(r, OPENED);
-    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }] });
+    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }], payment: null });
     const rows = await rowsOf(b.fixtureId);
     expect(rows.map((x) => x.recipient), "no row of the failed seat survived, not even the one written before the throw").toEqual([b.away.email]);
     expect(mail.renderedOfSet, "premise: both recipients of the seat were reached, so one row was written before the throw").toBe(2);
@@ -823,7 +829,7 @@ describe.skipIf(!HAS_DB)("rollback: nothing is queued that the open did not comm
     // The failure is that seat's alone: the next open invites exactly it.
     mail.renderThrowsOnSecond.clear();
     mail.sent.length = 0;
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(mail.sent.map((m) => m.to).sort()).toEqual([b.home.email, mate].sort());
   });
 
@@ -837,12 +843,13 @@ describe.skipIf(!HAS_DB)("rollback: nothing is queued that the open did not comm
       invited: 0,
       retrying: 0,
       skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     expect((await bridgeOf(b.fixtureId)).round_open_id, "nobody was reached: the board is unbound").toBeNull();
     expect(await rowsOf(b.fixtureId)).toHaveLength(0);
     mail.renderThrows.clear();
     const t1 = new Date();
-    expect(await open(r, t1)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, t1)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const [stamp] = await sql<{ opened_at: Date }[]>`select opened_at from stage_round_opens where stage_id = ${r.stageId}`;
     expect(stamp!.opened_at.getTime(), "a fresh window, not the failed open's").toBe(t1.getTime());
   });
@@ -860,7 +867,7 @@ describe.skipIf(!HAS_DB)("the chess hook releases a seat only when every row for
     await addMember(r, b.home.entrantId, mate);
     mail.retry.add(b.home.email).add(mate);
     // The real clock: the worker judges a row's expiry on the database's own time, so the open's window must still be running.
-    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [], payment: null });
     const colour = await colourOf(b.fixtureId, b.home.email);
     const [first, second] = await rowsForSeat(b.fixtureId, colour);
     expect([first!.status, second!.status]).toEqual(["queued", "queued"]);
@@ -1088,7 +1095,7 @@ describe.skipIf(!HAS_DB)("a failure path logs a summary of the error: no address
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
     const res = await refuseRecipient(b.home.email, () => open(r, OPENED));
-    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }] });
+    expect(res).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [{ fixtureId: b.fixtureId, reason: "send_failed" }], payment: null });
     expect(errorCall(/queueing the invite failed; the seat was not stamped/)).toMatchObject({
       fixtureId: b.fixtureId,
       errName: expect.any(String),
@@ -1117,7 +1124,7 @@ describe.skipIf(!HAS_DB)("a failure path logs a summary of the error: no address
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const b = r.boards[0]!;
     pacing.rejectNext = { error: await pgErrorCarrying(b.home.email) };
-    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 0, retrying: SEATS_PER_BOARD, skipped: [] });
+    expect(await open(r, OPENED)).toEqual({ opened: true, invited: 0, retrying: SEATS_PER_BOARD, skipped: [], payment: null });
     expect(errorCall(/sending the queued invites failed/)).toMatchObject({ errName: expect.any(String), errCode: "22012" });
     expectNoSecretsLogged([b.home.email, b.away.email]);
   });

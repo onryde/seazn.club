@@ -17,6 +17,7 @@ import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
+import { paymentNoticeOf } from "@/lib/online-receipt";
 import {
   BILLING_FROZEN_CODE,
   ONLINE_GAME_EXISTS_CODE,
@@ -176,14 +177,19 @@ export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundVie
   );
 }
 
+/** The round's own words for a refused open (409 changed, 402 frozen, 403 off, 422 not online), keyed by the code the door answered - null for a code the round
+ *  does not name (no answer at all, a 500, a package code). The ONE authority for it: the run sheet's notice (`openNoticeText`) and the Match Day pay-and-open
+ *  receipt (spec 2026-11-23-online-chess-credits-design.md §8.5: a round refusal is the round's reason) both read it. */
+export function openFailureWords(code: string, msg: Msg): string | null {
+  if (code === BILLING_FROZEN_CODE) return msg("runsheet.round.err.frozen");
+  if (code === ONLINE_CHESS_DISABLED_CODE) return msg("runsheet.round.err.disabled");
+  if (code === "ROUND_CHANGED") return msg("runsheet.round.err.roundChanged");
+  if (code === "ROUND_NOT_ONLINE") return msg("runsheet.round.err.notOnline");
+  return null;
+}
+
 export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plural: Plural): string[] {
-  if (n.kind === "failed") {
-    if (n.code === BILLING_FROZEN_CODE) return [msg("runsheet.round.err.frozen")];
-    if (n.code === ONLINE_CHESS_DISABLED_CODE) return [msg("runsheet.round.err.disabled")];
-    if (n.code === "ROUND_CHANGED") return [msg("runsheet.round.err.roundChanged")];
-    if (n.code === "ROUND_NOT_ONLINE") return [msg("runsheet.round.err.notOnline")];
-    return [msg("runsheet.round.err.failed")];
-  }
+  if (n.kind === "failed") return [openFailureWords(n.code, msg) ?? msg("runsheet.round.err.failed")];
   const r = n.result;
   if (r.opened === false && r.reason !== "already_open") return [msg(OPEN_ROUND_REFUSAL_KEYS[r.reason] as MessageKey)];
   // An invite still sending is not "0 invited": when the open reached nobody yet but queued some, the count of the invited is left
@@ -196,7 +202,20 @@ export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Ms
     const p = round.pairings.find((x) => x.fixtureId === fixtureId);
     return p ? boardLabel(p, msg) : fixtureId;
   };
+  // Online Chess credits: a line about money is said only when the server says this press applied a payment (`paymentNoticeOf`: never for a
+  // `pay` the package ignored - frozen, or already at that size - and never for a round that did not open).
+  const payment = paymentNoticeOf(r);
+  const paymentLines =
+    payment === null
+      ? []
+      : [
+          payment.kind === "paid"
+            ? plural("onlineChess.openRound.paid", payment.credits, { round: round.roundNo })
+            : msg("onlineChess.openRound.moved", { size: payment.size, round: round.roundNo }),
+          ...(payment.capacityLoweredTo === null ? [] : [msg("onlineChess.openRound.capacityLowered", { size: payment.capacityLoweredTo })]),
+        ];
   return [
+    ...paymentLines,
     ...head,
     ...r.skipped.map((s) =>
       msg("runsheet.round.skipLine", { board: boardOf(s.fixtureId), reason: msg(OPEN_ROUND_SKIP_KEYS[s.reason] as MessageKey) }),

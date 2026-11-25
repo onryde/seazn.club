@@ -11,7 +11,7 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { requireDivisionPage } from "@/server/page-auth";
-import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
+import { divisionPackageRefund, getDivision, listVariantOptions, type DivisionPackageRefund } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import {
@@ -106,6 +106,10 @@ import {
   onlineChessOffered,
 } from "@/server/usecases/external-play";
 import { onlineBoardsOffered } from "@/server/online-boards-offered";
+import { onlinePackageView } from "@/server/usecases/online-package";
+import { onlineReceiptRequest } from "@/lib/online-package-return";
+import { preferredCurrency } from "@/lib/currency-server";
+import type { OnlinePackageStrip } from "@/components/v2/rules/division-rules-strip";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -139,6 +143,7 @@ import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
 import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { formatPublicInstant } from "@/lib/public-date-locale";
+import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
 // v8: editors get a Settings tab (general/format/sharing/danger).
@@ -152,7 +157,9 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string; format?: string; section?: string }>;
+  // `oc`, `checkout`, `session_id` and `size` are the return from buying Seazn credits on this division (the relay-checkout route's
+  // `returnTo: "division"`): the receipt reopens (`oc=pay`, a later task's) and Stripe's session is reconciled below.
+  searchParams: Promise<{ tab?: string; format?: string; section?: string; oc?: string; checkout?: string; session_id?: string; size?: string }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
@@ -169,6 +176,13 @@ export default async function DivisionPage({
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { search: searchOf(query) });
   const { auth, canEdit } = page;
   const id = page.division.id;
+  // Back from Stripe after buying Seazn credits FROM this division (spec 2026-11-23 §7.6, §8.4): reconcile the session BEFORE any
+  // balance is read, so the credits are in the ledger even when this render beats the webhook — exactly as the Settings tab and the
+  // fixture page do on their own returns. Organisers only (the people who may pay a package); best-effort and idempotent (it and the
+  // webhook converge on one ledger row), it never throws, and it grants only a COMPLETE match-credit session that names this org.
+  if (canEdit && query.checkout === "success" && typeof query.session_id === "string" && query.session_id !== "") {
+    await reconcileStreamCreditsCheckout(auth.orgId, query.session_id);
+  }
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
   const division = await getDivision(auth, id);
@@ -732,6 +746,43 @@ export default async function DivisionPage({
     }
   }
 
+  // Online Chess credits (spec 2026-11-23 §8.1, §8.6): what the strip's "Players, up to" select, its price line and the Lichess
+  // option's format refusal are drawn from - ONE server read (the quote's own facts and balance, the live package row, the stage
+  // kinds), asked only where the strip's online play control renders (the SAME gate as `onlineChessOn`), plus the checkout return's
+  // receipt request (`?oc=pay`, with the ladder-only `size` an upgrade named; Task 12 draws the receipt). A courtesy beside the form:
+  // a read that throws is logged and the strip renders without the select (the server still defaults the size), never a 500.
+  let onlinePackage: OnlinePackageStrip | undefined;
+  if (onlineChessOn && tab === "fixtures") {
+    try {
+      // The currency the credits chooser inside the receipt charges in (the relay-checkout route's own `preferredCurrency`), read with the facts.
+      const [view, currency] = await Promise.all([
+        onlinePackageView({ orgId: auth.orgId, competitionId: competition.id, divisionId: id }),
+        preferredCurrency(auth.orgId),
+      ]);
+      onlinePackage = {
+        ...view,
+        buyMoreHref: routes.creditsStream(orgSlug),
+        receipt: onlineReceiptRequest(query),
+        buy: { orgId: auth.orgId, currency },
+      };
+    } catch (err) {
+      log.error({ err, divisionId: id }, "online chess package: reading the size and price facts failed; the strip renders without the size select");
+    }
+  }
+
+  // The danger zone's Online Chess line (spec 2026-11-23 §11; final review m2 + Q7): what a refund of the division's paid, unfrozen
+  // package gives back, read by the refund's own split, and whether a delete would take it. Asked only where the danger zone
+  // renders (the settings tab of an editor's page), never flag-gated (the delete's refund is not). A courtesy beside the buttons: a
+  // read that throws is logged and the zone renders without the line - the delete and the switch-off still refund.
+  const dangerPackageRefund = async (): Promise<DivisionPackageRefund | null> => {
+    try {
+      return await divisionPackageRefund(auth, id);
+    } catch (err) {
+      log.error({ err, divisionId: id }, "online chess package: reading the danger zone's refund failed; the zone renders without it");
+      return null;
+    }
+  };
+
   // FMT5: the Division rules card's Format button and the chip naming the format, an editor's on the fixtures tab only. The
   // offer is the new-division builder's own (the sport's templates over its engine kinds, less what this division's kinds
   // cannot play), keeping the stored format in it even where it is retired. Locked is "a result exists", the one predicate
@@ -772,6 +823,8 @@ export default async function DivisionPage({
       locked,
       canEdit: editable,
       initialOpen: formatDialogAsked(query),
+      // Online Chess runs Swiss and knockout events: the picker greys the formats it does not run while the division plays online.
+      onlinePlay: (division.config as { onlinePlay?: unknown } | null)?.onlinePlay === "lichess",
     };
   }
 
@@ -1020,6 +1073,7 @@ export default async function DivisionPage({
             )}
             <EntrantsPanel
               divisionId={id}
+              changeSizeHref={editable ? routes.division(orgSlug, compSlug, divSlug, "fixtures") : null}
               entrants={entrants}
               logoUrls={entrantLogos}
               canEdit={editable}
@@ -1218,6 +1272,8 @@ export default async function DivisionPage({
                 format: formatCard,
                 // A plan refusal on a save opens the upgrade gate (cap-256 re-review I-F1).
                 viewerPlan,
+                // Online Chess credits: the size select, price line and format refusal (above).
+                onlinePackage,
               }}
             />
           </>
@@ -1460,6 +1516,10 @@ export default async function DivisionPage({
                 // else pays for. Answered by the SQL predicate the quota
                 // charge uses; the client is told, never asked to derive it.
                 slotHeldOnArchive={await divisionConsumesSlotOnArchive(auth, id)}
+                // A paid Online Chess package's refund, as the server reads it: the delete dialog's "credits come back" line,
+                // and archive's "switch Online Chess off to get them back" (archive holds the package); `{ frozen: true }` once a
+                // round has opened, and both dialogs say it is not refunded. Null: no money was paid.
+                packageRefund={await dangerPackageRefund()}
               />
             }
           />

@@ -15,6 +15,7 @@ import type { MessageKey } from "@/lib/messages";
 import { isUnreachable } from "@/lib/is-server-answer";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 import { divisionKindRefusalText } from "@/lib/entrant-kind-refusal";
+import { onlinePackageRefusalText } from "@/lib/online-package-refusal";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -102,6 +103,14 @@ export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string):
   // FU1 fix round 1 (m2, I1): taking a kind out while entrants, or live registrations, still hold it.
   const kindRefusal = divisionKindRefusalText(err, msg);
   if (kindRefusal !== null) return kindRefusal;
+  // Online Chess credits (spec 2026-11-23 §7.6, §8.1): a camera policy that turns the Fair-play camera on for a division whose
+  // package is paid without it (ONLINE_CAMERAS_NEED_UPGRADE, naming the divisions), a format or online-play write the package
+  // refuses - said in the reader's language off the code, never the server's English.
+  if (err instanceof Error) {
+    const { code, extra } = err as Error & { code?: string; extra?: Record<string, unknown> };
+    const online = onlinePackageRefusalText({ code, extra }, (key, vars) => msg(key as MessageKey, vars));
+    if (online !== null) return online;
+  }
   const extra = (err as { code?: unknown; extra?: unknown } | null)?.code === "CONFIG_INVALID" ? (err as { extra?: unknown }).extra : undefined;
   const issues = configIssuesOf(extra);
   if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");

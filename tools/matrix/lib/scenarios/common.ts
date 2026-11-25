@@ -255,13 +255,13 @@ export class Recorder {
  *  on one day. Ruling 28's DRIVING_ROUTE / DRIVING_WAVE are gone: no route
  *  names the driving wave any more (scenario-catalogue.test.ts). */
 export const TEMPLATE_ENDS_ON = "2030-12-31";
-/** T12-R1: the product's withdraw-first guard (divisions.ts:857-871) refuses
+/** T12-R1: the product's withdraw-first guard (divisions/patch.ts:725-741) refuses
  *  an entrants model that drops a kind an ACTIVE entrant holds, and an
  *  americano or mexicano stage MINTS pair entrants (usecases/stages/generators.ts pairEntrantsFor)
  *  that the organiser never registered and cannot withdraw. A predicted
  *  product finding, written as a note: the signature words are verbatim, for
  *  Task 15's triage rule. */
-export const MINTED_PAIRS_KIND_ROUTE = routeTo("W7", "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) (divisions.ts:857-871)");
+export const MINTED_PAIRS_KIND_ROUTE = routeTo("W7", "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) (divisions/patch.ts:725-741)");
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
@@ -1055,7 +1055,7 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
   if (formatDelta !== null) attempts.push({ kind: "format", ...(await ctx.driver.patchDivisionConfig(division.id, { ...division.config, ...formatDelta })) });
   // The one save the lock lets through (entrants-only). T12-R1: its kinds are
   // the ones the product's ACTIVE entrants hold, read from the product's own
-  // list — divisions.ts:857-871 refuses any model missing one of them, so
+  // list — divisions/patch.ts:725-741 refuses any model missing one of them, so
   // this is the narrowest entrants save the product can accept.
   const active = (await ctx.driver.listEntrants(division.id)).filter((e) => !DEPARTED_STATUSES.includes(e.status));
   const kinds = [...new Set(active.flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];

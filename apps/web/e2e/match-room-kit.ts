@@ -2,10 +2,12 @@
 //
 // The organiser's half goes through the product: a public competition, a
 // boardgame division played online on a ship-1 clock, two individual entrants,
-// a league stage, Generate, Start, and the round OPENED through the
-// open-round route (D12) — the same calls an organiser's clicks make.
+// a stage (a league, the legacy shape, unless the seed names a supported one),
+// Generate, Start, and the round OPENED through the open-round route (D12) —
+// the same calls an organiser's clicks make, all in `setUpOnlineDivision`.
 //
-// Two facts no API writes are seeded by SQL, and each says why:
+// Two facts no API writes are seeded by SQL, and each says why (a third, the legacy league's online-play flip, is in
+// `createLegacyLeague`):
 // - the players' Lichess links. Linking is an OAuth trip to lichess.org. The
 //   stored token is DELIBERATELY UNOPENABLE (one byte, never an envelope), so
 //   no path in these specs can reach Lichess: anything that tried to read a
@@ -31,6 +33,7 @@ import type { RoomSnapshot } from "../src/components/public-site/match-room/room
 import { apiJson, createStageAndGenerate, linkLichessBySql, linkPersonToUserBySql, TAG, withDb } from "./helpers";
 import { mintMatchRoomLink } from "./match-room-link";
 import { ENDED_BADLY_STATUSES, LIVE_STATUSES, type OutboxStatus } from "../src/server/email-outbox/constants";
+import { sizeFor } from "../src/lib/online-chess-package";
 
 /** The room's own copy, read from the dictionary rather than retyped. */
 export const uiEn = JSON.parse(
@@ -134,14 +137,157 @@ export async function seedLichessLink(userId: string, lichessId: string): Promis
  *  (e2e/match-room-link.ts; e2e-seams.test.ts proves the product verifies it). */
 const mintLink = mintMatchRoomLink;
 
+/** The format an e2e online division is staged in. An online division takes Swiss and knockout stages only (Online Chess credits,
+ *  Task 8: any other kind is 422 ONLINE_FORMAT_NOT_SUPPORTED), so "league" is the LEGACY shape - the one a division made before
+ *  that gate still holds on staging - and is built by `createLegacyLeague`, never by the plain door. */
+export type OnlineStage = "league" | "swiss" | "knockout";
+
+/** A league on a division that plays online, the way staging holds one: the stage is written through the REAL door while online
+ *  play is off, then online play is switched back on by SQL (the division's package row, written when it was created online, is
+ *  untouched). The e2e twin of `createStagesOnLegacyOnline` (usecases/__tests__/_legacy-online-stage.ts). Use it to seed the legacy
+ *  shape, never to prove a gate. */
+async function createLegacyLeague(request: APIRequestContext, divisionId: string): Promise<{ stageId: string; fixtureIds: string[] }> {
+  const flip = (mode: "off" | "lichess") =>
+    withDb(async (sql) => {
+      const done = await sql`update divisions set config = config || ${sql.json({ onlinePlay: mode } as never)} where id = ${divisionId}`;
+      expect(done.count, `the division's online play went ${mode}`).toBe(1);
+    });
+  // Only the stage WRITE is under the flip (the one door that asks the format); Generate runs on the division as it stands: online.
+  let stageId: string;
+  await flip("off");
+  try {
+    const created = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    expect(created.status, `legacy league stage: ${JSON.stringify(created.error)}`).toBeLessThan(300);
+    stageId = created.data!.id;
+  } finally {
+    await flip("lichess");
+  }
+  const generated = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
+  expect(generated.status, `generate the legacy league: ${JSON.stringify(generated.error)}`).toBeLessThan(300);
+  return { stageId, fixtureIds: (generated.data?.fixtures ?? []).map((f) => f.id) };
+}
+
+/** Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §7.6): the e2e org is SHARED by every worker, so a payment is
+ *  funded by its own grant - `credits` bought-bucket credits granted for exactly the payment about to be made, under the org's money
+ *  lock (the key `lockOrg` takes: stream-credits.ts `orgMoneyLockKey`), with `balance_after` the org total after the row as every
+ *  ledger writer keeps it. A worker never spends another's grant, so concurrent payers cannot leave each other short. The one
+ *  staff-shaped write here (V426's grant row: no API grants credits but Stripe); the PAYMENT itself is the real route's. */
+export async function fundOnlinePayment(divisionId: string, credits: number): Promise<void> {
+  if (credits <= 0) return;
+  await withDb((sql) =>
+    sql.begin(async (tx) => {
+      const [d] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
+      await tx`select pg_advisory_xact_lock(hashtext(${`stream-credits-org:${d!.org_id.toLowerCase()}`}))`;
+      await tx`
+        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+        select ${d!.org_id}, ${credits}, 'grant', 'pack', coalesce(sum(delta), 0)::int + ${credits}, 'e2e: an online division paid for'
+          from org_stream_credits where org_id = ${d!.org_id}`;
+    }),
+  );
+}
+
+/** The division's Online Chess package paid at the size it holds, through the PAY DOOR (`POST /divisions/{id}/online-package`), at the
+ *  division's camera setting as it stands (no camera answer is sent, so nothing is written to it: a seed that wants the camera sets its
+ *  policy BEFORE this, as `seedOnlineRound` and `seedMatchRoom` do): the receipt's quote read first (`GET`), then confirmed. Used where an open cannot carry the payment: before a
+ *  legacy league is staged (the pay door refuses to CHARGE a league - P16 - so it pays while the division has no stage), and on a
+ *  division whose round is opened later by the spec itself (the UI's Open round, or its own POST). */
+export async function payThroughPayDoor(request: APIRequestContext, divisionId: string): Promise<void> {
+  const size = await withDb(async (sql) => {
+    const [p] = await sql<{ size: number }[]>`
+      select size from division_online_packages where division_id = ${divisionId} and refunded_at is null`;
+    if (!p) throw new Error(`payThroughPayDoor: division ${divisionId} has no live Online Chess package`);
+    return p.size;
+  });
+  const quote = await apiJson<{ owed: number; refusal: string | null }>(
+    request, `/api/v1/divisions/${divisionId}/online-package?size=${size}`,
+  );
+  expect(quote.status, `online package quote: ${JSON.stringify(quote.error)}`).toBe(200);
+  expect(quote.data!.refusal, `size ${size} can be bought`).toBeNull();
+  await fundOnlinePayment(divisionId, quote.data!.owed);
+  const paid = await apiJson(request, `/api/v1/divisions/${divisionId}/online-package`, "POST", {
+    size, expectedOwed: quote.data!.owed,
+  });
+  expect(paid.status, `pay for the online package: ${JSON.stringify(paid.error)}`).toBeLessThan(300);
+}
+
+/** Round 1 opened through the open-round route as the organiser meets it: the first press on an unpaid package answers 402
+ *  ONLINE_CHESS_UNPAID with the quote (asserted - the gate is live on this server), and the same press carrying that quote's `pay`
+ *  pays and opens in one transaction ("Pay and open"). A package already paid opens on the first press. */
+async function openRoundOne(request: APIRequestContext, stageId: string, divisionId: string): Promise<void> {
+  const first = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
+  if (first.status < 300) return;
+  const error = first.error as { code?: string; quote?: { size: number; owed: number } } | undefined;
+  expect([first.status, error?.code], `open-round: ${JSON.stringify(first.error)}`).toEqual([402, "ONLINE_CHESS_UNPAID"]);
+  const quote = error!.quote!;
+  await fundOnlinePayment(divisionId, quote.owed);
+  const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", {
+    roundNo: 1, pay: { size: quote.size, expectedOwed: quote.owed },
+  });
+  expect(opened.status, `pay and open round 1: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+}
+
+/**
+ * The ONE place an e2e online division is staged, started and (unless `open: false`) has round 1 opened - every seed in this file
+ * goes through it, so a rule that gates one of these steps (Task 9's pay gate on Open round 1) is extended HERE and nowhere else.
+ *
+ * Online Chess credits (Task 9): the package is PAID before this returns, through the real routes. A Swiss or a knockout opened here
+ * pays ON the open (the 402, then "Pay and open": `openRoundOne`); a legacy league pays at the pay door BEFORE its stage is written
+ * (the door refuses to charge a league), and a division left unopened (`open: false`) pays at the pay door too, so the round the spec
+ * opens itself is a paid one.
+ *
+ * - "knockout": the stage and its fixtures, then Start. Two entrants make one match (n - 1).
+ * - "swiss": the stage mints its shells at Start and round 1 is paired on the next Generate - the organiser's two presses.
+ * - "league" (the default): the legacy shape, see `OnlineStage`. A league pairs every round at Generate, then Start.
+ * Then round 1 is opened through the open-round route (D12). `fixtureIds` are the generated fixtures of a league or a knockout and
+ * the paired round 1 of a Swiss.
+ */
+export async function setUpOnlineDivision(
+  request: APIRequestContext,
+  divisionId: string,
+  opts: { stage?: OnlineStage | undefined; open?: boolean | undefined; unpaid?: boolean | undefined } = {},
+): Promise<{ stageId: string; fixtureIds: string[] }> {
+  const kind = opts.stage ?? "league";
+  const payOnOpen = kind !== "league" && opts.open !== false;
+  // `unpaid` (Online Chess credits, Task 12): a division left unopened is NORMALLY paid at the pay door so the round the spec opens itself is a
+  // paid one; the spec that proves the PAYMENT (the pay line, the receipt, the 402 at Open round) asks for it left owing.
+  if (!payOnOpen && opts.unpaid !== true) await payThroughPayDoor(request, divisionId);
+  let stageId: string;
+  let fixtureIds: string[];
+  if (kind === "swiss") {
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 3 },
+    });
+    expect(stage.status, `swiss stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    stageId = stage.data!.id;
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const paired = await apiJson<{ fixtures?: { id: string }[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST", {});
+    expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
+    fixtureIds = (paired.data?.fixtures ?? []).map((f) => f.id);
+  } else {
+    ({ stageId, fixtureIds } =
+      kind === "knockout"
+        ? await createStageAndGenerate(request, divisionId, { kind: "knockout", name: "Knockout" })
+        : await createLegacyLeague(request, divisionId));
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  }
+  if (opts.open !== false) await openRoundOne(request, stageId, divisionId);
+  return { stageId, fixtureIds };
+}
+
 /**
  * One online chess fixture, its round opened (unless `open: false`), both
  * players linked and seated on it. `names` are the two players' full names,
- * in fixture order (home, away).
+ * in fixture order (home, away). `stage` is the format it is drawn in (a league,
+ * the legacy shape, unless named; a knockout's two entrants are one match too).
  */
 export async function seedMatchRoom(
   request: APIRequestContext,
-  opts: { names: [string, string]; open?: boolean; cameraPolicy?: "required" | "optional" },
+  opts: { names: [string, string]; open?: boolean; cameraPolicy?: "required" | "optional"; stage?: "league" | "knockout" },
 ): Promise<SeededRoom> {
   const label = `Room ${TAG} ${randomUUID().slice(0, 4)}`;
   const people: { name: string; email: string; userId: string; personId: string; lichessId: string }[] = [];
@@ -193,16 +339,12 @@ export async function seedMatchRoom(
   expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
   const entrantIds = ents.data!.map((e) => e.id);
 
-  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
+  const { stageId, fixtureIds } = await setUpOnlineDivision(request, divisionId, { stage: opts.stage, open: opts.open });
   expect(fixtureIds.length, "one pairing between two entrants").toBe(1);
   const fixtureId = fixtureIds[0]!;
-  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
-  expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
 
   let roundOpen: SeededRoom["roundOpen"] = null;
   if (opts.open !== false) {
-    const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
-    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
     roundOpen = await withDb(async (sql) => {
       const [row] = await sql<{ id: string; opened_at: Date }[]>`
         select o.id, o.opened_at from stage_round_opens o
@@ -381,9 +523,9 @@ export type SeededRound = {
  * One online chess round of `names.length` linked players, through the
  * product: a public competition, a boardgame division played online on a
  * ship-1 clock, the entrants, a stage, Start, and (unless `open: false`)
- * round 1 opened through the open-round route (D12). A league pairs every
- * round at Generate; a Swiss stage mints its shells at Start and pairs round 1
- * on the next Generate — the organiser's two presses. `camera: "required"` is
+ * round 1 opened through the open-round route (D12) - all in `setUpOnlineDivision`.
+ * A league pairs every round at Generate; a Swiss stage mints its shells at Start and
+ * pairs round 1 on the next Generate — the organiser's two presses. `camera: "required"` is
  * set before anything opens, as D9 allows.
  */
 export async function seedOnlineRound(
@@ -391,13 +533,17 @@ export async function seedOnlineRound(
   names: string[],
   opts: {
     open?: boolean;
+    /** Leave the package UNPAID (only with `open: false`): the spec proves the payment itself - the pay line, the receipt, the 402 at Open round. */
+    unpaid?: boolean;
     /** The division's camera policy, written before Start. Unset/"off" leaves
      *  the competition's floor (`off`, no tile); "optional" shows the tile
      *  with no duty; "required" gates every seat on the meeting. */
     camera?: "required" | "optional" | "off";
-    /** The stage the generator builds: a league unless named. "knockout" is a real bracket (its next match and that match's seat wired by
-     *  the generator itself); round 1 is its first round, so a four-player one is two semi-finals. */
-    stage?: "league" | "swiss" | "knockout";
+    /** The stage the generator builds: a league unless named - the LEGACY shape (see `OnlineStage`: a division that plays online is
+     *  refused a league now, so it is written with online play off around the stage and switched back on). "knockout" is a real
+     *  bracket (its next match and that match's seat wired by the generator itself); round 1 is its first round, so a four-player one
+     *  is two semi-finals. "swiss" is the supported multi-round format. Name a supported one wherever the spec does not read a league. */
+    stage?: OnlineStage;
     /** The division's clock (default CLOCK, 10+5) — a curated key of time-controls.ts. */
     clock?: { base: number; increment: number };
     /** T17: link each player with a token the server CAN open, so a game can
@@ -441,11 +587,17 @@ export async function seedOnlineRound(
     visibility: "public",
   });
   expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  // Online Chess credits: a division created online is a package of a SIZE, and the entrants door refuses past it (422
+  // ONLINE_SIZE_FULL). Absent, the create opens it at 16, so a round of more players is created at the smallest size that holds
+  // them - the leaf's own `sizeFor`, as the organiser's size select offers it.
+  const size = sizeFor(names.length);
+  if (size === null) throw new Error(`seedOnlineRound: ${names.length} players is past the largest Online Chess size`);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
     name: "Open Rapid",
     sport_key: "boardgame",
     variant_key: "classical",
     config: { variant: "classical", onlinePlay: "lichess", clock: opts.clock ?? CLOCK },
+    online_size: size,
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const divisionId = div.data!.id;
@@ -464,29 +616,7 @@ export async function seedOnlineRound(
   expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
   const byEntrant = new Map(ents.data!.map((e, i) => [e.id, { ...people[i]!, entrantId: e.id }]));
 
-  let stageId: string;
-  if (opts.stage === "swiss") {
-    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
-      seq: 1,
-      kind: "swiss",
-      name: "Swiss",
-      config: { rounds: 3 },
-    });
-    expect(stage.status, `swiss stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
-    stageId = stage.data!.id;
-    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
-    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
-    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST", {});
-    expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
-  } else {
-    ({ stageId } = await createStageAndGenerate(request, divisionId, opts.stage === "knockout" ? { kind: "knockout", name: "Knockout" } : undefined));
-    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
-    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
-  }
-  if (opts.open !== false) {
-    const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
-    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
-  }
+  const { stageId } = await setUpOnlineDivision(request, divisionId, { stage: opts.stage, open: opts.open, unpaid: opts.unpaid });
 
   return withDb(async (sql) => {
     const rows = await sql<{ id: string; home: string; away: string }[]>`

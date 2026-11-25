@@ -26,6 +26,7 @@ import type { EndedRow } from "@/server/email-outbox/hooks";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type InviteMail } from "../../__tests__/_invite-mail";
 import {
+  paySeededPackage,
   seedOnlineChessRound,
   seedOnlineSwiss,
   seedOwner,
@@ -98,6 +99,7 @@ import { undoDivision } from "../../history";
 import { startDivision } from "../../schedule";
 import { scoreEvent } from "../../scoring";
 import { createStages, deleteStage, generateStageFixtures, previewReplaceStages, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
+import { createStagesOnLegacyOnline } from "../../__tests__/_legacy-online-stage";
 import { withdrawEntrantCascade } from "../../withdrawal";
 import { finishSwissNow } from "../../swiss-rounds-admin";
 
@@ -192,7 +194,7 @@ async function openedGeneratedLeague(players = 4) {
     return e!.id;
   };
   for (let i = 0; i < players; i++) await entrant(`G${i + 1}`, i + 1);
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
   await generateStageFixtures(owner, stage!.id);
   const generated = (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by id`).map((f) => f.id);
   const [{ seq }] = await sql<{ seq: number }[]>`
@@ -204,6 +206,7 @@ async function openedGeneratedLeague(players = 4) {
     returning id`;
   await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
   await startDivision(owner, division.id);
+  await paySeededPackage(owner, division.id); // Online Chess credits: round 1 opens on a paid package
   const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: ownerUserId });
   expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
   return { orgId: owner.orgId, owner, divisionId: division.id, stageId: stage!.id, generated, spared: spared!.id };
@@ -272,6 +275,7 @@ async function openedKnockout(players: number): Promise<{ owner: SeedOnlineSwiss
   await generateStageFixtures(owner, stage!.id);
   await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
   await startDivision(owner, division.id);
+  await paySeededPackage(owner, division.id); // Online Chess credits: round 1 opens on a paid package
   const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: owner.userId! });
   expect(out, "premise: the real open invited the bracket's first round").toMatchObject({ opened: true });
   return { owner, orgId: owner.orgId, stageId: stage!.id, entrants };

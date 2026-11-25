@@ -1,13 +1,13 @@
 ---
-title: Seazn credits for streaming
-description: Streaming a match live spends one Seazn credit. Every plan gets free credits each month, and packs you buy never expire.
+title: Seazn credits
+description: Seazn credits pay for live match streams and for Online Chess. Every plan gets free credits each month, and packs you buy never expire.
 order: 4.5
 related: scheduling/match-day-stream, billing/credits, billing/plans
 ---
 
-Streaming a match live from a phone spends one **Seazn credit**. It works on every plan. Without a credit, the match shows **You need a Seazn credit to go live.**
+A **Seazn credit** pays for two things, on every plan: streaming a match live from a phone, and running a division of [Online Chess](/help/sports/chess). Without a credit, a match shows **You need a Seazn credit to go live.**
 
-1 credit = 1 match stream, up to 3 hours.
+1 credit = 1 match stream, up to 3 hours. An Online Chess package costs credits by size: its price table is on the [chess page](/help/sports/chess).
 
 ## Open your Seazn credits
 
@@ -17,7 +17,7 @@ Open **Settings** and choose **Credits**. The page has two sides, switched at th
 - **Free this month**: how many of this month's free credits are used, and how many days until unused ones expire.
 - **Bought credits**: credits from packs, marked *never expire*.
 - **Buy Seazn credits**: the packs you can buy, with the price per match.
-- **Credit history**: every grant, pack and streamed match, with the balance after each. **Export** downloads it as a spreadsheet file.
+- **Credit history**: every grant, pack, streamed match and Online Chess package, with the balance after each. **Export** downloads it as a spreadsheet file.
 
 ![The Credits page, with the balance, the Free this month meter with the days until unused credits expire, bought credits at 0, three pack options with the middle one marked Most clubs, and one Monthly free credits line in the history.](/help/billing/credits-stream.webp "A Community organisation that has not streamed yet this month.")
 
@@ -43,6 +43,12 @@ If the payment is still processing, the page says so, and the credits arrive as 
 ## When a credit comes back
 
 If a stream starts but the camera never connects, the credit is returned. The history shows **Refund: camera never connected**.
+
+## Online Chess spends them too
+
+A division that plays Online Chess is paid for once, before its first round, from the same balance as your streams. This month's free credits are spent first, then bought credits. The history shows the package as a row like **Online Chess: Open, up to {{online:row:3:size}}**, a size change as **Online Chess: Open, now up to {{online:row:4:size}}**, and a refund as **Online Chess refunded: Open**. A package is refunded in full only until a round has opened, and free credits come back only while their month has not ended. The sizes, the prices and the refund rules are on the [chess page](/help/sports/chess).
+
+A balance spent on Online Chess is not available for streams, and the other way round. There is one balance.
 
 ## Each organisation has its own
 

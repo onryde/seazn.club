@@ -7,6 +7,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
+import { sizeFor, type OnlineSize } from "@/lib/online-chess-package";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -16,7 +17,11 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
+import { lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
+import { livePackage, payOnlinePackageInTx, quoteLocked, readPackageFacts, writeOnlineSize } from "../online-package";
+import { creditBreakdown, lockOrg, streamMonthlyRate } from "../stream-credits";
 
 // A linked seed now seals a REAL token (T2), so `upsertLichessLink` needs
 // LICHESS_TOKEN_KEK in the process. Set here, once, rather than in each of the
@@ -55,6 +60,49 @@ export async function seedOwner(): Promise<AuthCtx> {
 }
 
 export type SeedPlayer = { personId: string; userId: string; lichessId: string };
+
+/** Online Chess credits Task 9 (spec 2026-11-23-online-chess-credits-design.md §7.6): the first round of an online division opens only
+ *  on a PAID package that covers it. A seeded online division is therefore PAID by default - the state an organiser's division is in
+ *  when its round opens - and `"unpaid"` leaves the row the create door wrote (the open-round gate's own suite). */
+export type SeedPackage = "paid" | "unpaid";
+
+/** The division's live package PAID, at the size it holds, WITH the camera price (so a camera policy a case sets later - by a door or
+ *  by SQL - never leaves the package short) and WITHOUT touching the division's camera setting (the case's own policy stands: the
+ *  receipt's camera ANSWER, Task 15, would write it, so the seed gives none and prices the camera through the facts it reads - the
+ *  product state "paid with the camera, then turned off in Division settings"), through the real money path: the `division:` lock, then `payOnlinePackageInTx` (the org
+ *  money lock, the row lock, the quote under them, the ledger debit). A precondition, not a door under test: the pay DOOR's own gates
+ *  (the flag, the billing freeze, the stage kinds online play runs) are not asked, because the legacy shapes these seeds build (a
+ *  league on an online division) are what staging still holds and the door would refuse to charge one. The org is granted the
+ *  credits it is short (one staff-shaped `grant` row in the bought bucket, under the money lock), so a size of any price is paid.
+ *  A division with no live row (an online flip by SQL, `deferOnlinePlay`) first gets the unpaid row the switch would have written,
+ *  at the smallest size holding its places. */
+export async function paySeededPackage(owner: AuthCtx, divisionId: string): Promise<void> {
+  if (!owner.userId) throw new Error("paySeededPackage: the owner has no user to name as the payer");
+  const userId = owner.userId;
+  const rate = await streamMonthlyRate(owner.orgId);
+  await sql.begin(async (tx) => {
+    await lockDivisionForCap(tx, divisionId);
+    // Priced as if the division's policy said "camera on" (`cameras: true`): the camera price without the answer's write (see above).
+    const facts = { ...(await readPackageFacts(tx, divisionId, null)), cameras: true };
+    let row = await livePackage(tx, divisionId);
+    if (row === null) {
+      const [d] = await tx<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
+      await writeOnlineSize(tx, { orgId: owner.orgId, divisionId, divisionName: d!.name, size: sizeFor(facts.held)! });
+      row = (await livePackage(tx, divisionId))!;
+    }
+    const quote = await quoteLocked(tx, { orgId: owner.orgId, divisionId, size: row.size, rate }, facts);
+    if (quote.shortBy !== null) {
+      await lockOrg(tx, owner.orgId);
+      const { total } = await creditBreakdown(tx, owner.orgId);
+      await tx`
+        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+        values (${owner.orgId}, ${quote.shortBy}, 'grant', 'pack', ${total + quote.shortBy}, 'test seed: an online division paid for')`;
+    }
+    await payOnlinePackageInTx(
+      tx, { orgId: owner.orgId, divisionId, userId, size: row.size, expectedOwed: quote.owed }, facts, { rate },
+    );
+  });
+}
 
 /** `linked: false` seeds the person/user but skips `upsertLichessLink` — for
  *  cases that need an entrant with no Lichess identity. */
@@ -157,6 +205,9 @@ export type SeedOnlineChessFixtureOpts = {
    *  snapshot. Omitted ⇒ both are "White" / "Black", as before. */
   homeFullName?: string;
   awayFullName?: string;
+  /** Online Chess credits: the division's package, PAID by default (`paySeededPackage`); with `roundOpenedAt` it is also frozen,
+   *  as an open freezes it (P8). Ignored when `onlinePlay` is 'off'. */
+  onlinePackage?: SeedPackage;
 };
 
 export type SeedOnlineChessFixtureResult = {
@@ -240,7 +291,7 @@ export async function seedOnlineChessFixture(
   if (deferOnlinePlay) {
     await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${division.id}`;
   }
-  const [stage] = await createStages(owner, division.id, {
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, {
     seq: 1,
     kind: "league",
     name: "RR",
@@ -269,6 +320,11 @@ export async function seedOnlineChessFixture(
   }
   if (opts.divisionStarted) {
     await startDivision(owner, division.id);
+  }
+  if (opts.onlinePlay === "lichess" && (opts.onlinePackage ?? "paid") === "paid") {
+    await paySeededPackage(owner, division.id);
+    // A seeded open is a round that opened, and an open freezes the package (P8): the state the open-round gate leaves.
+    if (opts.roundOpenedAt) await sql`update division_online_packages set frozen_at = now() where division_id = ${division.id} and refunded_at is null`;
   }
   return {
     orgId: owner.orgId,
@@ -315,6 +371,8 @@ export type SeedOnlineChessRoundOpts = {
   clock?: { base: number; increment?: number; delay?: number };
   onlinePlay?: "off" | "lichess";
   cameraPolicy?: CameraPolicy;
+  /** Online Chess credits: the division's package, PAID by default (`paySeededPackage`). Ignored when `onlinePlay` is 'off'. */
+  onlinePackage?: SeedPackage;
 };
 
 export type SeedOnlineChessRoundResult = {
@@ -358,6 +416,8 @@ export async function seedLinkedPair(
 
 export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Promise<SeedOnlineChessRoundResult> {
   const roundNo = opts.roundNo ?? 1;
+  // Every entrant this seed will create: two per board, the lone and bye sides, two per spare pair.
+  const onlineEntrants = opts.fixtures * 2 + (opts.unpaired ? 1 : 0) + (opts.bye ? 1 : 0) + (opts.spares ?? 0) * 2;
   const owner = await seedOwner();
   const ownerUserId = owner.userId;
   if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
@@ -378,8 +438,11 @@ export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Prom
       clock: opts.clock ?? { base: 900, increment: 10 },
     },
     ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
+    // A division made online opens at size 16 (Online Chess credits P14) and the size caps its entrants (Task 7): a round of more
+    // boards than that names the size that holds every entrant it seeds, as an organiser who bought one would.
+    ...(onlineEntrants > 16 && (opts.onlinePlay ?? "lichess") === "lichess" ? { online_size: sizeFor(onlineEntrants)! } : {}),
   });
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
   const at = opts.scheduledAt === undefined ? ROUND_T : opts.scheduledAt;
   let seq = 0;
   const insertBoard = async (home: string | null, away: string | null, extra?: { status: string; outcome: unknown }) => {
@@ -421,6 +484,7 @@ export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Prom
     throw new Error("seedOnlineChessRound: a started division needs at least one board row");
   }
   if (opts.divisionStarted ?? true) await startDivision(owner, division.id);
+  if ((opts.onlinePlay ?? "lichess") === "lichess" && (opts.onlinePackage ?? "paid") === "paid") await paySeededPackage(owner, division.id);
   return {
     orgId: owner.orgId,
     competitionId: competition.id,
@@ -485,6 +549,10 @@ export async function seedOnlineSwiss(opts: {
   /** Defaults to true (Start pressed). `false` leaves the division in `setup` with round 1 already paired - what the
    *  generator leaves before Start (check-in capacity R3: the pre-mint job serves that paired board). */
   divisionStarted?: boolean;
+  /** Online Chess credits: the package size chosen at creation (the create door's default, P14, when omitted). */
+  onlineSize?: OnlineSize;
+  /** Online Chess credits: the division's package, PAID by default (`paySeededPackage`). */
+  onlinePackage?: SeedPackage;
 }): Promise<SeedOnlineSwissResult> {
   const owner = await seedOwner();
   const ownerUserId = owner.userId;
@@ -502,6 +570,7 @@ export async function seedOnlineSwiss(opts: {
     variant_key: "classical",
     config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
     ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
+    ...(opts.onlineSize !== undefined ? { online_size: opts.onlineSize } : {}),
   });
   const players: SeedSide[] = [];
   for (let i = 0; i < opts.players; i++) {
@@ -526,6 +595,7 @@ export async function seedOnlineSwiss(opts: {
   // a timetable write is not what these tests are about.
   await sql`update fixtures set scheduled_at = ${ROUND_T} where stage_id = ${stage!.id}`;
   if (opts.divisionStarted ?? true) await startDivision(owner, division.id);
+  if ((opts.onlinePackage ?? "paid") === "paid") await paySeededPackage(owner, division.id);
   return {
     orgId: owner.orgId,
     competitionId: competition.id,

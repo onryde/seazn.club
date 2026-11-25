@@ -341,7 +341,7 @@ describe.skipIf(!HAS_DB)("gate: opening a round", () => {
       flagIs(s);
       const opened = openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId });
       if (s.offered) {
-        expect(await opened, s.label).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+        expect(await opened, s.label).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
         expect(await stampCount(r), s.label).toBe(1);
         expect(mail.sent.length, s.label).toBe(2);
       } else {

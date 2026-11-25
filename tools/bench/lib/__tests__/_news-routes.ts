@@ -12,7 +12,7 @@
 // silences:
 //
 //   - `PATCH /divisions/{id}` with `auto_posts: true` needs `news.auto`
-//     (`usecases/divisions.ts:652-654`); turning it OFF is always allowed.
+//     (`usecases/divisions/patch.ts:201-203`); turning it OFF is always allowed.
 //   - Nothing drafts for a division whose `auto_posts` is false
 //     (`org-posts.ts:479`), so a run that skipped the enable step gets an
 //     empty list rather than a convenient one.

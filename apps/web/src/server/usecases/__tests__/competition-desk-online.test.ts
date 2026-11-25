@@ -67,7 +67,7 @@ import { getMatchDay } from "../match-day";
 import { readOnlineRounds } from "../match-day-online";
 import { createDivision } from "../divisions";
 import { startDivision } from "../schedule";
-import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { reconnectLichess, seedLinkedPair, seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 import { MIN, NOW, addRound, addStage, bridgeRow, openFlag, openStamp, setFixtureStatus } from "./_match-day-online-seed";
 
@@ -695,7 +695,7 @@ async function createDivisionWithHold(r: SeedOnlineChessRoundResult): Promise<{ 
     variant_key: "classical",
     config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
   });
-  const [stage] = await createStages(r.owner, division.id, { seq: 1, kind: "league", name: "RR2", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(r.owner, division.id, { seq: 1, kind: "league", name: "RR2", config: {} });
   const [fx] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
     values (${stage!.id}, ${division.id}, ${r.orgId}, 1, 1, ${`t4-${randomUUID().slice(0, 8)}`}, 'scheduled')
@@ -730,7 +730,7 @@ describe.runIf(HAS_DB)("who gets board rows: online divisions only (ruling MD-R1
       const division = await createDivision(r.owner, r.competitionId, { name: `Other ${key}`, sport_key: key, variant_key: variant!.key, config: {} });
       // A stored `lichess` on a sport that cannot play online is possible only below the doors; the producer must still refuse it.
       await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${division.id}`;
-      const [stage] = await createStages(r.owner, division.id, { seq: 1, kind: "league", name: `S ${key}`, config: {} });
+      const [stage] = await createStagesOnLegacyOnline(r.owner, division.id, { seq: 1, kind: "league", name: `S ${key}`, config: {} });
       const [fx] = await sql<{ id: string }[]>`
         insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
         values (${stage!.id}, ${division.id}, ${r.orgId}, 1, 1, ${`t4-${randomUUID().slice(0, 8)}`}, 'scheduled') returning id`;

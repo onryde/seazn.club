@@ -22,7 +22,8 @@ name: E2E
 # ever ran in CI. AGENTS.md calls the seven-width matrix "the enforcement
 # backstop"; it was 2 of 7 in practice.
 #
-# The seven are now spread over THREE matrix jobs (3 + 2 + 2 widths), each
+# The seven are now spread over FOUR matrix jobs (2 + 1 + 2 + 2 widths since
+# 2026-11-25; 3 + 2 + 2 before, see the e2e-mobile job), each
 # still running its own group with `--workers=1`. Read the two constraints
 # separately, because an earlier version of this comment conflated them and
 # concluded "deliberately NOT one job per width":
@@ -85,6 +86,11 @@ name: E2E
 # 2026-11-19: `walkthrough rest 1/3` was cancelled at the cap (20m02s, run
 # 44539082067) with nothing failing, and "rest" is now sharded FOUR ways; see
 # the walkthrough block in e2e-parallel's matrix for the measurements.
+#
+# 2026-11-25: e2e-mobile's `phones-small 320/360/375` was cancelled at the cap
+# (20m15s, run 45614432321: 372 passed, 0 failed) with nothing failing. It is
+# now two legs, 320/360 and 375, by width rather than by shard; see the
+# e2e-mobile job for the measurements.
 #
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
@@ -2507,6 +2513,26 @@ jobs:
     # 3/2/2 rather than 3/3/1: the legs are ~21 tests per width, so the longest
     # leg sets the wall clock and a 3/3/1 split would waste a runner on 21
     # tests behind ~125s of setup.
+    #
+    # 2/1/2/2 since 2026-11-25. That arithmetic expired: a width is now ~125
+    # tests and ~5-6 minutes of Playwright step, not 21 tests, so a one-width
+    # leg is no longer a runner wasted behind its setup. Measured (job / step):
+    #
+    #   run 45605651070 (main)   phones-small 3 widths  17m23s / 14m40s
+    #                            phones-large 2 widths  15m17s / 12m11s
+    #                            tablets      2 widths  16m03s / 12m56s
+    #   run 45614432321 (branch, +3 Online Chess tests per width, ~45s each)
+    #                            phones-small CANCELLED 20m15s / 17m00s with
+    #                            372 of 376 passed, 0 failed
+    #
+    # Setup (job start to the Playwright step) is ~2.5-3 min per leg. At
+    # ~1045s for the three widths' 376 tests, 320/360 is predicted at ~2/3 of
+    # that (~11.6 min step, ~14.5 min job) and 375 alone at ~5.8 min step,
+    # ~8.8 min job, which leaves `tablets` (~16 min) the slowest leg here and
+    # the next one to watch. Split by WIDTH rather than `--shard`: a shard cuts
+    # mid-width by test count, and a red leg should still name a band.
+    # `timeout-minutes: 20` STAYS, as everywhere in this file: it is a guard
+    # against a hung job, not a budget to grow into.
     strategy:
       fail-fast: false # one width band's failure must not hide another's
       matrix:
@@ -2516,9 +2542,12 @@ jobs:
         # what a shared literal across three legs would produce). `slug` is the
         # artifact-safe half; do not collapse the two back into one field.
         include:
-          - group: phones-small 320/360/375
+          - group: phones-small 320/360
             slug: phones-small
-            projects: --project=mobile-320 --project=mobile-360 --project=mobile-se
+            projects: --project=mobile-320 --project=mobile-360
+          - group: phone-se 375
+            slug: phone-se
+            projects: --project=mobile-se
           - group: phones-large 390/430
             slug: phones-large
             projects: --project=mobile-14 --project=mobile-430
