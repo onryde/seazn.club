@@ -1093,6 +1093,49 @@ describe("e2e CI wiring", () => {
     expect(slugs.filter((x) => x.includes("/")), "a slug contains a slash").toEqual([]);
   });
 
+  // 2026-11-25: phones-small (320/360/375) hit the 20-minute cap and was split by width into 320/360 and 375. A rebalance like
+  // that can drop a width from CI without a single red - the dropped project simply never runs - so the dispatch is pinned to
+  // the CONFIG's width projects, each in exactly one leg, every leg on one worker (the widths in a leg share its setup org).
+  it("e2e-mobile dispatches every width project of the config in exactly one leg, each leg on one worker", async () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+    const start = yml.indexOf("\n  e2e-mobile:\n");
+    expect(start, "no e2e-mobile job").toBeGreaterThan(-1);
+    const tail = yml.slice(start + 1);
+    const next = tail.slice(1).search(/\n {2}[a-z][\w-]*:\n/);
+    const job = next === -1 ? tail : tail.slice(0, next + 1);
+    const legs = job
+      .split(/\n\s*- group: /)
+      .slice(1)
+      .map((block) => ({
+        group: block.split("\n")[0]!.trim(),
+        slug: /\n\s*slug: *(.*)/.exec(block)?.[1]?.trim() ?? "",
+        projects: [...(/\n\s*projects: *(.*)/.exec(block)?.[1] ?? "").matchAll(/--project=(\S+)/g)].map((m) => m[1]!),
+      }));
+    expect(legs.length, "premise: e2e-mobile's matrix legs were read").toBeGreaterThan(1);
+    const widths = (await configFor(undefined)).projects
+      .map((p) => p.name ?? "")
+      .filter((n) => /^(mobile|tablet)-/.test(n))
+      .sort();
+    expect(widths.length, "premise: the config's width projects").toBe(7);
+    let checked = 0;
+    for (const l of legs) {
+      expect(l.projects.length, `${l.group}: a leg with no width`).toBeGreaterThan(0);
+      checked += l.projects.length;
+    }
+    expect(
+      legs.flatMap((l) => l.projects).sort(),
+      "every width project in exactly one leg (a missing one never runs in CI; a repeated one runs twice)",
+    ).toEqual(widths);
+    expect(checked, "anti-vacuity: widths dispatched").toBe(7);
+    const slugs = legs.map((l) => l.slug);
+    expect(new Set(slugs).size, `duplicate slug among ${slugs.join(", ")}`).toBe(slugs.length);
+    expect(slugs.filter((x) => !/^[a-z0-9-]+$/.test(x)), "a slug unfit for an artifact name").toEqual([]);
+    expect(job, "the leg's projects run on ONE worker").toMatch(/run: npx playwright test \$\{\{ matrix\.projects \}\} --workers=1\n/);
+  });
+
   // RS007. The Connect walkthrough is the ONLY place in the suite that
   // genuinely produces `checkout.session.completed`, and it can only do so
   // with a real key AND a webhook forwarder — the webhook is registrations'
