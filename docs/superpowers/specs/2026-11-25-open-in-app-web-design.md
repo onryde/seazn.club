@@ -148,6 +148,15 @@ Seen only when the app did not take the link.
 | Scoring link panel (fixture console, court focus) | `device-link-panel.tsx` | `dl_` |
 | Match Day code sheet | `match-day/match-day-code-sheet.tsx` | `md_` |
 
+**One phone streams from the app (web call, on the phone session's answer, 2026-11-25).** Beside each stream
+**Open in app** button, a line in four locales: "Then tap Go live in the app." The app has its own **Go live**
+(a hold, enabled once camera, mic, network and sideways checks pass); the phone session reports it as the normal
+path, verified on device. The web console's **Go live** is unchanged and stays the two-device case. A web or
+automatic start while the app is behind the browser on the same phone is **unproven** (phone session's open item
+N28; never run), so no web copy may promise it. A single-phone web Go live would need that device test first.
+Not checked here: whether a destination or credits must be set on the web before the app's Go live succeeds; the
+spike's follow-up must walk the whole one-phone path and add that step to the line if so.
+
 No button on printed scorer sheets (paper) or the quick-match score redirect (nothing is shown).
 
 - A button exists only where the page already holds the code. No new server call, no minting on tap.
@@ -205,16 +214,7 @@ The anchor's `href` holds a live credential on a page that does run analytics.
    Production buttons ship only once that release is on Play **(web call)**; before it, every tap would say "not
    installed". How the buttons are held back until then is the builder's call.
 
-## 9. Open
-
-**One phone going live (blocks only the two stream buttons).** **Go live** is on the web page, but the camera
-phone must have the app open and unlocked (`stream.error.phone_not_responding`, `stream.phone.silent`). With one
-phone, going back to the browser backgrounds the app. The web has an automatic-start switch ("Stream the match
-automatically"). Asked of the phone session: after pairing, can the app go live itself, or stay responding in the
-background? If neither, either one-phone streaming works only with automatic start (the page must say so beside
-the button) or the stream buttons wait. Not verified on a device.
-
-Needed from the owner:
+## 9. Needed from the owner
 
 
 - The Play app-signing SHA-256 (blocks only production assetlinks).
