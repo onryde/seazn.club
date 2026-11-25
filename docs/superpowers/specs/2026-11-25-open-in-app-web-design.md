@@ -66,7 +66,8 @@ Fallback pages, how to build:
 - Official Google Play badge artwork, self-hosted, one per locale (en/es/fr/nl), used unaltered with Google's
   clear space and trademark line. Text strings go in the four `marketing.json` dictionaries.
 - Shown on every device **(web call)**: a laptop visitor learns the app exists. The line beside it says Android.
-- One product name: **Seazn Club app** **(web call)**. `ui.json` today also says "Seazn Capture app"; aligning
+- One product name: **Seazn Club Mobile App** (owner, 2026-11-25). Page bands follow the owner-approved Option B
+  mocks; Android is stated in the footer line, not on the bands. `ui.json` today also says "Seazn Capture app"; aligning
   that string is part of this work.
 
 Placement **(web call, to be confirmed on mockups before build)**:

@@ -14,7 +14,7 @@
 
 - URL, one definition only: `https://play.google.com/store/apps/details?id=com.seazn.capture`, same on staging and production.
 - Official Google Play badge artwork for en/es/fr/nl, self-hosted, unaltered, with Google's clear space and trademark line.
-- Product name in copy: "Seazn Club app". The line beside the badge says Android. No App Store badge, no "coming soon".
+- Product name in copy: "Seazn Club Mobile App" (owner, 2026-11-25). Band labels are exactly that; Android is stated in the footer line. No App Store badge, no "coming soon".
 - Shown on every device.
 - Never on: public competition pages (`(public)/live/[orgSlug]`), signed-in app shell, overlays, embeds, slideshow, scoring pad.
 - Copy may only claim what the published app does today.
@@ -36,16 +36,16 @@
 
 **Files:** Create: mockup HTML outside the repo (`~/seazn-artifacts/open-in-app/promo.html`), served on :8765.
 
-- [ ] **Step 1:** Open the Play listing; write down what it says the app does and under which developer name. If the page is not our app or not installable, stop and report.
-- [ ] **Step 2:** Mock footer, home band, streaming band, match-day and remote-scoring bands at 1280 and 320, using the real marketing theme tokens, with proposed English lines for the three product pages and home.
-- [ ] **Step 3:** Owner approves placement and lines. Record the approved lines in this plan under Task 3. **Do not start Task 3 without this.** Tasks 1 and 2 are independent.
+- [x] **Step 1:** Open the Play listing; write down what it says the app does and under which developer name. If the page is not our app or not installable, stop and report.
+- [x] **Step 2:** Mock footer, home band, streaming band, match-day and remote-scoring bands at 1280 and 320, using the real marketing theme tokens, with proposed English lines for the three product pages and home.
+- [x] **Step 3:** Owner approves placement and lines. Record the approved lines in this plan under Task 3. **Do not start Task 3 without this.** Tasks 1 and 2 are independent.
 
 ### Task 2: Play link and badge in the footer
 
 **Files:**
 - Create: `apps/web/src/lib/app-store.ts`, `apps/web/src/components/marketing/play-badge.tsx`, `apps/web/public/badges/google-play-{en,es,fr,nl}.png` (or `.svg`, as Google ships them)
 - Modify: `apps/web/src/components/marketing-footer.tsx`, the four `marketing.json`, `lib/i18n-keys.ts` (generated)
-- Modify: whatever `apps/web/src/dictionaries/en/ui.json` key says "Seazn Capture app" (about line 7532), in all four locales → "Seazn Club app"
+- Modify: whatever `apps/web/src/dictionaries/en/ui.json` key says "Seazn Capture app" (about line 7532), in all four locales → "Seazn Club Mobile App"
 - Test: `apps/web/src/components/marketing/__tests__/play-badge.test.tsx`
 
 **Interfaces:**
@@ -82,7 +82,29 @@ it("the footer renders one badge and the trademark line", async () => { /* rende
 - Consumes: `PlayBadge`.
 - Produces: `AppBand({ lang, title, line }: { lang: string; title: string; line: string })`, root `data-testid="app-band"`. Keys: `home.app.{title,line}`, `product.{streaming,matchday,remoteScoring}.app.{title,line}` (match each page's existing key prefix).
 
-Approved lines: _filled by Task 1._
+**Owner, 2026-11-25: approved, Option B** (slim "ticket stub" strip). Task 1 is done. Reference screenshots and
+the injected CSS/markup: `~/seazn-artifacts/open-in-app-promo/` (`<page>-B-{1280,320}.png`, `footer-*.png`); the
+mock script's `.pm-b` rules are: night background, `max-width 72rem` box, `1.5px dashed var(--mk-lime)` border,
+radius 14px, padding 14px 20px, strong title 16px cream, 13px `#c9bfee` line, badge right; under 600px
+everything centres. Build with the house Tailwind tokens, not that CSS verbatim.
+
+The mock's phone layout crowds the text. Build it as three stacked blocks under `sm`: title; the
+"Seazn Club Mobile App" label on its own line; the line; then the badge. No " — " joining on any width below `sm`.
+
+`AppBand` therefore takes `{ lang, title, label, line }` (replaces the signature above), with a `label` key beside
+each `title`/`line` pair. Approved English:
+
+| Page | label | title | line |
+| --- | --- | --- | --- |
+| Home | Seazn Club Mobile App | Your phone is the camera and the scorer | Scan your organiser’s code to stream a match with the score on screen, or to score it. |
+| Streaming | Seazn Club Mobile App | Put the camera in your pocket | Scan a match or court code, tap Go live. No laptop, no capture card. |
+| Match day | Seazn Club Mobile App | One phone follows the court | Scan a court code once. It goes live when a match starts and stops when it ends. |
+| Remote scoring | Seazn Club Mobile App | Score from the app too | Open your organiser’s scoring link and score rally by rally. The browser pad still works. |
+
+Footer: badge centred above the bottom bar, with "Seazn Club Mobile App for Android. Google Play and the Google Play logo
+are trademarks of Google LLC." Remote scoring's band goes after the hero section (which holds the live demo).
+The Play listing (read 2026-11-25) says Android 12 or later and covers match streaming, court streaming and
+scoring; it does not mention Match Day lists.
 
 - [ ] **Step 1: Failing e2e**
 
