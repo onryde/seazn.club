@@ -144,6 +144,10 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
     }
   }
 
+  // From round 1 the size and the camera are fixed (spec 8.7, R7): the server's `frozen` refusal - read on open, or the 409 of a round that opened in
+  // another tab - shows the answer and the size and takes no pick (the reducer ignores one too).
+  const fixed = frozenOf(state);
+
   // A `change` whose size is the paid one: only the camera answer moves (R6).
   const cameraOnly = mode === "change" && quote !== null && quote.refusal === null && facts.paid !== null && quote.size === facts.paid.size;
 
@@ -166,7 +170,9 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         if (cameraOnly && quote !== null) return quote.cameras ? msg("onlineChess.receipt.confirm.camerasOn") : msg("onlineChess.receipt.confirm.camerasOff.none");
         return msg("onlineChess.receipt.confirm.change");
       case "none":
-        return confirm.why === "loading" && want !== null && !readFailed ? msg("onlineChess.receipt.confirm.checking") : msg("onlineChess.receipt.confirm.choose");
+        if (confirm.why === "loading" && want !== null && !readFailed) return msg("onlineChess.receipt.confirm.checking");
+        // A closed package has no size left to choose: the button that cannot be pressed says why, not "Choose a size".
+        return fixed ? msg("onlineChess.receipt.confirm.frozen") : msg("onlineChess.receipt.confirm.choose");
     }
   })();
 
@@ -192,9 +198,6 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         paid: facts.paid,
       })
     : [];
-  // From round 1 the size and the camera are fixed (spec 8.7, R7): the server's `frozen` refusal - read on open, or the 409 of a round that opened in
-  // another tab - shows the answer and the size and takes no pick (the reducer ignores one too).
-  const fixed = frozenOf(state);
 
   // ---- the credits chooser of a short balance -------------------------------------------------------------------------------------------
   if (state.view === "buy" && confirm.kind === "buy" && renderBuy !== undefined) {
@@ -378,7 +381,8 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         {/* The facts that are always true, said once. */}
         <div className="space-y-0.5 text-xs text-slate-600">
           {confirm.kind !== "moveDown" && <p>{msg("onlineChess.receipt.line.included")}</p>}
-          <p>{mode === "payAndOpen" ? msg("onlineChess.receipt.line.fixed") : msg("onlineChess.receipt.line.moveUp")}</p>
+          {/* Once a round has opened there is no move up to offer (R7): the refusal above says why, and the footer says no more than that. */}
+          {(mode === "payAndOpen" || !fixed) && <p>{mode === "payAndOpen" ? msg("onlineChess.receipt.line.fixed") : msg("onlineChess.receipt.line.moveUp")}</p>}
         </div>
       </div>
     </Modal>
@@ -484,7 +488,7 @@ function SizeRow(p: {
   })();
   return (
     <label
-      className={`flex min-h-11 min-w-0 cursor-pointer items-start gap-2 rounded-md border px-3 py-2 ${p.checked ? "border-purple-500 bg-purple-50" : "border-slate-200 bg-white"} ${off ? "cursor-not-allowed opacity-60" : ""}`}
+      className={`flex min-h-11 min-w-0 cursor-pointer items-start gap-2 rounded-md border px-3 py-2 ${p.checked ? "border-purple-500 bg-purple-50" : "border-slate-200 bg-white"} ${off || p.disabled ? "cursor-not-allowed opacity-60" : ""}`}
     >
       <input
         type="radio"

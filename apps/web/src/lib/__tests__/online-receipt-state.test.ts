@@ -177,7 +177,9 @@ describe("R3: a 409 redraws with the fresh quote; nothing is taken until the org
 // R7. The refusal the server answers a pay with when a round opened in another tab is the SAME 409 ONLINE_QUOTE_CHANGED as a moved price
 // (pay.ts `quoteChanged`: one code, the fresh quote in its body, whose `refusal` is "frozen"): there is no frozen code to branch on, so the
 // state reads the quote. The package is then closed for good (spec 8.7): the receipt says so instead of "the price changed", and takes no
-// further size or camera pick. Driven through the real reader of the wire error (`payFailureOf`), never a hand-built PayFailure.
+// further size or camera pick. Driven through the real reader of the wire error (`payFailureOf`), never a hand-built PayFailure. This is the STATE
+// MACHINE only: it is swept over all three modes because the reducer is mode-blind, which says nothing about which doors can answer such a 409 in a
+// browser (the pay door's reaches `pay` and `change`; whether Open round can answer one for `payAndOpen` is not claimed here).
 describe("R7: a 409 that says a round has opened freezes the receipt: no 'price changed', no further pick", () => {
   /** What the pay door throws (ApiV1Error-shaped: `code`, `extra`) when the package was frozen under the press. */
   const wire = (quote: ReturnType<typeof quoteOf>) => ({ code: ONLINE_PACKAGE_CODES.quoteChanged, extra: { quote } });

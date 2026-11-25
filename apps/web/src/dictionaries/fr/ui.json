@@ -3841,6 +3841,7 @@
   "onlineChess.receipt.confirm.buy": "Acheter des crédits",
   "onlineChess.receipt.confirm.checking": "Vérification…",
   "onlineChess.receipt.confirm.choose": "Choisissez une taille",
+  "onlineChess.receipt.confirm.frozen": "Taille et caméra figées",
   "onlineChess.receipt.short.one": "Il faut {owed} crédits et vous en avez {balance}. Il vous manque {count} crédit.",
   "onlineChess.receipt.short.other": "Il faut {owed} crédits et vous en avez {balance}. Il vous manque {count} crédits.",
   "onlineChess.receipt.noInvitable": "Aucun joueur n'a encore lié Lichess. Vous payez maintenant et pourrez rouvrir la ronde gratuitement dès qu'ils l'auront lié.",
