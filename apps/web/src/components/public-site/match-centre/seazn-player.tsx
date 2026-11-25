@@ -26,23 +26,19 @@ export interface SeaznPlayerProps {
   /** The player gave up on its address (a fatal error): the island reports why (codes only) and reads the route again for a fresh
    *  one. `address` is the address it gave up on, for the island's once-per-address report; it is never sent anywhere. */
   onFatal?: (failure: PlaybackFailure, address: string) => void;
-  /** The player plays, but on the browser's own player (hls.js's bundle would not load): the island reports it, and nothing is rebuilt. */
-  onDegraded?: (failure: PlaybackFailure, address: string) => void;
 }
 
-export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal, onDegraded }: SeaznPlayerProps) {
+export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal }: SeaznPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playbackRef = useRef<Playback | null>(null);
   const srcRef = useRef(src);
   const onFatalRef = useRef(onFatal);
-  const onDegradedRef = useRef(onDegraded);
   // The address a fatal error was raised for: the note shows while that address is the one on the player, and a fresh address clears
   // it with no state to reset.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   useEffect(() => {
     onFatalRef.current = onFatal;
-    onDegradedRef.current = onDegraded;
   });
 
   // One controller per element, for as long as the element lives.
@@ -54,7 +50,6 @@ export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal, onDeg
         setFailedSrc(srcRef.current);
         onFatalRef.current?.(failure, srcRef.current);
       },
-      onDegraded: (failure) => onDegradedRef.current?.(failure, srcRef.current),
     });
     playbackRef.current = playback;
     playback.setSource(srcRef.current);
