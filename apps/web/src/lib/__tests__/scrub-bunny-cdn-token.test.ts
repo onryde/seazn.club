@@ -9,6 +9,7 @@
 // `sentryBeforeSendTransaction` for transactions).
 import { describe, expect, it } from "vitest";
 import type { Event } from "@sentry/nextjs";
+import { bunnyResolutionsBody } from "@/server/video/__tests__/_bunny-resolutions";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import { holdsCredential, scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 import { sentryBeforeSendTransaction } from "../sentry-transactions";
@@ -21,6 +22,9 @@ async function producedUrl(): Promise<{ url: string; token: string }> {
   let url = "";
   const fetchImpl = (async (u: string | URL | Request) => {
     const s = String(u);
+    if (s.endsWith("/resolutions")) {
+      return new Response(JSON.stringify(bunnyResolutionsBody({ guid: GUID, mp4: [240, 720] })), { status: 200 });
+    }
     if (s.startsWith("https://video.bunnycdn.com/")) {
       return new Response(JSON.stringify({ guid: GUID, status: 4, length: 60, availableResolutions: "240p,720p" }), { status: 200 });
     }

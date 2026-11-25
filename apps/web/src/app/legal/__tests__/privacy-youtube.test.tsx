@@ -258,8 +258,9 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(composed.length, "anti-vacuity: the composed branch was found").toBeGreaterThan(500);
     expect(composed, "the composed branch reads no destination").not.toMatch(/readSessionDestination|destinationRowOf/);
     expect(composed, "its target is the programme input's RTMPS credential").toContain("target: { url: programme.rtmps.url, streamKey: programme.rtmps.streamKey }");
-    //  (3) and what the runner puts on the Machine is five named values - no key, no target, no destination. Four identify the
-    //  job; the fifth, RELAY_AIRINGS (R4), is an on/off switch whose value is the constant "1", copied only when web's own is "1".
+    //  (3) and what the runner puts on the Machine is six named values - no key, no target, no destination. Four identify the
+    //  job; the fifth and sixth, RELAY_AIRINGS (R4) and RELAY_INPUT_BEAT (T44), are on/off switches whose value is the constant "1",
+    //  each copied only when web's own is "1".
     //  The literal is read BRACE-BALANCED: that switch is a conditional spread holding its own `{ }`, so a `[^}]*` match stopped
     //  inside it and any value written after the spread went unchecked.
     const fly = src("../../../server/relay/runner-fly.ts");
@@ -274,11 +275,12 @@ describe("privacy — what the YouTube section says about the other halves of th
     }
     const env = close > open ? fly.slice(open + 1, close) : "";
     expect(env.length, "anti-vacuity: the Machine env literal was found").toBeGreaterThan(40);
-    expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT", "RELAY_AIRINGS"]);
+    expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT", "RELAY_AIRINGS", "RELAY_INPUT_BEAT"]);
     expect(env, "RELAY_AIRINGS carries a constant, never a value read from anywhere else").toContain('...(process.env.RELAY_AIRINGS === "1" ? { RELAY_AIRINGS: "1" } : {}),');
+    expect(env, "RELAY_INPUT_BEAT carries a constant too, behind web's own flag reader").toContain('...(relayInputBeat() ? { RELAY_INPUT_BEAT: "1" } : {}),');
     // A spread names no key, so the name list above cannot see one: `...process.env` would put every secret on the Machine
-    // and still read five names. Exactly one spread, the switch pinned above (ci-fix review m4).
-    expect((env.match(/\.\.\./g) ?? []).length, "one spread in the Machine env, the RELAY_AIRINGS switch").toBe(1);
+    // and still read six names. Exactly two spreads, the two switches pinned above (ci-fix review m4).
+    expect((env.match(/\.\.\./g) ?? []).length, "two spreads in the Machine env, the RELAY_AIRINGS and RELAY_INPUT_BEAT switches").toBe(2);
     // Nor can it see a SHORTHAND key (final review 2, item 6): `{ ..., DATABASE_URL }` names no `NAME:` and still ships the
     // value of whatever is in scope under that name. So every top-level entry - split on the literal's own commas, at depth
     // 0 of its brackets and outside its strings - is either the one spread or `NAME: value`; anything else is named here.
@@ -304,7 +306,7 @@ describe("privacy — what the YouTube section says about the other halves of th
     }
     const unnamed = entries.filter((e) => !e.startsWith("...") && !/^\w+\s*:/.test(e));
     expect(unnamed, "every entry is `NAME: value` or the one spread - never a shorthand or computed key").toEqual([]);
-    expect(entries.length, "anti-vacuity: the Machine env's entries, the four named values and the switch").toBe(5);
+    expect(entries.length, "anti-vacuity: the Machine env's entries, the four named values and the two switches").toBe(6);
   });
 
   it("R9 (B7 re-review m3): the sub-processors list says what Fly.io runs for us - the hosting AND the machine that adds the score overlay - in the privacy page's own words", () => {

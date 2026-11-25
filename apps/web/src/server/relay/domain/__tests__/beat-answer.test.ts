@@ -186,11 +186,12 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
               // Exactly the branch's keys: sid / startedBy / endReason appear where the matrix says and nowhere else,
               // and the common fields ride on EVERY 2xx, replaced and taken included (ask 1). `device` is PR-2's.
               // Court stream's `next` (§5.3) rides only when the caller gives one: COMMON is a fixture code's, so it is absent.
-              // So does `realtime` (push nudges §2.1): COMMON carries none, so no answer here has it.
-              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "realtime"));
+              // So do `realtime` (push nudges §2.1) and Task 46's `delivery`: COMMON carries neither, so no answer here has them.
+              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "realtime" && k !== "delivery"));
               expect(wire, wire.state).not.toHaveProperty("next");
               expect(wire, wire.state).not.toHaveProperty("autoRefusal");
               expect(wire, wire.state).not.toHaveProperty("realtime");
+              expect(wire, wire.state).not.toHaveProperty("delivery");
               for (const k of COMMON_KEYS) expect(wire, `${wire.state} carries ${k}`).toHaveProperty(k);
               // go-live carries the open session's own startedBy, for every CaptureStartedBy option.
               if (wire.state === "go-live") expect(wire.startedBy, label).toBe(open!.startedBy);
@@ -272,7 +273,7 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
       const wire = wireBeatAnswer(core, { ...COMMON, next: NEXT });
       expect(wire, core.state).toHaveProperty("next", NEXT);
       expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
-      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "autoRefusal" && k !== "realtime"));
+      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "autoRefusal" && k !== "realtime" && k !== "delivery"));
     }
     const unscheduled = wireBeatAnswer({ state: "live", sid: S }, { ...COMMON, next: { label: "TBD", scheduledStart: null } });
     expect(unscheduled.next).toEqual({ label: "TBD", scheduledStart: null });
@@ -321,7 +322,7 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
       }
       expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
       expect(Object.keys(wire).sort(), core.state)
-        .toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && (k !== "realtime" || CARRIES_REALTIME[core.state])));
+        .toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "delivery" && (k !== "realtime" || CARRIES_REALTIME[core.state])));
     }
     // Anti-vacuity: both fates reached, and every core judged.
     expect(carried).toBe(CORES.filter((c) => CARRIES_REALTIME[c.state]).length);
@@ -397,5 +398,59 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
       checked++;
     }
     expect(checked).toBe(CORES.length);
+  });
+
+  // Task 46 (owner 2026-11-24; the brief): `delivery` rides on the answers that tell the phone to publish — go-live and live —
+  // and on no other: never replaced or taken (the contract omits it there), and not waiting or over, where the phone has no
+  // session to publish into. Members are picked by name; an object with none, or null, is omitted, never sent empty or null.
+  const dlv = (a: CaptureBeatAnswer) => ("delivery" in a ? a.delivery : undefined);
+  const DELIVERY = { relayOutput: "connected", programmePhase: "live", fps: 30, kbps: 4500, cameraIngest: "connected", programmeIngest: "disconnected" } as const;
+  const PUBLISHING: ReadonlySet<string> = new Set(["go-live", "live"]);
+  it("Task 46: `delivery` rides on go-live and live exactly as given, and on no other answer; every answer parses", () => {
+    let present = 0, absent = 0;
+    for (const core of CORES) {
+      const wire = wireBeatAnswer(core, { ...COMMON, delivery: DELIVERY });
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      if (PUBLISHING.has(core.state)) {
+        expect(wire, core.state).toHaveProperty("delivery", DELIVERY);
+        present++;
+      } else {
+        expect(wire, core.state).not.toHaveProperty("delivery");
+        absent++;
+      }
+    }
+    // go-live and live; waiting (twice), over, replaced and taken.
+    expect([present, absent]).toEqual([2, 5]);
+  });
+  it("Task 46: a null or empty `delivery` is omitted, never null or {}; one member alone rides alone", () => {
+    for (const state of PUBLISHING) {
+      const core = CORES.find((c) => c.state === state)!;
+      expect(wireBeatAnswer(core, { ...COMMON, delivery: null }), state).not.toHaveProperty("delivery");
+      expect(wireBeatAnswer(core, { ...COMMON, delivery: {} }), state).not.toHaveProperty("delivery");
+      expect(wireBeatAnswer(core, COMMON), state).not.toHaveProperty("delivery");
+      expect(dlv(wireBeatAnswer(core, { ...COMMON, delivery: { cameraIngest: "connected" } })), state).toEqual({ cameraIngest: "connected" });
+    }
+  });
+  it("Task 46: a wider `delivery` (a relay beat's other facts) never leaks onto the strict wire — members are picked by name", () => {
+    const wide = { ...DELIVERY, inputKicks: 2, streamKey: "never-on-the-wire" } as BeatAnswerCommon["delivery"];
+    const wire = wireBeatAnswer({ state: "live", sid: S }, { ...COMMON, delivery: wide });
+    expect(dlv(wire)).toEqual(DELIVERY);
+    expect(CaptureBeatAnswer.safeParse(wire).success).toBe(true);
+    expect(JSON.stringify(wire)).not.toContain("never-on-the-wire");
+  });
+  it("Task 46: pollSeconds (and every other field) is identical with and without `delivery`, on every answer", () => {
+    let compared = 0;
+    for (const core of CORES) {
+      for (const pollSeconds of [POLL_NEAR_SECONDS, POLL_FAR_SECONDS]) {
+        const without = wireBeatAnswer(core, { ...COMMON, pollSeconds });
+        const withIt = wireBeatAnswer(core, { ...COMMON, pollSeconds, delivery: DELIVERY });
+        expect(withIt.pollSeconds, core.state).toBe(without.pollSeconds);
+        const rest: Record<string, unknown> = { ...withIt };
+        delete rest.delivery;
+        expect(rest, core.state).toEqual(without);
+        compared++;
+      }
+    }
+    expect(compared).toBe(CORES.length * 2);
   });
 });

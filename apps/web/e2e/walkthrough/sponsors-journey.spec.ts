@@ -290,7 +290,7 @@ test("J2 On stream: each tick and untick is what the stream's plan follows — o
   test.setTimeout(2 * NAV_MS + 8 * (ACT_MS + POLL_WAIT_MS));
   const o = owner();
   const { page } = o;
-  // The console preview's door: the plan the fixture page's stream preview reads (fixture-stream-panel.tsx `preview: true`).
+  // The console preview's door: the plan the fixture page's stream preview reads (fixture-stream-panel/panel.tsx `preview: true`).
   const planNow = (want: string[], message: string) =>
     expect.poll(async () => planSponsorIds(await previewPlan(page.request, volley.fixtureId)), { message, timeout: POLL_WAIT_MS }).toEqual([...want].sort());
 

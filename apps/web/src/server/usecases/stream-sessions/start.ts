@@ -11,7 +11,6 @@ import {
   MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   overlayDelayDefaultMs,
-  seaznHostedLive,
   seaznVideoOrigins,
   tunable,
 } from "@/server/relay/config";
@@ -37,7 +36,7 @@ import { recordEvent, recordStorageSnapshot, type EventSource } from "@/server/r
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { creditBalance, ensureMonthlyStreamGrant, restartAllowance } from "../stream-credits";
-import { DestinationNotAllowedError } from "../stream-targets";
+import { DestinationNotAllowedError, seaznClosed } from "../stream-targets";
 import { clearLatchAfterStart, lockFixtureCode, writeStreamSettings } from "../stream-codes";
 import { codeEnded } from "@/server/api-v1/capture-http";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
@@ -47,7 +46,7 @@ import { isSeaznTarget, targetConnectionId } from "./destination";
 import { applyExpiry } from "./expiry";
 import { storageUsageForColumns, storageHeadroomMinutes } from "./storage";
 import { targetHolderFor, tearDownPriorMachines, releasePriorOutputs, targetInUse } from "./holders";
-import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal, seaznUnavailable, seaznVideoUnconfigured } from "./refusals";
+import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal, seaznUnavailable, seaznVideoUnconfigured, isSerializationFailure, refuseRaceLoss } from "./refusals";
 import { provisionSession } from "./provision";
 import { endOtherCourtSessions } from "../court-stream-sessions";
 
@@ -267,7 +266,8 @@ export async function startBroadcast(
   // match publishes to a programme input we play back — so it runs composed whatever mode the caller resolved (the phone's
   // and the automatic start read the fixture's stored `stream_mode`; refusing passthrough would strand them). Coerced here,
   // before `composedRunnerDown`, so the composed gate below judges the mode that will actually run.
-  const seazn = await isSeaznTarget(sql, orgId, opts.targetId);
+  const target = await isSeaznTarget(sql, orgId, opts.targetId);
+  const seazn = target.seazn;
   const body = { mode: seazn ? "composed" as const : opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null, overlayDelayMs: opts.overlayDelayMs };
   // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
   // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
@@ -314,9 +314,11 @@ export async function startBroadcast(
   }
   // Task 11: with SEAZN_HOSTED_LIVE off the Seazn destination does not exist for this deployment (no list or pick offers it),
   // so a start that names it anyway — a direct `targetId`, a pick saved while the flag was on — is refused by the pick's own
-  // 422, before the mode is weighed and before anything is read, written or asked of a provider.
-  if (seazn && !seaznHostedLive()) {
-    log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not available on this deployment — start refused");
+  // 422, before the mode is weighed and before anything is read, written or asked of a provider. Task 33: the same refusal, at
+  // the same place, when the ORG switched Seazn off (V559 `offered`; `seaznClosed` is the one rule, shared with the pick's write).
+  // It gates only this NEW start: a Seazn session already running never comes through here, so it keeps running and Stops normally.
+  if (seaznClosed(target)) {
+    log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not offered (deployment flag or the org's switch off) — start refused");
     throw seaznUnavailable();
   }
   // R2001: a composed start on a deployment with no compositor runner is refused HERE — admission's FIRST gate, asked
@@ -444,6 +446,8 @@ export async function startBroadcast(
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
   const defaultDelayMs = overlayDelayDefaultMs(opts.courtLinkId !== undefined);
+  // Task 38: the club's timing is a MATCH stream's link of the chain alone; a court's is a typed null, so its coalesce skips it.
+  const clubDelayMs = opts.courtLinkId !== undefined ? sql`null::int` : sql`od.overlay_delay_ms`;
 
   const sessionId = await (sql.begin(async (tx) => {
     // Web G review (finding 1): a start on the match's OWN code takes the fixture's code lock — the lock the Stream switch's
@@ -456,6 +460,15 @@ export async function startBroadcast(
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
     const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
+    // Task 33 fix round 1 (m1): the org's Seazn switch (V559 `offered`) is re-read UNDER that lock. The early read above ran before
+    // the storage read (a provider call: seconds), and the switch's PUT updates this same row, so the two serialise here: an off that
+    // committed before this lock refuses this start by the same 422, before anything is written; one that commits after it finds
+    // the session already admitted, which it never stops (owner ruling: the switch gates only NEW starts). A row archived since the
+    // early read reads `seazn: false` here and `admit` answers it 404, as for any start.
+    if (seazn && seaznClosed(await isSeaznTarget(tx, orgId, body.targetId))) {
+      log.warn({ fixtureId, orgId }, "stream session: the org switched the Seazn destination off while this start was admitted — start refused");
+      throw seaznUnavailable();
+    }
     // O17 fix round 1 (finding 3): a court start re-reads the match's Stream switch under its settings-row lock, in the
     // transaction that inserts the session. `pairingFor` read it before the slow prepare; a switch-off landing in between
     // (setCourtStream holds the same row lock while it writes) is refused here by name, so no session is ever inserted for a
@@ -519,7 +532,7 @@ export async function startBroadcast(
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
              -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
              -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
-             coalesce(${body.themeId ?? null}::text, st.overlay_template),
+             coalesce(${body.themeId ?? null}::text, st.overlay_template, od.overlay_template),
              ${MAX_DURATION_MINUTES}, ${actorUserId},
              ${usage.totalStorageMinutes}, ${reservationMinutes(body.mode, MAX_DURATION_MINUTES)}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
@@ -527,14 +540,17 @@ export async function startBroadcast(
              ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}, ${opts.courtLinkId ?? null},
              -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
-             -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
+             -- PR #989 review m2: a delay the create names wins over the stored one (null: the club's, else the default), so the
              -- organiser's Go live streams the timing its panel showed even while that timing's own save is in flight.
              -- Court stream device check 3 (D1): the default is a court session's own (0 ms), every other session's 3.1 s.
+             -- Task 38 (V558): between the match's own and the default sits the CLUB's timing (org_stream_defaults) - for a MATCH
+             -- stream only: a court session ignores it and keeps its own default (owner, 2026-11-24). The style above takes the club's
+             -- for courts too.
              ${body.mode !== "composed"
                ? sql`0`
                : body.overlayDelayMs === undefined
-                 ? sql`coalesce(st.overlay_delay_ms, ${defaultDelayMs}::int)`
-                 : sql`${body.overlayDelayMs ?? defaultDelayMs}::int`},
+                 ? sql`coalesce(st.overlay_delay_ms, ${clubDelayMs}, ${defaultDelayMs}::int)`
+                 : sql`coalesce(${body.overlayDelayMs}::int, ${clubDelayMs}, ${defaultDelayMs}::int)`},
              -- T11 (post-T1 amendment): written ONCE, here, and never updated — V479's broadcast_implies_api_backed holds them
              -- together, and the per-target index exempts an api_backed session from the moment it exists.
              ${connectionId !== null}, ${prepared?.broadcastId ?? null}
@@ -544,6 +560,7 @@ export async function startBroadcast(
         left join courts c on c.id = f.court_id          -- a fixture with no court leaves venue_* null
         left join venues v on v.id = c.venue_id
         left join fixture_stream_settings st on st.fixture_id = f.id   -- R2004: the fixture's stored overlay choices
+        left join org_stream_defaults od on od.org_id = ${orgId}       -- Task 38: the club's (a club with no row sets nothing)
        where f.id = ${fixtureId}
       returning id`;
     // #981 follow-up: the insert copies its facts FROM the fixture row, so a fixture deleted after the entry's check
@@ -588,6 +605,9 @@ export async function startBroadcast(
       // this branch is the loser of a real race (G-T6), not the path an organiser normally meets.
       throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use", { holder: null });
     }
+    // Task 36d (defence in depth): a deadlock victim (40P01) or a serialization failure (40001) is answered as if the two starts
+    // had run one after the other — never the raw error, a 500. Mapped before `abandonThenRethrow`, which still runs.
+    if (isSerializationFailure(err)) await refuseRaceLoss(err, orgId, fixtureId, body.targetId);
     throw err;
   }).catch(abandonThenRethrow);
 

@@ -41,6 +41,7 @@ import {
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
   YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf, YOUTUBE_STATUS_LINES, youtubeStatusLineOf,
+  closeCodeOnPair, streamPairSeen, type PairSeen,
 } from "../stream-session-view";
 import { NOT_LIVE_WARN_MS, YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY, YOUTUBE_STATUS_VIEWS } from "../youtube";
 import { autoStartRefusalOf } from "@/server/usecases/stream-auto";
@@ -116,7 +117,9 @@ describe("stream-session-view — the copy maps", () => {
     expect(Object.keys(CREATE_ERROR_KEYS).sort()).toEqual([...CREATE_ERROR_CODES].sort());
     // T3: `target_in_use` is named by `inUseText` (stream.inUse.*); its map entry is the ONE holder-less "elsewhere"
     // sentence, and the retired `stream.error.target_in_use` (a court, never a match) is named by nothing.
-    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(c === "target_in_use" ? "stream.error.target_in_use.unknown" : `stream.error.${c}`);
+    // Task 33e follow-up: `seat_paused` is the panel's own seat line (`stream.phone.seatPaused`), never a second sentence for the same state.
+    const OWN_KEY: Partial<Record<CreateErrorCode, string>> = { target_in_use: "stream.error.target_in_use.unknown", seat_paused: "stream.phone.seatPaused" };
+    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(OWN_KEY[c] ?? `stream.error.${c}`);
     expect(inEveryLocale([...Object.values(CREATE_ERROR_KEYS), "stream.error.target_in_use.unknown"])).toBe(
       LOCALES.length * (CREATE_ERROR_CODES.length + 1),
     );
@@ -224,6 +227,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     // Match Day PB2 fix round 1 (m5): the billing freeze at the one start seam — a tab opened before the competition froze.
     ["PAYMENT_REQUIRED competitions.max_active (the freeze)", new PaymentRequiredError("competitions.max_active"), "competition_frozen"],
+    // Task 33e follow-up: an admin whose seat the member limit paused (requireOrgAuth) — a start that raced the pause.
+    ["PAYMENT_REQUIRED members.max (a paused seat)", new PaymentRequiredError("members.max"), "seat_paused"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
     // YouTube Connect T12 (spec §6.2): the six refusals the prepare step throws, each with the status the route's own documentation
     // gives it (openapi.ts POST /fixtures/{id}/stream-sessions) and the connection in the extras.
@@ -351,7 +356,7 @@ describe("I1 (B4 review): a Go live whose destination was removed in Directory",
 
 describe("target_in_use names the match (spec §3.3, §5.5)", () => {
   // Every case runs BOTH real functions in production order — createErrorHolder on the raw wire error, then
-  // createErrorText on what it returned (fixture-stream-panel.tsx `setCreateError` and the create-error render).
+  // createErrorText on what it returned (fixture-stream-panel/phone-tab.tsx `setCreateError` and the create-error render).
   const holderOf = async (holder: unknown) => createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder })));
   const textOf = async (holder: unknown, m = msg) => createErrorText({ code: "target_in_use", holder: await holderOf(holder) }, m);
 
@@ -663,7 +668,7 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
 type Phone = NonNullable<StreamPhone["phone"]>;
 const phoneFacts = (over: Partial<Phone> = {}): Phone => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null,
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z",
   lastBeatAt: "2026-09-14T12:09:50Z", elapsedMs: 10_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
@@ -1576,7 +1581,7 @@ describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner 
 // ---------------------------------------------------------------------------------------------------------------------
 // Owner ruling 2026-10-09 ("A"): a W5 refusal clears once the phone read flips to present
 // ---------------------------------------------------------------------------------------------------------------------
-/** The panel's glue, exactly as fixture-stream-panel.tsx wires the two helpers: a refusal sets the error and tells the
+/** The panel's glue, exactly as fixture-stream-panel/phone-tab.tsx wires the two helpers: a refusal sets the error and tells the
  *  watch; a read that LANDS asks `readClearsW5`, and a yes retires a W5 error (any other error stays). */
 type Panel = { watch: PresenceWatch; error: CreateFailureCode | null };
 const refuse = (p: Panel, code: CreateFailureCode, issued: number): Panel => ({ watch: presenceAfterRefusal(p.watch, code, issued), error: code });
@@ -2005,5 +2010,93 @@ describe("seaznRefinedCode (Task 16)", () => {
     expect(en[CREATE_ERROR_KEYS.composed_unavailable]).toMatch(/camera only/);
     expect(en[CREATE_ERROR_KEYS.seazn_composed_unavailable]).not.toMatch(/camera/i);
     expect(inEveryLocale([CREATE_ERROR_KEYS.seazn_composed_unavailable])).toBe(LOCALES.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Task 35 (owner 2026-11-24, "when phone is pair then can we close the QR automatically"): a QR the organiser has open
+// closes by itself, ONCE, when a phone pairs. The answers below are the owner's rule read row by row — a phone arrived
+// where there was none, or a different phone took the slot — never closeCodeOnPair's own output. The read model carries
+// no pairing id: the one field that moves when a different phone takes the slot without it passing through empty is the
+// takeover's instant (`lastTakeover.at`, §7.5), so that is the pairing's identity here.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("closeCodeOnPair — an open QR closes once when a phone pairs (Task 35)", () => {
+  // Three pairings, named as the read model names them: by the instant each was claimed (T35 review m1: `phone.pairedAt`).
+  const A = "2026-09-14T11:05:00.000Z"; // phoneFacts()'s own pairing
+  const B = "2026-09-14T11:30:00.000Z";
+  const C = "2026-09-14T11:45:00.000Z";
+  const paired = (id: string): PairSeen => ({ id });
+  /** The rule folded over a run of reads, poll after poll, from what the surface last saw: the steps that closed it. */
+  const closesAt = (start: PairSeen, reads: PairSeen[]): number[] => {
+    const at: number[] = [];
+    let prev = start;
+    reads.forEach((next, i) => {
+      if (closeCodeOnPair(prev, next)) at.push(i);
+      prev = next;
+    });
+    return at;
+  };
+
+  it("row by row: the EMPTY case first, then a phone pairing, the same pairing re-polled, another phone, and a second", () => {
+    const rows: [string, PairSeen, PairSeen, boolean][] = [
+      ["empty: no phone before, none now", null, null, false],
+      ["no phone now (the pairing ended): nothing paired", paired(A), null, false],
+      ["a phone pairs where there was none", null, paired(A), true],
+      ["the same pairing, re-polled", paired(A), paired(A), false],
+      ["another phone takes the slot", paired(A), paired(B), true],
+      ["a second takeover", paired(B), paired(C), true],
+    ];
+    let checked = 0;
+    for (const [name, prev, next, want] of rows) {
+      expect(closeCodeOnPair(prev, next), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(rows.filter(([, , , want]) => want).length, "PREMISE: both answers are reached").toBe(3);
+  });
+
+  it("sequences: once per pairing — re-polls after the close leave a re-opened QR open; a re-pair after Revoke & reissue closes it again", () => {
+    // Paired, the code shown again; then nothing but re-polls of that pairing: it never closes (the organiser opened it).
+    expect(closesAt(paired(A), [paired(A), paired(A), paired(A)]), "the same pairing re-polled").toEqual([]);
+    // Revoke & reissue: the new code has no phone (the card shows it), re-polled; a phone scans it (CLOSE); re-polled.
+    expect(closesAt(paired(A), [null, null, paired(B), paired(B)]), "the re-pair after a reissue, once").toEqual([2]);
+    // Two takeovers in a row, each re-polled: each closes once.
+    expect(closesAt(paired(A), [paired(B), paired(B), paired(C), paired(C)])).toEqual([0, 2]);
+    // The empty run: nothing ever pairs.
+    expect(closesAt(null, [null, null, null]), "empty").toEqual([]);
+  });
+
+  it("streamPairSeen reads the Phone tab's read model: no read or no phone → nothing paired; a phone → its pairing's claim instant", () => {
+    const took = { at: B, model: "Galaxy S24", elapsedMs: 1_000 };
+    const rows: [string, StreamPhone | null, PairSeen][] = [
+      ["nothing read yet", null, null],
+      ["a read with no phone", readModel({ phone: null }), null],
+      ["no phone, though a takeover is still served", readModel({ phone: null, lastTakeover: took }), null],
+      ["a paired, present phone", readModel(), { id: A }],
+      ["the same phone gone silent is still that pairing", readModel({ phone: SILENT }), { id: A }],
+      ["a phone that took the slot: ITS pairing, not the takeover's instant", readModel({ lastTakeover: took, phone: phoneFacts({ pairedAt: C }) }), { id: C }],
+    ];
+    let checked = 0;
+    for (const [name, read, want] of rows) {
+      expect(streamPairSeen(read), name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("over read models poll after poll: the phone's own facts changing (silent, a later beat, the notice ageing, a reissue answering it) never close it; a takeover does", () => {
+    const takeover = (elapsedMs: number) => ({ at: B, model: "Galaxy S24", elapsedMs });
+    const taken = phoneFacts({ model: "Galaxy S24", pairedAt: B });
+    const reads = [
+      readModel(),
+      readModel({ phone: SILENT }),
+      readModel({ phone: phoneFacts({ elapsedMs: 20_000, lastBeatAt: "2026-09-14T12:10:00Z" }) }),
+      readModel({ lastTakeover: takeover(0), phone: taken }),
+      readModel({ lastTakeover: takeover(5_000), phone: taken }),
+      // B7 review I-2: Revoke & reissue answers the takeover — the server stops serving it — while a live session holds its
+      // phone: the SAME pairing, so the code the organiser just asked for stays in front of them.
+      readModel({ lastTakeover: null, phone: taken }),
+    ];
+    expect(closesAt(streamPairSeen(readModel()), reads.map(streamPairSeen))).toEqual([3]);
   });
 });

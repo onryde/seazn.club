@@ -256,6 +256,34 @@ export const PutCourtStream = z.object({ on: z.boolean() }).strict();
 export type PutCourtStream = z.infer<typeof PutCourtStream>;
 export const CourtStreamSwitch = z.object({ on: z.boolean() }).strict();
 export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
+/** Seazn-hosted video, Task 33 (V559): GET/PUT /orgs/{id}/seazn-hosted — the org's Seazn switch. `offered` false: no match may
+ *  pick or start Seazn (422 seazn_unavailable); a live Seazn stream, its recordings and its replays are untouched. */
+export const PutSeaznHosted = z.object({ offered: z.boolean() }).strict();
+export type PutSeaznHosted = z.infer<typeof PutSeaznHosted>;
+/** Task 38 (V558): PUT /orgs/{id}/stream-defaults — the club's default Score style and Score timing, each written only when the body
+ *  names it. `overlayTemplate` — a template id the registry serves now (a retired or unknown one is a 400 and writes nothing); null
+ *  clears it (the sport's own default). `overlayDelayMs` — whole ms, 0-30000 (V462's check; the same bound as the match's own); null
+ *  clears it (the server's default), 0 is a real value. A new stream copies the chain match ?? club ?? default at its start; a stream
+ *  already running never moves, and a COURT stream takes the club's style but never its timing. */
+export const PutOrgStreamDefaults = z
+  .object({
+    overlayTemplate: z.string().min(1).max(40).nullable().optional(),
+    overlayDelayMs: OverlayDelayOverrideMs.nullable().optional(),
+  })
+  .strict()
+  .refine((b) => b.overlayTemplate !== undefined || b.overlayDelayMs !== undefined, { message: "overlayTemplate or overlayDelayMs is required" });
+export type PutOrgStreamDefaults = z.infer<typeof PutOrgStreamDefaults>;
+/** The answer: the two defaults as stored (`null` = the club sets none, never the resolved value) and the row's `revision` (null with no row). */
+export const OrgStreamDefaults = z
+  .object({
+    overlayTemplate: z.string().nullable(),
+    overlayDelayMs: z.number().int().nullable(),
+    revision: z.number().int().nullable(),
+  })
+  .strict();
+export type OrgStreamDefaults = z.infer<typeof OrgStreamDefaults>;
+export const SeaznHosted = z.object({ offered: z.boolean() }).strict();
+export type SeaznHosted = z.infer<typeof SeaznHosted>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
@@ -347,6 +375,10 @@ export const StreamPhone = z
          *  phone's last readings are stale and are not judged: only `not_responding` (a held phone's silence) can name it. */
         health: z.enum(HEALTH_REASONS).nullable(),
         startFailed: CaptureStartFailed.nullable(),
+        /** T35 review m1: when this pairing was claimed — the pairing's identity as the panel reads it (Task 35: a different value
+         *  is a different phone's pairing, so an open code fold closes). A later beat never moves it; a reissue under a live
+         *  session keeps the held pairing, and so its instant. ISO. */
+        pairedAt: z.string(),
         lastBeatAt: z.string(),
         /** `now − lastBeatAt` on the SERVER's clock at this response (the D3 M6 rule): the panel never compares its own
          *  clock with a server timestamp. */
@@ -626,6 +658,17 @@ export const RelayHeartbeat = z
     // either beat store (ruling R14); `airingsDropped` is stored as sent.
     airings: z.array(RelayAiring).max(64).nullish(),
     airingsDropped: z.number().int().min(0).nullish(),
+    // T44 (compositor Owed 110 and 111; the compositor's docs/specs/2026-11-24-heartbeat-input-keys.proposed.json, whose six
+    // declarations these are, verbatim): the camera as the relay RECEIVES it. Additive and nullish like every R2 field, and
+    // absent from a compositor built before them or run without RELAY_INPUT_BEAT=1 (the flag web's runner copies into the Machine
+    // env, off by default: relay/config.ts `relayInputBeat`). Stored as sent, in both beat stores (relay/sanitise.ts); a present
+    // 0 is a measured zero, never "unknown". relay-contract.test.ts compares each to the proposal's copy.
+    inputGiveUpReason: z.enum(["connect_timeout", "stalled", "phone_live_discard", "hold_end", "eos", "error"]).nullish(),
+    inputGiveUpGen: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputReceivedFps: z.number().min(0).nullish(),
+    inputReceivedKbps: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputWithheldSpans: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputQueueOverruns: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
   })
   .strict()
   // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a
@@ -641,6 +684,7 @@ export const RelayHeartbeatReply = z.object({
   desiredState: z.enum(["live", "ending"]),
   /** Owed 108 fix (b): the session's PHONE-LIVE EDGE counter (V476; domain/phone-live.ts) — bumped once each time the phone goes
    *  from not-live back to live after it had been live, so a relay waiting out its reconnect back-off can reconnect at once.
+   *  Task 45: Cloudflare's camera RE-connection raises it too (usecases/stream-sessions/live-notification.ts `reconnectNudge`).
    *  The relay acts once per INCREASE. Monotonic for the life of the session and stored, never remembered. 0 at the first-ever
    *  live (no outage to recover from). Absent — web omits it, and a reader treats null the same — when the session has no phone,
    *  or its phone has not been live yet: unknown. */

@@ -23,9 +23,10 @@ import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
-import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, tunable } from "@/server/relay/config";
+import { NO_CLUB_STREAM_PREFS_READ, NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, streamPasteCodeShown, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
+import { orgStreamDefaultsOf } from "@/server/usecases/org-stream-defaults";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { hasLiveConnection } from "@/server/youtube/connections";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -173,12 +174,15 @@ export async function loadStreamPanelContext(args: {
   const relayOn = relayEntitled && !relayDisabled;
   // R2006: the listed fixtures' stored score preferences — one read, only with the panel (`entitled`).
   // I3: the aired sides for the preview — only with the panel.
-  const [credits, currency, phoneCapture, storedPrefs, previewSides] = await Promise.all([
+  // Task 38: the club's default style and timing — one read, only with the panel; the row "Club style: …" and the picker's effective
+  // style read it, and Go live leaves the style to the server's chain.
+  const [credits, currency, phoneCapture, storedPrefs, previewSides, clubDefaults] = await Promise.all([
     relayOn ? relayCredits(auth, auth.orgId) : null,
     relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
     entitled ? phoneCaptureOffered(auth) : false,
     entitled ? streamPrefsOf(auth.orgId, args.fixtureIds) : NO_STORED_PREFS,
     entitled ? overlayPreviewSides(auth.orgId, args.fixtureIds) : NO_PREVIEW_SIDES,
+    entitled ? orgStreamDefaultsOf(auth.orgId) : NO_CLUB_STREAM_PREFS_READ,
   ]);
   return {
     entitled,
@@ -193,11 +197,13 @@ export async function loadStreamPanelContext(args: {
     overlayDelayDefaultMs: overlayDelayDefaultMs(false),
     // Court stream device check 3 (D1): a court session's own default, from the same rule the create reads.
     courtOverlayDelayDefaultMs: overlayDelayDefaultMs(true),
+    // Task 38: the club's own default (style and timing; null = none set). Never another org's: read for the authorised org.
+    clubStyle: { overlayTemplate: clubDefaults.overlayTemplate, overlayDelayMs: clubDefaults.overlayDelayMs },
     // I3: each listed fixture's sides as the overlay airs them (`overlayPreviewSides`).
     overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any
     // session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its switched-off
-    // or unavailable state (fixture-stream-panel.tsx), which reads no balance.
+    // or unavailable state (fixture-stream-panel/panel.tsx), which reads no balance.
     orgId: auth.orgId,
     streamBalance: credits?.total ?? 0,
     // Task 14b (R4): the split behind the chip ("{m} free this month · {p} bought") and the plan's monthly allowance for
@@ -217,6 +223,9 @@ export async function loadStreamPanelContext(args: {
     // PR-2 T10 (§7.1): "stops about {n} minutes after the result" — the auto stop's delay as the tick reads it
     // (usecases/stream-sessions/), in whole minutes and never below 1 ("about 0 minutes" is not a sentence). No read.
     autoStopMinutes: Math.max(1, Math.round(tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS) / 60)),
+    // Task 34: the stream code's paste field and Copy — the deployment's STREAM_PASTE_CODE (dev, e2e and smoke servers show
+    // them; stg and prod show the QR alone). No read: env.
+    pasteCodeShown: streamPasteCodeShown(),
     // RT (lane-close fix, ruled 2026-09-29): each listed fixture's signed overlay key, for the OBS URL its panel copies —
     // the grant a community org's overlay presents to the realtime-token route. Only with the panel (`entitled`); a
     // fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.

@@ -13,15 +13,21 @@ const names = {
 };
 const base = { orgName: "Acme Sports", names };
 
-describe("buildCrumbs - the Sponsors hub is a top-nav page with no breadcrumb bar (owner, 2026-11-12: like Streaming and Directory)", () => {
-  it("returns no crumbs at all for /o/<club>/sponsors, so Breadcrumbs renders nothing", () => {
+// The club's three top-nav pages (owner, 2026-11-12 for Sponsors; 2026-11-23 for Streaming and Directory, which until then DID carry
+// the bar although the Sponsors comment said they did not). Each has its own "<- Dashboard" BackLink as its one return.
+const TOP_NAV_NO_CRUMBS = ["sponsors", "streaming", "directory"] as const;
+
+describe("buildCrumbs - the club's top-nav pages (Sponsors, Streaming, Directory) carry no breadcrumb bar", () => {
+  it("returns no crumbs at all for each of them, so Breadcrumbs renders nothing", () => {
     let checked = 0;
-    // The query string is not part of a pathname, so `?tab=` pages share the one path; the trailing-slash spelling is the same page.
-    for (const pathname of ["/o/acme/sponsors", "/o/acme/sponsors/"]) {
-      expect(buildCrumbs({ ...base, pathname }), pathname).toEqual([]);
-      checked++;
+    for (const page of TOP_NAV_NO_CRUMBS) {
+      // The query string is not part of a pathname, so `?tab=` pages share the one path; the trailing-slash spelling is the same page.
+      for (const pathname of [`/o/acme/${page}`, `/o/acme/${page}/`]) {
+        expect(buildCrumbs({ ...base, pathname }), pathname).toEqual([]);
+        checked++;
+      }
     }
-    expect(checked).toBe(2);
+    expect(checked, "anti-vacuity: two spellings of each of the three pages").toBe(6);
   });
 
   it("is not blanket: every other /o/<club> page keeps its trail (the positive pair that makes the empty result mean something)", () => {
@@ -29,6 +35,9 @@ describe("buildCrumbs - the Sponsors hub is a top-nav page with no breadcrumb ba
       ["/o/acme", 1],
       ["/o/acme/settings", 2],
       ["/o/acme/settings/billing", 3],
+      // A child of Settings that shares a top-nav page's NAME keeps its trail: the rule is the club-level segment, not the word.
+      ["/o/acme/settings/streaming", 3],
+      ["/o/acme/settings/directory", 3],
       ["/o/acme/c/summer-smash", 2],
       ["/o/acme/c/summer-smash/d/u16-boys", 3],
     ];
@@ -43,7 +52,32 @@ describe("buildCrumbs - the Sponsors hub is a top-nav page with no breadcrumb ba
   });
 
   it("does not swallow other org-level paths: an unknown segment still stops at the org", () => {
-    expect(buildCrumbs({ ...base, pathname: "/o/acme/sponsorship" })).toEqual([{ label: "Acme Sports", href: "/o/acme" }]);
+    for (const pathname of ["/o/acme/sponsorship", "/o/acme/streamings", "/o/acme/directory-old"]) {
+      expect(buildCrumbs({ ...base, pathname }), pathname).toEqual([{ label: "Acme Sports", href: "/o/acme" }]);
+    }
+  });
+
+  // Swept from the route tree, so a new club-level page is a decision: it either keeps its trail or joins the no-crumb list here.
+  it("every club-level route directory either is a top-nav page with no bar, or keeps its trail; and every no-bar page is a real route", () => {
+    const ORG_DIR = join(import.meta.dirname, "..", "..", "app", "o", "[orgSlug]");
+    const dirs = readdirSync(ORG_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== "__tests__")
+      .map((e) => e.name);
+    for (const page of TOP_NAV_NO_CRUMBS) expect(dirs, `${page} is a real route directory`).toContain(page);
+    let bare = 0;
+    let trailed = 0;
+    for (const dir of dirs) {
+      const crumbs = buildCrumbs({ ...base, pathname: `/o/acme/${dir}` });
+      if ((TOP_NAV_NO_CRUMBS as readonly string[]).includes(dir)) {
+        expect(crumbs, dir).toEqual([]);
+        bare++;
+      } else {
+        expect(crumbs[0], dir).toEqual({ label: "Acme Sports", href: "/o/acme" });
+        trailed++;
+      }
+    }
+    expect(bare, "anti-vacuity: each top-nav page was swept").toBe(TOP_NAV_NO_CRUMBS.length);
+    expect(trailed, "anti-vacuity: at least one route keeps its trail (settings, c)").toBeGreaterThanOrEqual(2);
   });
 });
 

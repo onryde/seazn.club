@@ -107,7 +107,7 @@ describe("create", () => {
     await m.submit();
     await flush();
     expect(propsOf(m.find("sponsor-share-url"))).toMatchObject({ value: `${ORIGIN}/r/sponsor/${TOKEN_A}`, readOnly: true });
-    // A bearer secret painted in the DOM is kept out of session replay (the house class, fixture-stream-panel.tsx).
+    // A bearer secret painted in the DOM is kept out of session replay (the house class, fixture-stream-panel/phone-tab-body.tsx).
     expect(String(propsOf(m.find("sponsor-share-url")).className)).toMatch(/(^|\s)ph-no-capture(\s|$)/);
     expect(m.has("sponsor-share-form"), "the form steps aside while the url is up").toBe(false);
     expect(m.text("sponsor-share-once")).toContain(msg("sponsors.share.onceHelp"));

@@ -19,7 +19,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
@@ -29,9 +29,10 @@ import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import * as streamDestinations from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
-import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, sessionOnTarget, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
@@ -63,6 +64,7 @@ import {
   type SessionDeps, type StartActor, apply, applyExpiry, createSession as organiserStart, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
   holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, startBroadcast, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
+import { isSerializationFailure, refuseRaceLoss } from "../stream-sessions/refusals";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
 // each of its four sites (r2-m3).
@@ -3514,7 +3516,11 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   // ended session (InvalidTransition → a 500 on the organiser's own create). Driven through the REAL stopSession from
   // inside the ingest call, so the race is the production one, not a rewritten row. Both modes: passthrough's
   // `provisioned` guard was already there, and is the positive pair.
-  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is asked for and no credit moves", async (mode) => {
+  // Seazn Task 36b: a composed start asks for its Machine BESIDE the inputs, so by the time a Stop lands inside the ingest call
+  // the Machine has been (or is being) asked for. The domain's answer is the same — the session ends `stopped`, the create
+  // resolves, no credit moves — and the Machine it made is torn down, none left alive; only "no Machine is asked for" stopped
+  // being true of composed. Passthrough has no Machine and is the positive pair.
+  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is left alive and no credit moves", async (mode) => {
     const r = await rig({ credits: 1 });
     const real = r.ingest.createLiveInput.bind(r.ingest);
     const seen: string[] = [];
@@ -3525,8 +3531,15 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     try {
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps);
       expect(seen, "the stop really landed mid-create").toHaveLength(1);
-      expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
-      expect(r.runner.created).toEqual([]);
+      if (mode === "composed") {
+        expect(r.runner.created, "PREMISE (Task 36b): the Machine was asked for beside the inputs, before the Stop").toHaveLength(1);
+        expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "destroyed" });
+        expect(r.runner.destroyed, "the Machine the start made is torn down").toHaveLength(1);
+        expect(await r.runner.list(), "none left alive").toEqual([]);
+      } else {
+        expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
+        expect(r.runner.created).toEqual([]);
+      }
       expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
     } finally {
       spy.mockRestore();
@@ -4080,6 +4093,240 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
       select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
     expect(n).toBe(1);
   });
+
+  /** Task 36d: G-T6's deadlock, replayed in a fixed order on two connections. The WINNER's admission has committed (its session
+   *  is `provisioning` on the target); its apply then writes that row twice in one transaction (persist, then persistFacts'
+   *  `warming_at`). The LOSER takes `lock` on the target row and inserts its own session, which waits on the winner at the
+   *  one_active_target index. Only then does the winner make its second write: that row version is its own, so Postgres re-runs
+   *  the `target_id` FK check, which takes FOR KEY SHARE on the target row. Answers how each side ended. */
+  async function crossTwoStarts(lock: (tx: Tx, orgId: string, targetId: string) => Promise<unknown>) {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const orgId = r.auth.orgId, targetId = r.target.id;
+    const winnerSid = await sessionOnTarget(orgId, a, targetId, "provisioning");
+    let secondWrite!: () => void;
+    const mayWriteAgain = new Promise<void>((res) => { secondWrite = res; });
+    let firstWritten!: () => void;
+    const wroteOnce = new Promise<void>((res) => { firstWritten = res; });
+    const winner = sql.begin(async (tx) => {
+      await tx`update fixture_stream_sessions set state = 'warming' where id = ${winnerSid}`;                        // persist
+      firstWritten();
+      await mayWriteAgain;
+      await tx`update fixture_stream_sessions set warming_at = coalesce(warming_at, now()) where id = ${winnerSid}`;  // persistFacts
+    });
+    winner.catch(() => {});                                   // settled below
+    await wroteOnce;
+    let loserPid!: number;
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((res) => { locked = res; });
+    const loser = sql.begin(async (tx) => {
+      loserPid = (await tx<{ pid: number }[]>`select pg_backend_pid() as pid`)[0]!.pid;
+      await lock(tx, orgId, targetId);
+      locked();
+      await sessionOnTarget(orgId, b, targetId, "requested", tx);   // waits on the winner at one_active_target
+    });
+    loser.catch(() => {});
+    try {
+      await lockTaken;
+      // The loser must be WAITING (on the winner's transaction) before the winner's second write, or there is no cycle to find.
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i++) {
+        const [w] = await sql<{ t: string | null }[]>`select wait_event_type as t from pg_stat_activity where pid = ${loserPid}`;
+        waiting = w?.t === "Lock";
+        if (!waiting) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(waiting, "premise: the loser's insert waits on the winner at one_active_target").toBe(true);
+    } finally {
+      secondWrite();
+    }
+    const [w, l] = await Promise.allSettled([winner, loser]);
+    const code = (s: PromiseSettledResult<unknown>) => (s.status === "rejected" ? (s.reason as { code?: string }).code ?? "no code" : "ok");
+    return { winner: code(w), loser: code(l), loserReason: l.status === "rejected" ? l.reason as { constraint_name?: string } : null };
+  }
+
+  it("Task 36d the CYCLE, deterministic: the premise (a plain FOR UPDATE on the target) deadlocks one side 40P01; the target row lock (lockStreamTarget) never does — the winner commits and the loser meets the index's 23505", async () => {
+    // Premise first: the choreography really is the cycle. Without it a green below proves only an ordering that never deadlocks.
+    const premise = await crossTwoStarts((tx, orgId, targetId) => tx`
+      select id from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null for update`);
+    expect([premise.winner, premise.loser], "premise: FOR UPDATE on the target is a deadlock").toContain("40P01");
+    const real = await crossTwoStarts(async (tx, orgId, targetId) => {
+      expect(await lockStreamTarget(tx, orgId, targetId)).toBe(true);
+    });
+    expect(real.winner, "the winner's apply commits").toBe("ok");
+    expect(real.loser, "the loser is refused by the index, never chosen as a deadlock victim").toBe("23505");
+    expect(real.loserReason?.constraint_name).toBe("fixture_stream_sessions_one_active_target");
+  });
+
+  /** A rolled-back transaction as postgres.js reports it: an Error carrying the SQLSTATE. */
+  const pgRollback = (code: "40P01" | "40001") => Object.assign(new Error(code === "40P01" ? "deadlock detected" : "could not serialize access"), { code });
+
+  it("Task 36d isSerializationFailure: 40P01 and 40001 only — a 23505, another code, a codeless Error, null and a string are not", () => {
+    const table: [unknown, boolean][] = [
+      [pgRollback("40P01"), true], [pgRollback("40001"), true], [{ code: "40P01" }, true],
+      [Object.assign(new Error("x"), { code: "23505" }), false], [Object.assign(new Error("x"), { code: "40P02" }), false],
+      [new Error("40P01"), false], [null, false], [undefined, false], ["40P01", false],
+    ];
+    let checked = 0;
+    for (const [err, want] of table) { expect(isSerializationFailure(err), String((err as { code?: string } | null)?.code ?? err)).toBe(want); checked++; }
+    expect(checked).toBe(table.length);
+  });
+
+  it.each(["40P01", "40001"] as const)("Task 36d refuseRaceLoss (%s): answered as if serialised — this fixture's active session → 409 active_session naming it; another match on the pasted destination → 409 target_in_use naming it; neither → typed 503 ingest_unavailable; each reported once", async (code) => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const orgId = r.auth.orgId, targetId = r.target.id;
+    const answer = (fixtureId: string) => refuseRaceLoss(pgRollback(code), orgId, fixtureId, targetId).then(() => null, (e: unknown) => e);
+    sentry.captureError.mockClear();
+    // Neither: the start, run again, would be admitted.
+    // Task 36b m4: the message names no cause — the rollback is not always "another start" (a provisioning step can lose to a
+    // stop or a sweep), and the string is what an API caller reads under the code.
+    expect(await answer(b)).toMatchObject({ status: 503, code: "ingest_unavailable", message: "the start could not finish; try again" });
+    // Another match holds the destination: the pre-check's own answer, with the holder named.
+    const holder = await sessionOnTarget(orgId, a, targetId, "warming");
+    const held = await answer(b) as HttpError;
+    expect(held).toMatchObject({ status: 409, code: "target_in_use" });
+    expect(held.extra?.holder).toMatchObject({ label: "Club" });
+    // This fixture's own session outranks the destination (F-A5): asked for A, which is the holder's fixture.
+    expect(await answer(a)).toMatchObject({ status: 409, code: "active_session", extra: { sessionId: holder } });
+    const reports = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.session.admission_race");
+    expect(reports, "every race loss is reported").toHaveLength(3);
+  });
+
+  it("Task 36d the admission boundary: a 40P01 thrown inside createSession's admission transaction, while another match takes the destination, answers 409 target_in_use naming it — never the raw 40P01 — and writes no session; a codeless error there still escapes unchanged", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    // The holder lands AFTER B's pre-check (storageUsage runs between the doors and the admission transaction), as a racing
+    // winner would; the 40P01 is thrown inside B's admission, after its target row lock (checkDestination runs there only).
+    const storageUsage = r.ingest.storageUsage.bind(r.ingest);
+    let seated: string | null = null;
+    r.ingest.storageUsage = async () => {
+      seated ??= await sessionOnTarget(r.auth.orgId, a, r.target.id, "warming");
+      return storageUsage();
+    };
+    const doomed: unknown[] = [pgRollback("40P01"), new Error("not a race")];
+    const spy = vi.spyOn(streamDestinations, "checkDestination").mockImplementation(() => { throw doomed.shift(); });
+    try {
+      const err = await createSession(r.auth, b, body(r.target.id), r.deps).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: "target_in_use", extra: { holder: { label: "Club" } } });
+      expect(seated, "premise: the holder was seated after the pre-check").not.toBeNull();
+      expect(spy, "premise: the 40P01 was thrown inside the admission").toHaveBeenCalledTimes(1);
+      // The negative pair: only a rollback is mapped. Asked on a fixture with no holder, a plain error is the same object.
+      await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id = ${seated!}`;
+      const plain = await createSession(r.auth, b, body(r.target.id), r.deps).then(() => null, (e: unknown) => e);
+      expect(plain).toBeInstanceOf(Error);
+      expect((plain as Error).message).toBe("not a race");
+    } finally {
+      spy.mockRestore();
+      r.ingest.storageUsage = storageUsage;
+    }
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
+    expect(n, "B wrote no session").toBe(0);
+  });
+
+  /** Fails the transaction that writes the `provisioned` transition (provisioning → warming) with `err`, once; every other
+   *  event is the real recorder. Answers how many times it fired. */
+  const failProvisioned = (err: Error) => {
+    const real = telemetry.recordEvent;
+    const fired = { n: 0 };
+    const spy = vi.spyOn(telemetry, "recordEvent").mockImplementation((tx, e) => {
+      if (e.kind === "transition" && e.from === "provisioning" && e.to === "warming" && fired.n === 0) { fired.n++; return Promise.reject(err); }
+      return real(tx, e);
+    });
+    return { spy, fired };
+  };
+
+  it.each(["passthrough", "composed"] as const)("Task 36d the winner's side (%s): `provisioned` rolled back 40P01 AFTER the inputs exist goes out through abandonProvisioning — 503 ingest_unavailable, every input deleted (and composed's Machine destroyed), no session row, nothing stuck in provisioning", async (mode) => {
+    const r = await rig({ credits: 1 });
+    const made: string[] = [];
+    const create = r.ingest.createLiveInput.bind(r.ingest);
+    const createSpy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (spec) => { const c = await create(spec); made.push(c.inputId); return c; });
+    const { spy, fired } = failProvisioned(pgRollback("40P01"));
+    sentry.captureError.mockClear();
+    try {
+      const err = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    } finally {
+      spy.mockRestore();
+      createSpy.mockRestore();
+    }
+    expect(fired.n, "premise: the provisioned transaction was the one rolled back").toBe(1);
+    expect(made, "premise: the inputs this mode makes").toHaveLength(mode === "composed" ? 2 : 1);
+    expect([...r.ingest.deletedInputs].sort(), "every input made is deleted").toEqual([...made].sort());
+    if (mode === "composed") {
+      expect(r.runner.created, "premise: the Machine existed").toHaveLength(1);
+      expect(r.runner.destroyed, "…and is destroyed").toHaveLength(1);
+    }
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(n, "no session row — none stuck in provisioning").toBe(0);
+    const routes = sentry.captureError.mock.calls.map(([, ctx]) => (ctx as { route?: string }).route);
+    expect(routes, "reported once").toContain("relay.session.provision_race");
+    expect(routes, "the inputs' deletes succeeded").not.toContain("relay.provision_cleanup");
+    // Sequence: the same fixture starts again at once, and goes through.
+    const again = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps);
+    expect((await r.row(again.sessionId)).state).toBe("warming");
+  });
+
+  it("Task 36d the winner's side, negative pair: a NON-rollback error in `provisioned` is not abandoned — it escapes unchanged and the session row stays (F18 owns it, as before)", async () => {
+    const r = await rig({ credits: 1 });
+    const { spy, fired } = failProvisioned(new Error("ledger down"));
+    try {
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toThrow("ledger down");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fired.n).toBe(1);
+    expect(r.ingest.deletedInputs).toEqual([]);
+    const rows = await sql<{ state: string }[]>`select state from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(rows.map((x) => x.state)).toEqual(["provisioning"]);
+  });
+
+  it.each(["passthrough", "composed"] as const)("Task 36d m3 (%s): a create the PROVIDER made whose ledger row then fails to write is still in the cleanup's list — its uid is deleted, 503 ingest_unavailable, no orphan report", async (mode) => {
+    const r = await rig({ credits: 1 });
+    const made: string[] = [];
+    const create = r.ingest.createLiveInput.bind(r.ingest);
+    const createSpy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (spec) => { const c = await create(spec); made.push(c.inputId); return c; });
+    const real = telemetry.recordEvent;
+    let ledgerFailures = 0;
+    // The CAMERA's `ok` row fails (one ledger write); every other row, the programme's included, is the real recorder.
+    const spy = vi.spyOn(telemetry, "recordEvent").mockImplementation((tx, e) => {
+      if (e.type === "create_live_input" && e.result === "ok" && (e.payload as { role?: string } | undefined)?.role === undefined && ledgerFailures === 0) {
+        ledgerFailures++;
+        return Promise.reject(new Error("injected: ledger down"));
+      }
+      return real(tx, e);
+    });
+    sentry.captureError.mockClear();
+    try {
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps)).rejects.toMatchObject({ status: 503, code: "ingest_unavailable" });
+    } finally {
+      spy.mockRestore();
+      createSpy.mockRestore();
+    }
+    expect(ledgerFailures, "premise: the camera's ledger write failed").toBe(1);
+    expect(made, "premise: the provider made every input asked").toHaveLength(mode === "composed" ? 2 : 1);
+    expect([...r.ingest.deletedInputs].sort(), "the camera's uid is deleted with the rest").toEqual([...made].sort());
+    const routes = sentry.captureError.mock.calls.map(([, ctx]) => (ctx as { route?: string }).route);
+    expect(routes).not.toContain("relay.provision_cleanup");
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(n).toBe(0);
+  });
+
+  it("Task 36d sequence: the LOSER of a two-start race starts again once the winner stops — admitted, the destination held by it alone", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const settled = await Promise.allSettled([
+      createSession(r.auth, a, body(r.target.id), r.deps).then((s) => ({ fixtureId: a, ...s })),
+      createSession(r.auth, b, body(r.target.id), r.deps).then((s) => ({ fixtureId: b, ...s })),
+    ]);
+    const won = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+    expect(won, "one winner").toHaveLength(1);
+    const lost = settled.find((s) => s.status === "rejected") as PromiseRejectedResult;
+    expect(lost.reason).toMatchObject({ status: 409, code: "target_in_use" });
+    const winner = won[0]!;
+    const loserFixture = winner.fixtureId === a ? b : a;
+    await stopSession(r.auth, winner.fixtureId, winner.sessionId, r.deps);
+    expect(TERMINAL_STATES, "premise: the winner's session ended").toContain((await r.row(winner.sessionId)).state);
+    const again = await createSession(r.auth, loserFixture, body(r.target.id), r.deps);
+    const active = await sql<{ id: string }[]>`
+      select id from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
+    expect(active.map((x) => x.id)).toEqual([again.sessionId]);
+  });
   // T2b (spec §5.2, D2): an ARCHIVED destination is absent to Go live — the existing not-found shape, nothing made.
   // A credit on the rig: `admit` answers no_credits BEFORE target_not_found (domain/session.ts), so a creditless rig
   // would be refused 402 and never reach the target — the brief's `rig()` was that premise.
@@ -4099,7 +4346,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect(n).toBe(0);
   });
 
-  it("the ROW LOCK: createSession WAITS on a transaction that holds the target FOR UPDATE, and an archive committed there makes it 404", async () => {
+  it("the ROW LOCK: createSession WAITS on a transaction that holds the target row lock (lockStreamTarget), and an archive committed there makes it 404", async () => {
     const r = await rig({ credits: 1 });   // a credit: see the archived case above (no_credits outranks target_not_found)
     let release!: () => void;
     const held = new Promise<void>((res) => { release = res; });

@@ -18,6 +18,8 @@
 //   - No MEDIA is fetched until the viewer presses play: a page that is only visited streams no video (Cloudflare bills what it
 //     delivers). hls.js is built with `autoStartLoad: false` and started by the first `play`, but it DOES ask for the manifest at
 //     `loadSource` (a small text file; it also lets a refused address show its note early); a native element has `preload="none"`.
+//   - The player is told its own size (seazn-player-config.ts): the rung is capped to the box by hls.js, and the first load starts ON the
+//     cap (the rung hls.js itself would allow for the box the viewer has at the first play), not on the lowest rung.
 //   - A failure the player cannot recover from (a fatal hls.js error, a browser hls.js cannot run in, a bundle that will not load,
 //     an element error) is `onFatal`: the player says so and the island reads the route again for a fresh address. It comes with
 //     WHY, as codes only (`PlaybackFailure`: hls.js's error type and details, the HTTP status it got, the element's MediaError code),
@@ -26,6 +28,7 @@
 import type Hls from "hls.js";
 import { isClientReportCode } from "@/lib/client-reports";
 import type { PlayerFailureReason } from "@/lib/seazn-video-report-codes";
+import { SEAZN_HLS_PLAYER_CONFIG, startLevelFromCap } from "./seazn-player-config";
 import { parseSignedAddress, withToken, type SignedAddress } from "./seazn-signed-address";
 
 export const HLS_MIME = "application/vnd.apple.mpegurl";
@@ -84,13 +87,26 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   let hlsReady: Promise<Hls | null> | null = null;
   let resume: { at: number | null; playing: boolean; listener: () => void } | null = null;
 
+  /** The manifest has been parsed: the rungs are known, so a load can begin. */
+  let parsed = false;
+  /** `startLoad` has been called: media is being fetched. */
+  let loadBegun = false;
+
+  /** The first media fetch: the viewer has pressed play AND the rungs are known. It starts on the cap hls.js holds NOW (the box as it is
+   *  at the first play, not as it was at parse), then fetches; from here a later load starts by itself. */
+  function beginLoad(h: Hls): void {
+    if (loadBegun) return;
+    loadBegun = true;
+    const rung = startLevelFromCap(h.autoLevelCapping, h.levels.length);
+    if (rung >= 0) h.startLevel = rung;
+    h.config.autoStartLoad = true;
+    h.startLoad();
+  }
+
   const onPlay = () => {
     if (started) return;
     started = true;
-    if (hls) {
-      hls.config.autoStartLoad = true;
-      hls.startLoad();
-    }
+    if (hls && parsed) beginLoad(hls);
   };
   const onError = () => onFatal(failure("element", { mediaCode: mediaCodeOf(video.error?.code) }));
   if (native) video.addEventListener("error", onError);
@@ -106,11 +122,18 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
         }
         const h = new HlsCtor({
           enableWorker: false,
-          autoStartLoad: started,
+          // The rung is capped to the box (seazn-player-config.ts).
+          ...SEAZN_HLS_PLAYER_CONFIG,
+          // Never self-starting: the first fetch is `beginLoad`'s, once the viewer has pressed play and the rungs are known.
+          autoStartLoad: false,
           // The request is opened here (hls.js skips its own `open` once the element is open), under the token held NOW.
           xhrSetup: (xhr, url) => xhr.open("GET", held === null ? url : withToken(url, held), true),
         });
         h.attachMedia(video);
+        h.on(HlsCtor.Events.MANIFEST_PARSED, () => {
+          parsed = true;
+          if (started) beginLoad(h);
+        });
         h.on(HlsCtor.Events.ERROR, (_event, data) => {
           if (data.fatal) onFatal(hlsFailureOf(data));
         });

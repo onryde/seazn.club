@@ -32,7 +32,8 @@ import { test, expect, type Browser, type BrowserContext, type Locator, type Pag
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, setBoolEntitlementOverrideSql, withDb,
+  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, mintLoginPathBySql, seedVenueWithCourts,
+  setBoolEntitlementOverrideSql, setEntitlementOverrideSql, withDb,
 } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
@@ -45,12 +46,13 @@ import {
   stubFakeEmbedHost, stubFakePlaybackHost,
 } from "../helpers/seazn-video-seed";
 import { routes } from "../../src/lib/routes";
+import { STREAM_POLL_MS } from "../../src/lib/stream-pair";
 
 // ===========================================================================
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
 // step order, where the CI wiring test also reads the walk's worst case to hold e2e-seazn's job timeout to it.
 // ===========================================================================
-const { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS } = seaznWalkClock(FAKE_CONNECT_MS);
+const { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, FRESH_PAGE_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS } = seaznWalkClock(FAKE_CONNECT_MS);
 const POOL_HOLD = {
   file: "seazn-hosted.spec.ts",
   holdMs: Math.max(HOLD_1_MS, HOLD_2_MS),
@@ -76,6 +78,21 @@ const copy = (d: Dict, key: string): string => {
 };
 const ui = (key: string) => copy(EN_UI, key);
 const pub = (key: string) => copy(EN_PUBLIC, key);
+/** Task 33c: the owner's words, literal (2026-11-23, "the live action" 2026-11-24), never rebuilt from the code under test's template
+ *  and constant (T33c review m2), so a wrong figure or a wrong word reds here. */
+const DELAY_LINE = "Video runs about 15–20 seconds behind the live action.";
+/** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. Literal for the same reason. */
+const SEAZN_BRAND = "Seazn Hosted";
+/** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming: a live on its way up, or the replay of a
+ *  stream that has stopped. Literal for the same reason. */
+const LIVE_COMING = "The live video will start here shortly";
+const REPLAY_COMING = "The replay will be ready here in a few minutes";
+/** The held box's status line(s) in a page's SERVER HTML, read inside the box's own section: the page's flight payload carries the island's
+ *  labels, so BOTH lines are somewhere in the document and a bare `toContain` would pass for either. */
+const heldLinesIn = (html: string): string[] => {
+  const box = /<section data-testid="seazn-video-starting"[^>]*>([\s\S]*?)<\/section>/.exec(html);
+  return box === null ? [] : [...box[1]!.matchAll(/<p [^>]*role="status"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+};
 
 // ===========================================================================
 // Kit
@@ -221,8 +238,11 @@ async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
 
 /** One Go live of the Seazn destination, by tapping it, and the compositor stand-in that makes it live: the session row (one new
  *  one, for Seazn, composed), its facts, the first beat through the vendored contract, the keep-alive, the live pill, and the
- *  programme input the spectator's player will be handed. */
-async function goLiveSeazn(page: Page, body: Locator, rig: Rig, open: OpenSessions): Promise<{ sid: string; token: string; programme: { id: string; uid: string }; compositor: Compositor }> {
+ *  programme input the spectator's player will be handed. `whileWarming` (Task 33f) runs between the facts and the first beat, while
+ *  the session is still on its way up (nothing but that beat makes it live). */
+async function goLiveSeazn(
+  page: Page, body: Locator, rig: Rig, open: OpenSessions, whileWarming?: (sid: string) => Promise<void>,
+): Promise<{ sid: string; token: string; programme: { id: string; uid: string }; compositor: Compositor }> {
   const before = new Set((await withDb((sql) => sql<{ id: string }[]>`select id from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`)).map((r) => r.id));
   await body.getByTestId("stream-go-live").click();
   let sid = "";
@@ -245,6 +265,7 @@ async function goLiveSeazn(page: Page, body: Locator, rig: Rig, open: OpenSessio
       return facts.overlayUrl && intervalMs > 0 ? "facts" : "facts without an overlayUrl or a cadence";
     }, { message: "the composed session's facts never served", timeout: LIVE_WAIT_MS, intervals: [1_000] })
     .toBe("facts");
+  if (whileWarming) await whileWarming(sid);
   const first = { state: "playing", programmePhase: "live" };
   expectContract("heartbeat", first, "the stand-in's first beat");
   const beat = await page.request.post(`/api/internal/relay/sessions/${sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: first });
@@ -318,7 +339,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${rig.seaznId}"]`)).toHaveAttribute("aria-selected", "true");
   await body.getByTestId("stream-target").press("Escape");
   await expect(targetPicker(body), "picked with no choice of the organiser's own").toHaveAttribute("data-value", rig.seaznId);
-  await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(ui("stream.dest.kind.seazn"));
+  await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(SEAZN_BRAND);
 
   // 2. BEFORE KICK-OFF (the plan's arm 3: LIVE on, no session yet, the match resolving to Seazn): a signed-out spectator opens the public
   //    match page at 1280. The island is mounted and reading the route, and draws nothing yet.
@@ -331,17 +352,33 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expectNoHorizontalScroll(viewer.page);
 
   // 3. GO LIVE, by tapping it. Go live needs a paired phone (W5); a composed Go live takes the whole pool first.
-  await pairPhoneOnFixture(page, rig.fixturePath);
+  const phone = await pairPhoneOnFixture(page, rig.fixturePath);
   body = await openPhoneTab(page, rig.fixturePath);
   await expect(targetPicker(body), "still Seazn after the reload").toHaveAttribute("data-value", rig.seaznId);
   const pool = await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: CREDITS_KEY_WAIT_MS });
   const first = await goLiveSeazn(page, body, rig, open);
+  // Task 46: the phone's own beat answer, through the real beats route and the contract twin, tells what the relay last said —
+  // the compositor stand-in beats `programmePhase: "live"`.
+  await expect.poll(async () => {
+    const a = (await phone.beat()).ok;
+    if (a === null) return "refused";
+    return a.state === "go-live" || a.state === "live" ? (a.delivery?.programmePhase ?? "no delivery") : a.state;
+  }, { message: "the phone's live answer carries the relay's programme phase", timeout: CALL_MS, intervals: [1_000] }).toBe("live");
 
   // 4. THE OPEN PAGE TURNS LIVE on its next read, without a reload: the server's own signed address for the programme input, in the
   //    player and reaching it, on a player that has not failed. The page has shown nothing since it opened, but it is within the hour
   //    of its kick-off, so its reads stayed on the floor (re-review N1): a viewer who keeps watching sees Go live within ONE read.
   await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  // Task 33c (owner 2026-11-23): while the VIDEO is live, one line under the player says how far it runs behind the live action, inside the live
+  // region and below the picture (never over it). Before kick-off (step 2) there was no region at all, so no line either.
+  const delay = viewer.page.getByTestId("seazn-video-delay");
+  await expect(delay, "the delay line, while live").toBeVisible();
+  await expect(delay).toHaveText(DELAY_LINE);
+  await expect(region.getByTestId("seazn-video-delay"), "inside the live region").toHaveCount(1);
+  const [pictureBox, delayBox] = await Promise.all([viewer.page.locator('[data-testid="seazn-player"]').boundingBox(), delay.boundingBox()]);
+  expect(pictureBox && delayBox, "both are laid out").toBeTruthy();
+  expect(delayBox!.y, "under the picture, not over it").toBeGreaterThanOrEqual(pictureBox!.y + pictureBox!.height - 1);
   // Re-capture R2: where the live player sits, so the box that holds after the Stop (step 6) is held against it.
   const placeOf = (selector: string) => viewer.page.evaluate((sel) => {
     const r = document.querySelector(sel)!.getBoundingClientRect();
@@ -378,7 +415,12 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   // player was, until the recording is locked (step 7) and takes its place (step 8).
   const starting = viewer.page.getByTestId("seazn-video-starting");
   await expect(starting, "the Stop leaves the player's box with its line, not a collapsed page").toBeVisible();
-  await expect(starting.getByRole("status")).toHaveText(pub("seaznVideo.starting"));
+  // Task 33f: the stream has stopped, so the line says the REPLAY is coming (never the live, which it no longer is).
+  await expect(starting.getByRole("status"), "the line names the replay").toHaveText(REPLAY_COMING);
+  // Task 33c: the stream has ended, so the delay line is gone with the live player: no visible line, and the held box keeps no hidden row
+  // for one either (a recording comes next, and its player has no line).
+  await expect(viewer.page.getByTestId("seazn-video-delay"), "the delay line is gone after the Stop").toHaveCount(0);
+  await expect(viewer.page.getByTestId("seazn-video-delay-reserved"), "and no row is held for it").toHaveCount(0);
   const heldPlace = await placeOf('[data-testid="seazn-video-frame"]');
   expect(Math.abs(heldPlace.top - livePlace.top), `the held box starts where the live player did (${heldPlace.top} vs ${livePlace.top})`).toBeLessThanOrEqual(1);
   expect(Math.abs(heldPlace.height - livePlace.height), `and is as tall (${heldPlace.height} vs ${livePlace.height})`).toBeLessThanOrEqual(1);
@@ -416,6 +458,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expect.poll(addressIs(player, videoId), { message: "the replay player holds the server's signed address for the recording", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is now the REPLAY one").toHaveAttribute("aria-label", pub("overlay.replay"));
   await expect(starting, "the recording took the held box's place: the line is gone").toHaveCount(0);
+  await expect(viewer.page.getByTestId("seazn-video-delay"), "Task 33c: a replay carries no delay line").toHaveCount(0);
   await expect.poll(viewer.reached(videoId), { message: "the recording's address reached the browser's player", timeout: CALL_MS }).toBe(true);
   await expect(viewer.page.locator('[data-testid="seazn-player"]'), "one Seazn player on the page").toHaveCount(1);
   await expect(region.locator("iframe"), "the interim replay is the Seazn player, not an embed").toHaveCount(0);
@@ -429,10 +472,30 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await body.getByTestId("stream-again").click();
   await expect(body.getByTestId("stream-state-pill"), "back to a fresh Go live").toHaveText(ui("stream.phone.state.idle"), { timeout: CALL_MS });
   await expect(targetPicker(body), "the match's pick is still Seazn").toHaveAttribute("data-value", rig.seaznId);
-  const second = await goLiveSeazn(page, body, rig, open);
+  // 9a. BEFORE IT IS LIVE (Task 33f): while the second session warms (the stand-in has not beaten `playing` yet), a fresh look at the
+  //     match page shows the held box saying the LIVE video is coming. The page is ISR (revalidate 30 s) and nothing has asked for its
+  //     HTML since step 2, minutes ago, so the first look is answered stale and starts a fresh render; a later look carries the warming
+  //     session. Read in the server HTML, the first paint a viewer opening the page now gets (the island's first read then shows the
+  //     first half's recording, which is already locked). The open page (step 2's) is untouched.
+  const lookWhileWarming = async (sid: string): Promise<void> => {
+    const [row] = await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`);
+    expect(["requested", "provisioning", "warming"], "premise: the second session is still on its way up").toContain(row?.state);
+    // Polled on the line itself: a stale render (no box) keeps it polling, and on a timeout the red prints what the box last said.
+    await expect
+      .poll(async () => heldLinesIn(await (await viewer.page.request.get(rig.publicPath)).text()), {
+        message: "a fresh render of the match page: the held box says the LIVE video is coming, and only that",
+        timeout: FRESH_PAGE_MS,
+        intervals: [1_000],
+      })
+      .toEqual([LIVE_COMING]);
+    const [still] = await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`);
+    expect(still?.state, "premise: and the session was not live yet when the page was read").not.toBe("live");
+  };
+  const second = await goLiveSeazn(page, body, rig, open, lookWhileWarming);
   expect(second.programme.uid, "premise: a new session publishes to a new programme input").not.toBe(first.programme.uid);
   await expect.poll(addressIs(player, second.programme.uid), { message: "the open page's player holds the NEW programme input's signed address", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one again").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  await expect(region.getByTestId("seazn-video-delay"), "Task 33c: live again, so the delay line is back").toHaveText(DELAY_LINE);
   await expect.poll(viewer.reached(second.programme.uid), { message: "the second live address reached the browser's player", timeout: CALL_MS }).toBe(true);
   expect(await viewer.neverFailed(), "the page turned live on a scheduled read, never by a failing player").toBe(true);
   expect(await viewer.sameDocument(), "no reload between the replay and the second live").toBe(true);
@@ -629,6 +692,82 @@ test("Task 26: the organiser's panel lists both parts with Download and Delete; 
 });
 
 // ===========================================================================
+// Task 48 (review I1): the Download BUTTON in a browser — what it saves, and what it never does
+// ===========================================================================
+// The button asks the route `?check=1` first (204, or the refusal) and tells the browser to save only on the 204. Two halves, one page:
+//  - READY: this server's replay host holds no copy of a seeded part (Task 26), so the PROBE is answered here by the browser's own
+//    stand-in (a fetch, which `page.route` does see): 204. The assert is the BUTTON's: a Playwright `download` event, after exactly one
+//    probe (no token in its address), whose address is the part's download route and nothing else. The SAVE itself is `<a download>`
+//    (the product's `saveFromBrowser`), and Chromium makes that request in the browser process, past `page.route`, past the context's
+//    routes and past every `request` event (CI run 45537372073: the stand-in file was never served, the real route's 409 JSON was
+//    saved as `download.json`; reproduced with a bare page, routed 0 times, no request event). So neither the saved file's NAME nor a
+//    count of file requests can be read in a browser here; the name (`attachment; filename="seazn-<home>-v-<away>-part-<n>.mp4"`)
+//    is the route test's, against the real route and the replay fake (download/__tests__/route.test.ts), and "no file asked for" is
+//    carried by "no download event" below, which a save cannot dodge.
+//  - NOT READY: the REAL route (no stand-in): the host holds no copy, so it answers 409. The localised not-ready line shows, on that
+//    part, and NO download event follows — the defect was a `download.json` on the organiser's disk.
+// Not gated on LIVE (as Tasks 25, 26, 31b).
+test("Task 48: Download saves an mp4 only once the route says it would start; a 409 shows the not-ready line and saves nothing", async ({ page }) => {
+  test.setTimeout(REPLAY_SEED_MS + 3 * NAV_MS + 3 * CALL_MS);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Download ${Date.now().toString(36)}`, live: true });
+  try {
+    await finishSeaznMatch(m);
+    await seedPlayableReplays(m, await lockRecordings(m, 1));
+    const [part] = await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId} and state = 'playable'`);
+    expect(part?.id, "premise: one playable part").toBeTruthy();
+    const route = `/api/v1/fixtures/${m.fixtureId}/replays/${part!.id}/download`;
+    const body = await openPhoneTab(page, m.fixturePath);
+    const card = body.getByTestId("stream-seazn-replays");
+    const button = card.getByTestId("stream-seazn-replay-download");
+    await expect(button).toHaveCount(1, { timeout: CALL_MS });
+    const notReady = card.getByTestId("stream-seazn-replay-download-not-ready");
+
+    // NOT READY first (the real route): the empty case of "a save happened" is that none did.
+    const saved: string[] = [];
+    page.on("download", (d) => { saved.push(d.suggestedFilename()); });
+    await button.click();
+    await expect(notReady, "the 409 reads in the part's own row, in the dictionary's words").toBeVisible({ timeout: CALL_MS });
+    await expect(notReady).toHaveText(ui("stream.replay.downloadNotReady"));
+    await expect(button, "idle again: the probe's busy state is over").not.toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeVisible();
+    await page.waitForTimeout(1_000);
+    expect(saved, "no download event after a 409: nothing was saved, and so the file was never asked for").toEqual([]);
+
+    // READY: the browser's stand-in answers the PROBE (the save is past its reach, see above). One probe (no token, no expiry in its
+    // address), then the save: a download event whose address is the route's own, and no query.
+    const probes: string[] = [];
+    await page.route(`**${route}**`, async (r) => {
+      const u = new URL(r.request().url());
+      if (u.searchParams.get("check") === "1") {
+        probes.push(u.search);
+        await r.fulfill({ status: 204, headers: { "cache-control": "private, no-store" } });
+        return;
+      }
+      await r.continue();
+    });
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: CALL_MS }), button.click()]);
+    const saveUrl = new URL(download.url());
+    expect(saveUrl.pathname, "the save is the part's own download route").toBe(route);
+    expect(saveUrl.search, "and carries no query: no token, no expiry, not the probe").toBe("");
+    expect(probes, "exactly one probe, and its address is `?check=1` and nothing else, before the save").toEqual(["?check=1"]);
+    await expect(notReady, "a part that now saves clears the old line").toHaveCount(0);
+
+    // The failed line: a probe that is neither 204 nor 409 reads as a plain failure, saves nothing, and is its own words.
+    await page.unroute(`**${route}**`);
+    await page.route(`**${route}**`, (r) => r.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "replay_host_unavailable", message: "x" } }) }));
+    const before = saved.length;
+    await button.click();
+    const failed = card.getByTestId("stream-seazn-replay-download-failed");
+    await expect(failed).toHaveText(ui("stream.replay.downloadFailed"), { timeout: CALL_MS });
+    await page.waitForTimeout(500);
+    expect(saved.length, "no download event after a 503").toBe(before);
+  } finally {
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
 // Task 31b (T31b review m1): the replays list WITHOUT the Stream panel
 // ===========================================================================
 // An organiser whose org lost the panel (here `streaming.overlay` switched off by an org-wide override — every plan grants it since
@@ -742,3 +881,217 @@ test("Task 31b: with the Stream panel switched off, the fixture page lists the r
     await finishSeaznMatch(m);
   }
 });
+
+// ===========================================================================
+// Task 33d (T31b review m3): a member whose seat is paused sees the replays, never an action that answers 402
+// ===========================================================================
+// After a downgrade an org can hold more members than its plan's `members.max`: an ADMIN past the limit is read-only until the owner
+// frees seats (doc 10 §2.4; the owner is never paused), and both replay routes answer that admin 402 (their write scope). So the list on
+// its own (the org lost the panel: `streaming.overlay` off, as Task 31b) shows that admin every part, with neither Download nor Delete,
+// and one line saying why; the routes still refuse them, and the part stays. The owner of the same org keeps both actions. The limit is
+// an override on this test's OWN fresh org (members.max 1: the owner's own seat), never the shared Pro org. At 1280, then 320.
+test("Task 33d: an admin whose seat is paused sees the replays with no Download or Delete and one line saying why; both routes still answer 402; the owner keeps both actions", async ({ browser }) => {
+  test.setTimeout(REPLAY_SEED_MS + 2 * 30_000 + 4 * NAV_MS + 2 * CALL_MS);
+  const org = await seedStandInOrg(browser, "szs", { orgName: "Seazn Paused Seat" });
+  rigs.push(org);
+  const page = org.page;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Paused ${Date.now().toString(36)}`, live: true });
+  let adminCtx: BrowserContext | null = null;
+  let adminId: string | null = null;
+  try {
+    expect(m.orgId, "premise: the match is this test's own org's (the overrides below are org-wide)").toBe(org.orgId);
+    await finishSeaznMatch(m);
+    expect(await seedPlayableReplays(m, await lockRecordings(m, 1)), "premise: one playable part").toHaveLength(1);
+    const [part] = await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId}`);
+    expect(part, "premise: the part's row").toBeTruthy();
+    const replayPath = `/api/v1/fixtures/${m.fixtureId}/replays/${part!.id}`;
+    const stateOf = async () => (await withDb((sql) => sql<{ state: string }[]>`select state from fixture_video_replays where id = ${part!.id}`))[0]?.state;
+
+    // The org loses the panel (as Task 31b) and seats: members.max 1 is the owner's own seat, so the admin added below is past it.
+    const email = `delivered+${org.orgSlug}-admin@resend.dev`;
+    adminId = await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${email}, ${"Paused Admin"}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${org.orgId}, ${id}, 'admin')`;
+      return id;
+    });
+    await setBoolEntitlementOverrideSql(org.orgId, "streaming.overlay", false);
+    await setEntitlementOverrideSql(org.orgId, "members.max", 1);
+    await invalidateOrgEntitlements(page.request, org.orgId);
+
+    adminCtx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
+    const admin = await adminCtx.newPage();
+    await admin.goto(await mintLoginPathBySql(email));
+    await admin.waitForURL((u) => !u.pathname.startsWith("/magic-link") && !u.pathname.startsWith("/login"), { timeout: 30_000 });
+    await dismissCookieBanner(admin);
+
+    // The server stays the guard: both routes answer the paused admin 402, and the part stays.
+    const refusedDelete = await admin.request.delete(replayPath);
+    expect(refusedDelete.status(), "the paused seat's Delete: 402").toBe(402);
+    const refusedDownload = await admin.request.get(`${replayPath}/download`, { maxRedirects: 0 });
+    expect(refusedDownload.status(), "the paused seat's Download: 402").toBe(402);
+    expect(await stateOf(), "the part stays").toBe("playable");
+
+    // So the page offers the paused admin neither: every part and its state, and one line saying why.
+    const section = admin.locator('[data-role="fixture-replays"]');
+    const paused = section.getByTestId("stream-seazn-replays-paused");
+    await admin.goto(m.fixturePath);
+    await expect(section, "the list stands alone (no panel)").toBeVisible({ timeout: NAV_MS });
+    await expect(section.getByTestId("stream-seazn-replay"), "the part is listed").toHaveCount(1);
+    await expect(section.getByTestId("stream-seazn-replay")).toContainText(ui("stream.replay.seazn.ready"));
+    await expect(section.getByTestId("stream-seazn-replay-download"), "no Download").toHaveCount(0);
+    await expect(section.getByTestId("stream-seazn-replay-delete"), "no Delete").toHaveCount(0);
+    await expect(paused, "one line").toHaveCount(1);
+    await expect(paused).toHaveText(ui("stream.replay.seazn.seatPaused"));
+    for (const width of [1280, 320]) {
+      await admin.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(admin);
+      const box = await paused.boundingBox();
+      expect(box, `${width}: the line is laid out`).not.toBeNull();
+      expect(box!.x, `${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+    }
+
+    // The owner of the same org is never paused: both actions, and no line.
+    const ownerSection = page.locator('[data-role="fixture-replays"]');
+    await page.goto(m.fixturePath);
+    await expect(ownerSection, "the owner's list").toBeVisible({ timeout: NAV_MS });
+    await expect(ownerSection.getByTestId("stream-seazn-replay-download"), "the owner: Download").toHaveCount(1);
+    await expect(ownerSection.getByTestId("stream-seazn-replay-delete"), "the owner: Delete").toHaveCount(1);
+    await expect(ownerSection.getByTestId("stream-seazn-replays-paused"), "the owner: no line").toHaveCount(0);
+  } finally {
+    await adminCtx?.close().catch(() => {});
+    if (adminId !== null) {
+      const id = adminId;
+      await withDb((sql) => sql`delete from org_members where org_id = ${org.orgId} and user_id = ${id}`).catch(() => {});
+    }
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
+// Task 33e (T33d review m3): a paused admin's Stream panel stops polling on 402 and says why
+// ===========================================================================
+// The same paused seat as Task 33d (members.max 1 on this test's OWN fresh org: the owner holds the one seat, so the admin added below is
+// past it), but the org keeps its panel. The panel's two polls — `stream-sessions/current` and `stream-phone`, one every STREAM_POLL_MS
+// — are write-scoped, so the paused admin is answered 402 by both. Before: that answer was silent and repeated every 5 s for as long as
+// the page stayed open. Now: each is asked, refused, and not asked again; the panel is drawn (not blanked) with one line saying why.
+// The wire is the witness: every request the page makes to either route is recorded with its status, and a wait of two poll periods
+// adds none. At 1280, then 320 for the fit.
+test("Task 33e: a paused admin's Stream panel says why in one line, and the page asks neither poll route again after the 402", async ({ browser }) => {
+  test.setTimeout(NAV_MS * 3 + 2 * 30_000 + 3 * STREAM_POLL_MS + CALL_MS);
+  const org = await seedStandInOrg(browser, "szp", { orgName: "Seazn Paused Panel" });
+  rigs.push(org);
+  const page = org.page;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Paused Panel ${Date.now().toString(36)}`, live: true });
+  let adminCtx: BrowserContext | null = null;
+  let adminId: string | null = null;
+  try {
+    expect(m.orgId, "premise: the match is this test's own org's (the override below is org-wide)").toBe(org.orgId);
+    const email = `delivered+${org.orgSlug}-panel-admin@resend.dev`;
+    adminId = await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${email}, ${"Paused Panel Admin"}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${org.orgId}, ${id}, 'admin')`;
+      return id;
+    });
+    await setEntitlementOverrideSql(org.orgId, "members.max", 1);
+    await invalidateOrgEntitlements(page.request, org.orgId);
+
+    adminCtx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
+    const admin = await adminCtx.newPage();
+    await admin.goto(await mintLoginPathBySql(email));
+    await admin.waitForURL((u) => !u.pathname.startsWith("/magic-link") && !u.pathname.startsWith("/login"), { timeout: 30_000 });
+    await dismissCookieBanner(admin);
+
+    // Every answer either poll route gives this page, from the page's first request on.
+    const POLLS = [`/api/v1/fixtures/${m.fixtureId}/stream-sessions/current`, `/api/v1/fixtures/${m.fixtureId}/stream-phone`];
+    const answers: { route: string; status: number }[] = [];
+    admin.on("response", (res) => {
+      const path = new URL(res.url()).pathname;
+      if (res.request().method() === "GET" && POLLS.includes(path)) answers.push({ route: path, status: res.status() });
+    });
+
+    const body = await openPhoneTab(admin, m.fixturePath);
+    const note = body.getByTestId("stream-seat-paused");
+    await expect(note, "the panel says why, once").toHaveCount(1, { timeout: NAV_MS });
+    await expect(note).toHaveText(ui("stream.phone.seatPaused"));
+    await expect(body, "the panel is drawn, not blanked: its state pill and destination row are still there").toBeAttached();
+    await expect(body.getByTestId("stream-state-pill")).toBeAttached();
+
+    // Go live and the purchase controls are DRAWN and off (never hidden, never tappable): whichever of Go live, Buy more and the credit
+    // tiles this org's balance puts on Ready, at least one is there, and each is disabled and aria-disabled.
+    const spend = body.locator('[data-testid="stream-go-live"], [data-testid="stream-buy-more"], [data-testid^="stream-buy-pack-"]');
+    await expect(spend, "premise: Ready draws Go live, Buy more or the credit tiles").not.toHaveCount(0, { timeout: NAV_MS });
+    for (const control of await spend.all()) {
+      await expect(control, "a paused seat cannot tap it").toBeDisabled();
+      await expect(control).toHaveAttribute("aria-disabled", "true");
+    }
+
+    // The premise the silence test needs: BOTH routes were asked, and both refused it.
+    for (const route of POLLS) {
+      const mine = answers.filter((a) => a.route === route);
+      expect(mine.length, `premise: ${route} was asked`).toBeGreaterThan(0);
+      expect(mine.every((a) => a.status === 402), `${route}: every answer is the paused seat's 402`).toBe(true);
+    }
+    const asked = answers.length;
+    await admin.waitForTimeout(2 * STREAM_POLL_MS + 1_000);
+    expect(answers.length, "two poll periods later neither route has been asked again").toBe(asked);
+    await expect(note, "and the line is still there").toHaveCount(1);
+
+    for (const width of [1280, 320]) {
+      await admin.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(admin);
+      const box = await note.boundingBox();
+      expect(box, `${width}: the line is laid out`).not.toBeNull();
+      expect(box!.x, `${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+    }
+
+    // The owner of the same org is never paused: no line, and none of those controls is disabled by a pause.
+    const ownerBody = await openPhoneTab(page, m.fixturePath);
+    for (const control of await ownerBody.locator('[data-testid="stream-buy-more"], [data-testid^="stream-buy-pack-"]').all()) {
+      await expect(control, "the owner's purchase controls carry no pause").not.toHaveAttribute("aria-disabled", "true");
+    }
+    await expect(ownerBody.getByTestId("stream-state-pill"), "the owner's panel is drawn").toBeAttached();
+    await expect(ownerBody.getByTestId("stream-seat-paused"), "the owner: no line").toHaveCount(0);
+  } finally {
+    await adminCtx?.close().catch(() => {});
+    if (adminId !== null) {
+      const id = adminId;
+      await withDb((sql) => sql`delete from org_members where org_id = ${org.orgId} and user_id = ${id}`).catch(() => {});
+    }
+    await finishSeaznMatch(m);
+  }
+});
+
+test("Task 37: a court links to Seazn from the Match Day sheet's wire: 201 with the court's QR and the Seazn row stored, then a Seazn switched off in the org is refused as seazn_unavailable and adds no link", async ({ browser }) => {
+  test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (e2e.yml's e2e-seazn job)");
+  test.setTimeout(NAV_MS * 3);
+  const rig = await seedRig(browser);
+  const request = rig.org.page.request;
+  const [{ competition_id: competitionId }] = await withDb((sql) => sql<{ competition_id: string }[]>`
+    select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureId}`);
+  const { courts } = await seedVenueWithCourts(request, ["T37 Court 1", "T37 Court 2"], { orgId: rig.org.orgId });
+  const link = (courtId: string, targetId: string) =>
+    apiJson<{ id: string; qr: unknown; court_name: string }>(request, `/api/v1/competitions/${competitionId}/court-streams`, "POST", { court_id: courtId, target_id: targetId });
+
+  const ok = await link(courts[0]!.id, rig.seaznId);
+  expect(ok.status, `the desk links Court 1 to Seazn: ${JSON.stringify(ok.error)}`).toBe(201);
+  expect(ok.data!.qr, "the court's QR comes back with the link").not.toBeNull();
+  expect(ok.data!.court_name).toBe(courts[0]!.name);
+  const [row] = await withDb((sql) => sql<{ target_id: string }[]>`select target_id from court_stream_links where id = ${ok.data!.id}`);
+  expect(row?.target_id, "the link stores the Seazn destination").toBe(rig.seaznId);
+
+  // The org switches Seazn off: a NEW link is refused with the Seazn code, and the link already made is left alone.
+  await withDb((sql) => sql`update org_stream_targets set offered = false where id = ${rig.seaznId}`);
+  await invalidateOrgEntitlements(request, rig.org.orgId);
+  const closed = await link(courts[1]!.id, rig.seaznId);
+  expect(closed.status, "Seazn switched off in the org").toBe(422);
+  expect((closed.error as { code?: string } | null)?.code).toBe("seazn_unavailable");
+  const [{ n }] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from court_stream_links where target_id = ${rig.seaznId}`);
+  expect(n, "exactly the first link exists").toBe(1);
+});
+

@@ -414,6 +414,18 @@ export function resolveFocus(
   return court === undefined ? { kind: "lost", name: opened.name } : { kind: "court", court };
 }
 
+/** P1 (Task 35 parked, folded into Task 37): while a court's QR sheet is open the focus must not move. With nothing opened the
+ *  desktop's default focus is the FIRST court of the list, and the list re-orders on every poll (playing, called, up next, in use
+ *  elsewhere, free), so a poll that moved another court to the top swapped the focus under an open sheet and the sheet vanished
+ *  mid-pair. `pinnedCourtId` (the court whose sheet is open, or null) stands in for "opened" only while nothing IS opened and the
+ *  court is still listed; an organiser's own choice always wins, and a pin whose court left the list falls back to the default
+ *  rather than naming a court that is gone. Closing the sheet clears the pin, so the normal ordering resumes. */
+export function pinOpened(opened: Opened | null, pinnedCourtId: string | null, courts: readonly MatchDayCourt[]): Opened | null {
+  if (opened !== null || pinnedCourtId === null) return opened;
+  const court = courts.find((c) => c.court_id === pinnedCourtId);
+  return court === undefined ? null : { kind: "court", id: court.court_id, name: court.court_name };
+}
+
 /** What the shell focuses once the online rounds are on the page (Match Day online, Task 6): a court, a match on no court, an online
  *  round or one of its boards. `rounds` are the rounds as the list shows them (filtered and in `orderOnlineRounds` order). */
 export type DayFocus = Focus | Extract<OnlineFocus, { kind: "round" | "board" }>;

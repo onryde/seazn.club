@@ -8,7 +8,6 @@ import "server-only";
 // entry), and two fakes would be two hosts — a fetch through one, a webhook read through the other.
 import { bunnyConfig, replayDriverMode } from "@/server/relay/config";
 import { dbRecorder } from "@/server/relay/drivers";
-import { log } from "@/server/logger";
 import { BunnyReplayHost } from "./replay-bunny";
 import { FakeReplayHost } from "./replay-fake";
 import type { ReplayHost } from "./replay-ports";
@@ -24,7 +23,7 @@ let bunny: BunnyReplayHost | null = null;
  *  Every call it makes is a provider-call row through `dbRecorder`, as the Cloudflare and Fly adapters' are (V542 admits
  *  `bunny` in that table's provider CHECK). */
 function buildBunnyDriver(): ReplayHost {
-  return (bunny ??= new BunnyReplayHost(bunnyConfig(), { recorder: dbRecorder, warn: (fields, msg) => log.warn(fields, msg) }));
+  return (bunny ??= new BunnyReplayHost(bunnyConfig(), { recorder: dbRecorder }));
 }
 
 export function replayDriver(): ReplayHost {

@@ -19,6 +19,7 @@ import {
 } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
 import { captureQrV2Text, type CaptureQrV2 } from "../src/lib/capture-qr";
+import { COURT_SHEET_PAIR_POLL_MS } from "../src/lib/match-day/court-stream";
 import { disposeFakePhones, fakeCapturePhone, newPhoneRequest } from "./helpers/fake-capture-phone";
 import { middayZoneFor, withinToday } from "./midday-zone";
 import { finishSeaznMatch, goLive, seedSeaznSession, signedAddressPattern, stubFakePlaybackHost } from "./helpers/seazn-video-seed";
@@ -2142,7 +2143,7 @@ test.describe("Match Day — court stream (desk)", () => {
     page,
     request,
   }) => {
-    test.setTimeout(150_000);
+    test.setTimeout(150_000 + 3 * COURT_SHEET_PAIR_POLL_MS); // Task 35: the sheet shut by the pairing waits up to three reads
     const seed = await seedMatchDay(request, "CStream");
     const orgId = (await activeOrg(page)).id;
     const label = `Club channel ${TAG}`;
@@ -2192,11 +2193,24 @@ test.describe("Match Day — court stream (desk)", () => {
       .poll(() => withDb((sql) => sql<{ on: boolean }[]>`select court_stream as on from fixture_stream_settings where fixture_id = ${seed.anaCal}`).then((r) => r[0]?.on))
       .toBe(true);
 
+    // Task 35 (owner 2026-11-24): the court's QR is open on the desk when the phone scans it — the sheet closes by itself, with no
+    // reload: while it waits for the phone the desk reads the day every COURT_SHEET_PAIR_POLL_MS.
+    await band.getByTestId("md-cs-show").click();
+    await expect(page.getByTestId("md-cs-qr-image")).toBeVisible();
+
     // The real phone claims the court's code over the real beat route.
     const phone = await fakeCapturePhone(page, await newPhoneRequest(new URL(page.url()).origin), { qrText: captureQrV2Text(mine.qr), appVersion: COURT_PHONE_BUILD });
     const claimed = await phone.claim("new");
     expect(claimed.status, `the court's claim beat: ${JSON.stringify(claimed.refusal)}`).toBe(200);
     phone.keepAlive("idle");
+    await expect(page.getByTestId("md-cs-sheet"), "the phone paired: the open QR closed by itself").toHaveCount(0, { timeout: 3 * COURT_SHEET_PAIR_POLL_MS });
+    await expect(band.getByTestId("md-cs-chip"), "…on the read that saw the phone").toHaveAttribute("data-phone", "waiting");
+    // Opened again on the paired court it stays, and it is still a READ: no new code.
+    await band.getByTestId("md-cs-show").click();
+    await expect(page.getByTestId("md-cs-qr-image")).toBeVisible();
+    expect(writes.posts(), "re-opening after the pairing made no code").toBe(1);
+    await page.getByRole("button", { name: UI_EN["matchDay.code.close"]!, exact: true }).last().click();
+    await expect(page.getByTestId("md-cs-sheet")).toHaveCount(0);
     await page.reload({ waitUntil: "load" });
     await expect(page.getByTestId("md-cs-band").getByTestId("md-cs-chip")).toHaveAttribute("data-phone", "waiting");
     await expect(page.getByTestId("md-cs-band").getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.waiting"));

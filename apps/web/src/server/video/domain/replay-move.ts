@@ -186,8 +186,9 @@ export function parseReplayCopyTitle(title: string | null): { sessionId: string;
   return m ? { sessionId: m[1]!, cfVideoId: m[2]! } : null;
 }
 
-/** The renditions the host makes, smallest first; it never makes one above 720 (B2). */
-const RUNGS = [240, 360, 480, 720] as const;
+/** The renditions the host makes, smallest first. The library is not capped at 720: the owner keeps 1080p on (2026-11-24; B9 saw
+ *  `1080p` listed), so a 1080 source must find a 1080 copy, and the rung is the source's own height read down this ladder. */
+const RUNGS = [240, 360, 480, 720, 1080] as const;
 /** The rung a clean copy must list: the largest one not above the source's height. Null for a source with no height or under
  *  240 px, which no copy can satisfy. */
 export function requiredRung(cfHeight: number | null): number | null {
@@ -201,7 +202,7 @@ export function requiredRung(cfHeight: number | null): number | null {
 const LENGTH_TOLERANCE_SECONDS = 2;
 export type VerifyFailure = "state" | "length" | "rendition";
 /** "Clean and good" (recommendation 2026-11-21, G-C): the copy passes only when the host reports it playable, its length is
- *  within ±2 s of the Cloudflare recording's duration, and it lists the required rung (720, or the source's own rung when lower).
+ *  within ±2 s of the Cloudflare recording's duration, and it lists the required rung (the source's own, 720 or 1080 by the programme profile it was streamed at; a lower rung when the source is lower).
  *  A null on either side of a comparison fails it. The reason is the first check that fails, in that order. */
 export function verifyReplayCopy(
   row: Pick<ReplayRow, "cfDurationSeconds" | "cfHeight">,

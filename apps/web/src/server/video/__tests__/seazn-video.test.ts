@@ -20,9 +20,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
-import { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import { PublicFixtureVideo, StreamSessionState } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
+import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { RelayDriversDisabled, disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { CloudflareIngest } from "@/server/relay/ingest-cf";
@@ -54,7 +55,11 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
 /** The plan's live token life (Task 8: 1 h), typed here. */
 const TTL_SECONDS = 3600;
+/** Nothing to play. `session` (Task 33g) is what an open page follows: null where the latest session is not a Seazn one, or there is none,
+ *  or the public may not see the fixture; `withSession` says the latest Seazn session's state and whether it ever went live (started_at). */
 const EMPTY = { live: null, replay: [] };
+const NONE = { ...EMPTY, session: null };
+const withSession = (state: string, wentLive: boolean) => ({ ...EMPTY, session: { state, wentLive } });
 
 const ENV_KEYS = ["RELAY_KEK", "YOUTUBE_TOKEN_KEK", "RELAY_IMAGE", "AUTH_SECRET"] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -185,7 +190,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(await readOrg(r, r.fixtureIds[0])).toEqual(answer);
     // The OTHER fixture of the same org streams nothing: its answer is empty, and nothing was signed for it.
     const before = r.mint.mock.calls.length;
-    expect(await read(r, r.fixtureIds[1])).toEqual(EMPTY);
+    expect(await read(r, r.fixtureIds[1])).toEqual(NONE);
     expect(r.mint.mock.calls.length, "an empty fixture mints nothing").toBe(before);
   });
 
@@ -194,14 +199,63 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const f = r.fixtureIds[0];
     const sid = await goLive(r, f, r.seazn);
     expect(await stateOf(sid), "PREMISE: before the playing beat the session is warming").toBe("warming");
-    expect(await read(r, f), "warming").toEqual(EMPTY);
+    expect(await read(r, f), "warming").toEqual(withSession("warming", false));
     await playing(r, sid);
     expect((await read(r, f)).live, "live").not.toBeNull();
+    expect((await read(r, f)).session, "live: it went live").toEqual({ state: "live", wentLive: true });
     await stopSession(r.auth, f, sid, r.deps);
     expect(await stateOf(sid), "PREMISE: Stop leaves the composed session ending").toBe("ending");
-    expect(await read(r, f), "ending").toEqual(EMPTY);
+    expect(await read(r, f), "ending").toEqual(withSession("ending", true));
     await stopAndSettle(r, f, sid);
-    expect(await read(r, f), "completed, with nothing locked").toEqual(EMPTY);
+    expect(await read(r, f), "completed, with nothing locked").toEqual(withSession("completed", true));
+  });
+
+  // Task 33g (T33f review m1): the answer tells an open page where the latest session is, so it can follow a Stop or a cancel. The states
+  // are the server's own (the wire enum, held to the domain's lists below); `wentLive` is `started_at`, the one fact that tells a Go live
+  // cancelled while warming (no recording is coming) from a live that ended (one is).
+  it("SWEEP: `session` is the latest Seazn session's own state and whether it ever went live — every state of the server's enum × started_at set or null, public and organiser alike; a pasted-key session of the same states is null", async () => {
+    const r = await rig();
+    const [seazn, external] = r.fixtureIds;
+    const seaznSid = await goLive(r, seazn, r.seazn);
+    const externalSid = await goLive(r, external, r.pasted);
+    const states = StreamSessionState.options;
+    // The wire enum IS the domain's: ACTIVE and TERMINAL together name every state once (so a state added to one and not the other reds here).
+    expect([...ACTIVE_STATES, ...TERMINAL_STATES].sort(), "the domain's lists and the wire enum name the same states").toEqual([...states].sort());
+    let checked = 0;
+    for (const state of states) {
+      for (const wentLive of [false, true]) {
+        const startedAt = wentLive ? sql`now()` : sql`null`;
+        await sql`update fixture_stream_sessions set state = ${state}, started_at = ${startedAt} where id in ${sql([seaznSid, externalSid])}`;
+        const want = { ...EMPTY, session: { state, wentLive } };
+        const name = `${state}, ${wentLive ? "went live" : "never went live"}`;
+        // A `live` state with no minted answer would sign: the programme input has a uid, so the live is in the answer; compare the session alone.
+        const pub = await read(r, seazn);
+        expect(pub.session, `${name}: public`).toEqual(want.session);
+        expect((await readOrg(r, seazn)).session, `${name}: organiser`).toEqual(want.session);
+        expect(PublicFixtureVideo.parse(pub), `${name}: the published contract`).toEqual(pub);
+        expect((await read(r, external)).session, `${name}: a pasted-key session is none of the page's wait`).toBeNull();
+        expect((await readOrg(r, external)).session, `${name}: the organiser's, the same`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every state of the enum, both ways").toBe(states.length * 2);
+    expect(checked).toBeGreaterThanOrEqual(14);
+  });
+
+  it("the latest session decides: a Go live cancelled while warming after a first live that ended answers the SECOND's state, never the first's", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    expect((await read(r, f)).session, "PREMISE: the first ended").toEqual({ state: "completed", wentLive: true });
+    const second = await goLive(r, f, r.seazn);
+    expect((await read(r, f)).session, "the second is warming").toEqual({ state: "warming", wentLive: false });
+    await stopSession(r.auth, f, second, r.deps);
+    for (let i = 0; i < 3 && (await stateOf(second)) !== "completed"; i++) await currentSession(r.auth, f, r.deps);
+    const [{ started }] = await sql<{ started: boolean }[]>`select started_at is not null as started from fixture_stream_sessions where id = ${second}`;
+    expect(started, "PREMISE: the second never went live").toBe(false);
+    expect((await read(r, f)).session, "cancelled while warming: ended, never live").toEqual({ state: await stateOf(second), wentLive: false });
+    expect((await readOrg(r, f)).session).toEqual((await read(r, f)).session);
   });
 
   it("a YouTube (pasted key) session never plays here: live is null while it is live, and its recording is never listed — even under a seazn_locked_videos row", async () => {
@@ -210,13 +264,13 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const sid = await live(r, f, r.pasted);
     const [{ destination_kind }] = await sql<{ destination_kind: string }[]>`select destination_kind from fixture_stream_sessions where id = ${sid}`;
     expect(destination_kind, "PREMISE: a pasted key is an external destination").not.toBe("seazn");
-    expect(await read(r, f)).toEqual(EMPTY);
+    expect(await read(r, f), "an external session is no Seazn session: no live, and none for the page to wait on").toEqual(NONE);
     await stopAndSettle(r, f, sid);
     // Task 13 never locks a non-Seazn recording; a row is put here by hand so the read's own filter is what refuses it.
     const prog = await programmeOf(sid);
     await sql`insert into seazn_locked_videos (cf_video_id, input_row_id) values (${`v-yt-${randomUUID()}`}, ${prog.id})`;
-    expect(await read(r, f)).toEqual(EMPTY);
-    expect(await readOrg(r, f)).toEqual(EMPTY);
+    expect(await read(r, f)).toEqual(NONE);
+    expect(await readOrg(r, f)).toEqual(NONE);
     expect(r.mint, "nothing is signed for a YouTube session").not.toHaveBeenCalled();
   });
 
@@ -227,13 +281,13 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     await stopAndSettle(r, f, sid);
     const rec = await finishedRecording(r, sid);
     expect(r.ingest.videoAccess(rec), "PREMISE: the recording is still unsigned (C3)").toBe(false);
-    expect(await read(r, f), "not yet locked: never an unsigned recording").toEqual(EMPTY);
+    expect(await read(r, f), "not yet locked: never an unsigned recording").toEqual(withSession("completed", true));
     expect(await lockPass(r)).toMatchObject({ locked: 1 });
     expect(await lockedIds(sid), "PREMISE: the pass wrote the row").toEqual([rec]);
     // The OTHER fixture of the same org, after the lock: none of this fixture's parts, public or organiser, and nothing minted.
     const minted = r.mint.mock.calls.length;
-    expect(await read(r, r.fixtureIds[1]), "another fixture lists none of this one's parts").toEqual(EMPTY);
-    expect(await readOrg(r, r.fixtureIds[1])).toEqual(EMPTY);
+    expect(await read(r, r.fixtureIds[1]), "another fixture lists none of this one's parts").toEqual(NONE);
+    expect(await readOrg(r, r.fixtureIds[1])).toEqual(NONE);
     expect(r.mint.mock.calls.length, "nothing minted for the other fixture").toBe(minted);
     const answer = await read(r, f);
     expect(answer.live).toBeNull();
@@ -330,7 +384,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(await parts(c1 + KEEP_MS), "at its delete: Part 2 alone, keeping its number").toEqual([[2, b]]);
     expect(r.mint.mock.calls.map(([uid]) => uid), "the deleted recording is never signed").toEqual([b]);
     r.mint.mockClear();
-    expect(await at(c2 + KEEP_MS), "both deleted: the empty video").toEqual(EMPTY);
+    expect(await at(c2 + KEEP_MS), "both deleted: no part, the latest session as it was").toEqual(withSession("completed", true));
     expect(r.mint, "nothing to sign").not.toHaveBeenCalled();
   });
 
@@ -451,7 +505,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const { competition_id } = await competitionOf(f);
     expect((await read(r, f)).live, "PREMISE: public, it plays").not.toBeNull();
     await sql`update competitions set visibility = 'private' where id = ${competition_id}`;
-    expect(await read(r, f)).toEqual(EMPTY);
+    expect(await read(r, f)).toEqual(NONE);
     const org = await readOrg(r, f);
     expect(org.live, "the organiser still sees the live").not.toBeNull();
     expect(org.replay.map((p) => signedUid(p.src)), "and the part").toEqual([rec]);
@@ -467,7 +521,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const { division_id } = await competitionOf(f);
     expect((await read(r, f)).live, "PREMISE: an active division plays").not.toBeNull();
     await sql`update divisions set status = 'setup' where id = ${division_id}`;
-    expect(await read(r, f)).toEqual(EMPTY);
+    expect(await read(r, f)).toEqual(NONE);
     expect((await readOrg(r, f)).live).not.toBeNull();
   });
 
@@ -476,24 +530,24 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const other = await rig();
     const f = r.fixtureIds[0];
     await live(r, f, r.seazn);
-    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(r.clock.now), r.playback)).toEqual(EMPTY);
+    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(r.clock.now), r.playback)).toEqual(NONE);
     expect((await readOrg(r, f)).live).not.toBeNull();
     // Owning the fixture is not owning every row on it: a session that names ANOTHER organisation (no constraint ties the two
     // org ids together; put there by hand) is not this organisation's to read. The public read is not org-scoped and still sees it.
     await sql`update fixture_stream_sessions set org_id = ${other.auth.orgId} where fixture_id = ${f}`;
-    expect(await readOrg(r, f), "a session of another organisation").toEqual(EMPTY);
+    expect(await readOrg(r, f), "a session of another organisation").toEqual(NONE);
     // And the other way round: a session naming the other organisation does not make the FIXTURE theirs.
-    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(r.clock.now), r.playback), "not their fixture").toEqual(EMPTY);
+    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(r.clock.now), r.playback), "not their fixture").toEqual(NONE);
     expect((await read(r, f)).live, "PREMISE: the session itself is still live").not.toBeNull();
   });
 
   it("an unknown fixture and a malformed id answer the empty video (no error, no oracle)", async () => {
     const r = await rig();
     for (const id of [randomUUID(), "not-a-uuid", "", "'; select 1; --"]) {
-      expect(await read(r, id), JSON.stringify(id)).toEqual(EMPTY);
-      expect(await readOrg(r, id), JSON.stringify(id)).toEqual(EMPTY);
+      expect(await read(r, id), JSON.stringify(id)).toEqual(NONE);
+      expect(await readOrg(r, id), JSON.stringify(id)).toEqual(NONE);
       // The ORGANISATION id is checked as well: a malformed one is the empty video, never a 22P02 and a 500.
-      expect(await seaznFixtureVideoForOrg(id, r.fixtureIds[0], new Date(r.clock.now), r.playback), `org ${JSON.stringify(id)}`).toEqual(EMPTY);
+      expect(await seaznFixtureVideoForOrg(id, r.fixtureIds[0], new Date(r.clock.now), r.playback), `org ${JSON.stringify(id)}`).toEqual(NONE);
     }
     expect(r.mint).not.toHaveBeenCalled();
   });
@@ -515,7 +569,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const f = r.fixtureIds[0];
     const sid = await live(r, f, r.seazn);
     await sql`update fixture_stream_inputs set ingest_input_id = null where session_id = ${sid} and role = 'programme'`;
-    expect(await read(r, f)).toEqual(EMPTY);
+    expect(await read(r, f)).toEqual(withSession("live", true));
     expect(r.mint).not.toHaveBeenCalled();
   });
 
@@ -528,14 +582,14 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect((await seaznFixtureVideo(f, now)).live?.src, "the process relay signs").toMatch(PLAY);
     expect(r.mint, "through the process relay's ingest").toHaveBeenCalled();
     setRelayDriversForTest(disabledRelayDrivers());
-    expect(await seaznFixtureVideo(r.fixtureIds[1], now), "nothing to sign: no relay needed").toEqual(EMPTY);
+    expect(await seaznFixtureVideo(r.fixtureIds[1], now), "nothing to sign: no relay needed").toEqual(NONE);
     // A LIVE deployment short its Cloudflare secrets cannot even BUILD its relay (the CloudflareIngest constructor throws): a
     // fixture with nothing to sign still answers, because the relay is built only when there is something to sign.
     setRelayDriversForTest(null);
     vi.stubEnv("RELAY_DRIVERS", "live");
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
-    expect(await seaznFixtureVideo(r.fixtureIds[1], now), "nothing to sign: the relay is never built").toEqual(EMPTY);
+    expect(await seaznFixtureVideo(r.fixtureIds[1], now), "nothing to sign: the relay is never built").toEqual(NONE);
     await expect(seaznFixtureVideo(f, now), "something to sign: the build fails, by name").rejects.toThrow(/CLOUDFLARE_ACCOUNT_ID is not set/);
     vi.stubEnv("RELAY_DRIVERS", "");
     // The other half: the default path really does reach the relay when there IS something to sign. A NEW live (its input is
@@ -545,7 +599,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     setRelayDriversForTest(disabledRelayDrivers());
     const warn = vi.spyOn(log, "warn");
     try {
-      expect(await seaznFixtureVideo(r.fixtureIds[1], now), "the live is left out, the answer stands").toEqual(EMPTY);
+      expect(await seaznFixtureVideo(r.fixtureIds[1], now), "the live is left out, the answer stands").toEqual(withSession("live", true));
       expect(warn.mock.calls.filter(([, msg]) => msg === LIVE_UNSIGNED_LOG).map(([o]) => (o as { err: string }).err)).toEqual([new RelayDriversDisabled().name]);
     } finally {
       warn.mockRestore();

@@ -23,7 +23,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import type { StreamTarget } from "@/server/api-v1/schemas";
 import { PlatformMark, STREAM_KIND_BRAND, platformName } from "./stream-platform-mark";
-import { PRIVACY_KEY, TONE, channelStatus, youtubeTargetLabel, type Tone } from "./youtube-connect-panel";
+import { PRIVACY_KEY, TONE, channelStatus, targetName, type Tone } from "./youtube-connect-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -54,8 +54,9 @@ export function destinationRow(msg: Msg, t: StreamTarget): DestinationRow {
   const status = t.youtube ? channelStatus(t.youtube) : null;
   return {
     id: t.id,
-    // The Seazn row's name is copy in the viewer's language, not the stored label.
-    name: t.kind === "seazn" ? msg("stream.dest.kind.seazn") : youtubeTargetLabel(msg, t.label),
+    // The Seazn row's name is its brand, "Seazn Hosted" (owner 2026-11-23: the same in every locale), never the stored label: the name
+    // the panel's chain, its ending line and the Streaming page's card give it too (`targetName`, one rule for every surface).
+    name: targetName(msg, t),
     kind: kindLine(msg, t),
     health: status && status.tone !== "ok" ? { tone: status.tone, text: msg(status.pill) } : null,
   };

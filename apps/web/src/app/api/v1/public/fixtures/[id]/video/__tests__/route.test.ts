@@ -54,9 +54,9 @@ describe("GET /api/v1/public/fixtures/{id}/video", () => {
 
   it("is never cached: `private, no-store` on a video, and on an empty one too", async () => {
     expect((await call()).headers.get("cache-control")).toBe("private, no-store");
-    read.fn.mockResolvedValue({ live: null, replay: [] });
+    read.fn.mockResolvedValue({ live: null, replay: [], session: null });
     const empty = await call();
-    expect(await empty.json()).toMatchObject({ ok: true, data: { live: null, replay: [] } });
+    expect(await empty.json()).toMatchObject({ ok: true, data: { live: null, replay: [], session: null } });
     expect(empty.headers.get("cache-control")).toBe("private, no-store");
   });
 

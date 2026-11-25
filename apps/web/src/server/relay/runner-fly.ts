@@ -53,7 +53,7 @@
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, embeddedEventsOf, exitAtFrom, exitInfoFrom, exitRecorded, exitRestartedFrom, flyDuration, isRetryable, restartFrom, type Machine, type MachineCreateInput } from "./fly-client";
-import { RUNNER_INPLACE_RESTARTS, RUNNER_PLATFORM_STOP_SIGNAL, RUNNER_STOP_GRACE_SECONDS, liveRunnerIdentity } from "./config";
+import { RUNNER_INPLACE_RESTARTS, RUNNER_PLATFORM_STOP_SIGNAL, RUNNER_STOP_GRACE_SECONDS, liveRunnerIdentity, relayInputBeat } from "./config";
 import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER, RunnerCreateError } from "./ports";
@@ -272,12 +272,15 @@ export class FlyRunner implements RunnerProvider {
           stop_config: PLATFORM_STOP_CONFIG,
           // R4: RELAY_AIRINGS=1 switches the compositor's sponsor airings and proof frames on. Web is the only host that builds
           // this env, so the switch rides from web's own; only "1" turns it on (deploy order: README "Cloudflare Stream").
+          // T44 (the same shape): RELAY_INPUT_BEAT=1 makes the compositor send the camera's six beat keys; web's own flag of that name
+          // (default off, off in prod), the constant "1" and nothing else copied (relay/config.ts `relayInputBeat`).
           env: {
             SESSION_ID: spec.sessionId,
             JOB_TOKEN: spec.jobToken,
             APP_URL: spec.appUrl,
             RELAY_DEADLINE_AT: spec.deadlineAt.toISOString(),
             ...(process.env.RELAY_AIRINGS === "1" ? { RELAY_AIRINGS: "1" } : {}),
+            ...(relayInputBeat() ? { RELAY_INPUT_BEAT: "1" } : {}),
           },
           metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },

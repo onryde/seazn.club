@@ -102,7 +102,7 @@ export interface OverlayLiveData extends LiveFixtureData {
    *
    *  OPTIONAL here, ALWAYS EMITTED by the endpoint. The asymmetry is deliberate:
    *  `projectOverlayLiveData` always sets an array (possibly empty), but
-   *  `fixture-stream-panel.tsx` seeds an `OverlayLiveData` from a fixture ROW
+   *  `fixture-stream-panel/panel.tsx` seeds an `OverlayLiveData` from a fixture ROW
    *  before any poll has happened, and `[]` there would assert "this fixture has
    *  no recent events" when the truth is "none have been loaded". */
   recent?: RecentEvent[];

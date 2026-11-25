@@ -34,10 +34,10 @@ const SLOT = 0;
 type PairingRow = {
   id: string; device_model: string | null; app_version: string | null; mode: string | null; phone_state: string | null;
   not_ready: string | null; not_ready_since: Date | null; start_failed: string | null; last_beat_at: Date; answered_poll_seconds: number;
-  last_beat: unknown;
+  last_beat: unknown; claimed_at: Date;
 };
 const PAIRING_COLS = () => sql`p.id, p.device_model, p.app_version, p.mode, p.phone_state, p.not_ready, p.not_ready_since, p.start_failed,
-  p.last_beat_at, p.answered_poll_seconds, p.last_beat`;
+  p.last_beat_at, p.answered_poll_seconds, p.last_beat, p.claimed_at`;
 
 /** One of the beat's enum words, or null — a column the beat wrote through the strict contract, re-checked on the way
  *  out so a stray value never reaches the panel as a word it has no copy for. */
@@ -264,6 +264,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
         delivery: fresh ? beat.delivery : null, thermal: fresh ? beat.thermal : null, battery: fresh ? beat.battery : null,
       }),
       startFailed: word(CaptureStartFailed, p.start_failed),
+      pairedAt: new Date(p.claimed_at).toISOString(),
       lastBeatAt: lastBeatAt.toISOString(),
       elapsedMs: Math.max(0, now.getTime() - lastBeatAt.getTime()),
       beat,

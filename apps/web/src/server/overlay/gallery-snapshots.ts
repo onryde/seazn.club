@@ -282,10 +282,13 @@ function withHeldClock(sample: Sample, events: { type: string; payload: unknown 
 
 export type GallerySnapshots = Record<string, Record<GallerySnapshotKind, OverlayLiveData>>;
 
-/** Every overlay sport × warming / live / ended. `now` anchors the event times (the live clock reads them). */
-export function gallerySnapshots(now: number = Date.now()): GallerySnapshots {
+/** Every overlay sport × warming / live / ended. `now` anchors the event times (the live clock reads them). `sportKeys` narrows the
+ *  walk to the sports a caller draws (the Streaming page's club-style preview draws only the club's own); a key the overlay does not
+ *  render is refused by name, never drawn as a guess. Default: every overlay sport, the staff gallery's. */
+export function gallerySnapshots(now: number = Date.now(), sportKeys: readonly string[] = OVERLAY_SPORT_KEYS): GallerySnapshots {
   const out: GallerySnapshots = {};
-  for (const sportKey of OVERLAY_SPORT_KEYS) {
+  for (const sportKey of sportKeys) {
+    if (!OVERLAY_SPORT_KEYS.includes(sportKey)) throw new Error(`overlay gallery: ${sportKey} is not an overlay sport`);
     const sample = sampleFor(sportKey);
     const warming = project(sample, []);
     const live = project(sample, stamp(withHeldClock(sample, livePrefix(sample)), now));

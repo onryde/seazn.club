@@ -30,7 +30,7 @@
 // One sport, on purpose: the Phone tab reads no sport (the relay is
 // sport-agnostic); the W1 style-strip describes above sweep three.
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -98,6 +98,17 @@ import {
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
+
+/** The panel's WHOLE source. Task 34s split fixture-stream-panel.tsx into a folder of modules (MODULARIZATION.md rule 9):
+ *  a source scan reads every one of them, joined in name order, never the barrel alone. Below the module count taken at
+ *  the split it throws, so a scan that silently reads fewer modules cannot pass. */
+const PANEL_DIR = join(__dirname, "..", "fixture-stream-panel");
+const PANEL_MODULE_FLOOR = 8;
+function panelSource(): string {
+  const names = readdirSync(PANEL_DIR).filter((n) => /\.tsx?$/.test(n)).sort();
+  if (names.length < PANEL_MODULE_FLOOR) throw new Error(`fixture-stream-panel/ holds ${names.length} modules, below the floor of ${PANEL_MODULE_FLOOR}`);
+  return names.map((n) => readFileSync(join(PANEL_DIR, n), "utf8")).join("\n");
+}
 
 const apiV1 = vi.fn<(url: string, options?: { method?: string; json?: unknown }) => Promise<unknown>>(
   async () => ({}),
@@ -223,10 +234,12 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     phoneCapture: true,
     phoneLostMinutes: 20,
     autoStopMinutes: 3,
+    pasteCodeShown: true,
     composedAvailable: false,
     streamPrefs: {},
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
     courtOverlayDelayDefaultMs: 0,
+    clubStyle: { overlayTemplate: null, overlayDelayMs: null },
     overlaySides: {},
     ...o,
   };
@@ -655,7 +668,7 @@ type Facts = NonNullable<StreamPhone["phone"]>;
 /** The paired phone's facts as the T9 read model serves them — present, answering, nothing wrong. */
 const facts = (over: Partial<Facts> = {}): Facts => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null,
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z",
   lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
@@ -766,16 +779,23 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(propsOf(tab!)).toMatchObject({ autoStopMinutes: 9, tz: TZ });
   });
 
+  it("Task 34: the container is handed the page's paste-code flag (StreamPanelContext.pasteCodeShown, the server's STREAM_PASTE_CODE) — off and on", () => {
+    const tabOf = (pasteCodeShown: boolean) => phone({ relayEntitled: true, pasteCodeShown }).tree().find((el) => el.type === PhoneTab);
+    expect(ctx().pasteCodeShown, "premise: the default is on, so off is a value the default cannot produce").toBe(true);
+    expect(propsOf(tabOf(false)!).pasteCodeShown).toBe(false);
+    expect(propsOf(tabOf(true)!).pasteCodeShown).toBe(true);
+  });
+
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
     // The behaviour is driven below (PhoneTab — checkout). This pins the negative the node harness cannot drive: no
     // hosted-checkout hop anywhere in the module — nor in the lazily loaded checkout sheet (I2).
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     const sheet = readFileSync(join(__dirname, "..", "stream-checkout-modal.tsx"), "utf8");
     // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel. M2: its one loader
     // is its own module (so the warm-up is countable), and the panel hands that loader to dynamic().
     const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
     expect(loaderSrc).toMatch(/export const loadCheckoutSheet = makeSheetLoader\(\(\) => import\("\.\/stream-checkout-modal"\)\);/);
-    expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\/stream-checkout-sheet-loader";/);
+    expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\.\/stream-checkout-sheet-loader";/);
     expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
     expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
     expect(sheet).toMatch(/data-testid="stream-checkout-modal"/);
@@ -830,7 +850,7 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
       }
       return { files: seen, bare };
     };
-    const panel = graph(join(__dirname, "..", "fixture-stream-panel.tsx"));
+    const panel = graph(join(__dirname, "..", "fixture-stream-panel", "index.tsx"));
     const stripeish = (g: ReturnType<typeof graph>) => [
       ...[...g.bare].filter((b) => b.startsWith("@stripe/")),
       ...[...g.files].filter((f) => f.endsWith("stripe-browser.ts")),
@@ -838,6 +858,9 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(stripeish(panel), "a static path from the panel reaches Stripe.js").toEqual([]);
     // Anti-vacuity: the walk really followed the panel's imports (it reaches the view model and the upgrade gate)…
     expect(panel.files.size, "the walk read no modules").toBeGreaterThan(10);
+    // Task 34s: the entry is the barrel, so the walk must have followed it into every module that carries code (types.ts is
+    // imported for types only, an erased edge).
+    expect([...panel.files].filter((f) => f.includes(join("v2", "fixture-stream-panel", ""))).length, "the walk entered the panel's modules").toBeGreaterThanOrEqual(PANEL_MODULE_FLOOR - 1);
     expect([...panel.files].some((f) => f.endsWith("stream-session-view.ts"))).toBe(true);
     // …and the positive pair: the SAME walk finds Stripe from the lazily loaded sheet, so it can see one when it is there.
     const sheet = graph(join(__dirname, "..", "stream-checkout-modal.tsx"));
@@ -1036,12 +1059,13 @@ const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, youtube: null, pickFailed: false,
-  phoneLostMinutes: 20, autoStopMinutes: 3, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
+  phoneLostMinutes: 20, autoStopMinutes: 3, pasteCodeShown: true, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
   onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, safetyNotice: false, onDismissSafety: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
+  qrFailed: false, onRetryQr: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
-  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {} },
+  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {}, downloading: null, downloadFailed: null, onDownload: () => {} },
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
@@ -1427,6 +1451,66 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(qrImageOf(opened, "stream-qr")).toBeDefined();
   });
 
+  // Task 34: the paste field and Copy exist for developers and the harnesses (dev, e2e, smoke); stg and prod show the QR alone.
+  it("Task 34: paste code OFF — the code card is the QR alone (no paste field, no Copy), before and after the encoder answers, and so is 'Show the code again'; ON, both are there", () => {
+    const PASTE = ["stream-qr-field", "stream-qr-text", "stream-qr-copy"] as const;
+    const ready = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }) } as const;
+    const states = {
+      card: { ...ready, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } },
+      // The QR's placeholder sized for THIS text: the brief keeps it, and without the paste code it is all the card shows.
+      encoding: { ...ready, code: { status: "ok", text: CODE_TEXT, image: null } },
+      // Ready, paired: "Show the code again", opened.
+      reshown: { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } },
+    } satisfies Record<string, BodyArgs>;
+    const modules = QRCode.create(CODE_TEXT, { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    let checked = 0;
+    for (const [name, state] of Object.entries(states)) {
+      const off = body({ ...state, pasteCodeShown: false });
+      for (const id of PASTE) {
+        expect(byTestId(off, id), `${name}, off: no ${id}`).toBeUndefined();
+        checked++;
+      }
+      // The QR is unchanged: the symbol once encoded, the placeholder for this text before — and Revoke & reissue stays.
+      if (state.code.image) expect(propsOf(qrImageOf(off, "stream-qr")!).qr, `${name}, off: the QR`).toBe(SYMBOL);
+      else expect(propsOf(off.find((el) => el.type === SeaznQrPlaceholder)!).modules, `${name}, off: the placeholder`).toBe(modules);
+      expect(byTestId(off, "stream-code-reissue"), `${name}, off: reissue`).toBeDefined();
+      // The positive pair, same state: on, the field holds the QR's text and Copy is beneath it.
+      const on = body({ ...state, pasteCodeShown: true });
+      expect(attr(byTestId(on, "stream-qr-text")!, "value"), `${name}, on: the paste code`).toBe(CODE_TEXT);
+      expect(byTestId(on, "stream-qr-copy"), `${name}, on: Copy`).toBeDefined();
+      if (state.code.image) expect(propsOf(qrImageOf(on, "stream-qr")!).qr).toBe(SYMBOL);
+    }
+    expect(checked, "anti-vacuity: 3 states x 3 testids").toBe(9);
+  });
+
+  // Task 34 fix round 1 (m1): with the paste code hidden, a QR that failed to encode used to leave the placeholder pulsing
+  // forever with no way in. It is now the code's own error line, with a Retry that re-encodes (the container's nonce).
+  it("Task 34 m1: a QR that FAILED to encode is the code's error with Retry — never the placeholder — paste code off and on; not failed, the placeholder", () => {
+    const onRetryQr = vi.fn();
+    const failed = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: null }, qrFailed: true, onRetryQr } satisfies BodyArgs;
+    let checked = 0;
+    for (const pasteCodeShown of [false, true]) {
+      const tree = body({ ...failed, pasteCodeShown });
+      expect(tree.find((el) => el.type === SeaznQrPlaceholder), `paste ${pasteCodeShown}: no placeholder`).toBeUndefined();
+      expect(qrImageOf(tree, "stream-qr"), `paste ${pasteCodeShown}: no QR`).toBeUndefined();
+      expect(attr(byTestId(tree, "stream-qr-error")!, "role"), "an alert, like the code's own error").toBe("alert");
+      expect(textAt(tree, "stream-qr-error")).toContain(m("stream.code.error"));
+      expect(textAt(tree, "stream-qr-retry")).toBe(m("stream.dest.retry"));
+      expect(byTestId(tree, "stream-code-error"), "not the ASK's error: the code itself was answered").toBeUndefined();
+      click(byTestId(tree, "stream-qr-retry"));
+      expect(onRetryQr, `paste ${pasteCodeShown}: Retry re-encodes`).toHaveBeenCalledTimes(checked + 1);
+      expect(byTestId(tree, "stream-code-reissue"), "Revoke & reissue stays").toBeDefined();
+      // The paste code is still the flag's: shown where it is on, beside the error.
+      expect(byTestId(tree, "stream-qr-text") !== undefined, `paste ${pasteCodeShown}`).toBe(pasteCodeShown);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The empty case: not failed — the placeholder for this text, and no error line.
+    const encoding = body({ ...failed, qrFailed: false, pasteCodeShown: false });
+    expect(encoding.find((el) => el.type === SeaznQrPlaceholder), "still encoding: the placeholder").toBeDefined();
+    expect(byTestId(encoding, "stream-qr-error")).toBeUndefined();
+  });
+
   // Court stream (plan Task 13, spec 2026-11-14 §5.2): a match the court's phone streams names it, in place of the code.
   describe("a court-streamed match (read model `court`)", () => {
     const COURT = { name: "Court 2", targetLabel: "Court channel" };
@@ -1693,7 +1777,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(html).not.toContain("passphrase");
     // The source half: no session read names `qr` (the code's QR comes from the stream-code route), and nothing asks
     // `current` for a reveal (W4: the route answers 400 to one).
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     expect(src.match(/\b(view|shown|session|v)\??\.qr\b/g) ?? [], "a session's `qr` is read").toEqual([]);
     expect(src.match(/reveal/gi) ?? [], "a reveal is asked for").toEqual([]);
     expect(src, "PREMISE: the scan reads the panel (it names the code route)").toContain("/stream-code");
@@ -3032,7 +3116,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     code?: () => unknown;
     reissue?: () => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London", score: SCORE_OFF };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, pasteCodeShown: true, tz: "Europe/London", score: SCORE_OFF };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
   const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
   const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
@@ -3163,6 +3247,17 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(TAB.phoneLostMinutes, "premise: the default differs").not.toBe(7);
     expect(bodyOf(island).phoneLostMinutes).toBe(7);
+  });
+
+  it("Task 34: the container hands the body the page's paste-code flag, untouched — off and on", async () => {
+    serve({ current: null, targets: TARGETS });
+    expect(TAB.pasteCodeShown, "premise: the default is on").toBe(true);
+    const off = track(renderIsland(PhoneTab, { ...TAB, pasteCodeShown: false }));
+    await settle();
+    expect(bodyOf(off).pasteCodeShown).toBe(false);
+    const on = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(on).pasteCodeShown).toBe(true);
   });
 
   it("C1: no session → the SERVER-resolved balance; a session → its projection's fresher number, which Start another keeps", async () => {
@@ -3314,6 +3409,33 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(checked).toBe(rows.length);
   });
 
+  // Task 38: a match with no style of its own sends NO themeId — the club's is the server's to apply, and a body that named the style the
+  // picker merely showed would turn the club's default into this match's own choice and beat it.
+  it("Task 38: Go live with no stored style sends no themeId (key absent, not null); with one, exactly that one — and the timing as before", async () => {
+    const own = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!.id;
+    const rows: [string, PhoneScore["template"], unknown][] = [
+      ["no style of its own", null, { mode: "composed", targetId: "t1", overlayDelayMs: 2500 }],
+      ["its own style", own, { mode: "composed", targetId: "t1", themeId: own, overlayDelayMs: 2500 }],
+    ];
+    let checked = 0;
+    for (const [name, template, want] of rows) {
+      apiV1.mockClear();
+      const s = serve({ current: null, targets: TARGETS });
+      s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+      const island = track(renderIsland(PhoneTab, { ...TAB, score: { ...SCORE_OFF, available: true, stored: null, delayMs: 2500, template } }));
+      await settle();
+      bodyOf(island).onSelectTarget("t1");
+      bodyOf(island).onGoLive();
+      await settle();
+      const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST");
+      const json = post?.[1]?.json as Record<string, unknown>;
+      expect(json, name).toEqual(want);
+      expect("themeId" in json, `${name}: the key itself`).toBe(template !== null);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("§6.12 polling: the read model is read at mount and every STREAM_POLL_MS while the tab is open — at idle too, where `current` rests — and never after it closes", async () => {
     const island = track(await mount({ current: null, targets: TARGETS }));
     expect(phoneReads(), "the mount's read").toBe(1);
@@ -3395,6 +3517,85 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     apiV1.mockClear();
     track(await mount({ current: null, targets: TARGETS, phone: readModel({ court: null, phone: null }) }));
     expect(ensures(), "regression: switch off, no phone — the card asks at once").toBe(1);
+  });
+
+  it("Task 34 m1: an encode that FAILS reports qrFailed, and a poll does not re-encode it; Retry re-encodes the SAME text (a nonce: the re-ask would answer the same code) — a second failure stays failed, the next Retry lands the QR", async () => {
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed"));
+    const island = track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT]]);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    expect(bodyOf(island).qrFailed, "the failure reaches the body").toBe(true);
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(seaznQr.renderSeaznQr, "no re-encode on a poll: only Retry asks again").toHaveBeenCalledTimes(1);
+    expect(bodyOf(island).qrFailed).toBe(true);
+    // Retry 1 fails again: still failed, and the encoder was asked for the same text.
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed again"));
+    bodyOf(island).onRetryQr();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [CODE_TEXT]]);
+    expect(bodyOf(island).qrFailed, "a second failure stays failed").toBe(true);
+    // Retry 2 lands: while it is in flight the error is gone (the placeholder says "trying"); then the QR.
+    let land!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    bodyOf(island).onRetryQr();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [CODE_TEXT], [CODE_TEXT]]);
+    expect(bodyOf(island).qrFailed, "in flight: no error line, the placeholder").toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    land({ src: `data:image/svg+xml;charset=utf-8,len${CODE_TEXT.length}`, modules: 113 });
+    await settle();
+    expect(bodyOf(island).qrFailed).toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: { src: `data:image/svg+xml;charset=utf-8,len${CODE_TEXT.length}`, modules: 113 } });
+    expect(calls().filter((c) => c === ENSURE).length, "Retry re-encodes; it never re-asks the server for the code").toBe(1);
+  });
+
+  it("Task 34 m1: a failed encode belongs to ITS text — Revoke & reissue after one draws the new code's placeholder (not the old error) and encodes it", async () => {
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.reissue = () => ({ qr: NEW, issuedAt: "2026-09-14T11:40:00.000Z" });
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed"));
+    const island = track(await mount(s));
+    expect(bodyOf(island).qrFailed).toBe(true);
+    let land!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    confirmMock.mockResolvedValueOnce(true);
+    bodyOf(island).onReissue();
+    await settle();
+    expect(calls().filter((c) => c === REISSUE)).toHaveLength(1);
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [captureQrV2Text(NEW)]]);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: captureQrV2Text(NEW), image: null });
+    expect(bodyOf(island).qrFailed, "the new code is encoding: the old text's failure is not its").toBe(false);
+    land({ src: "data:image/svg+xml;charset=utf-8,new", modules: 113 });
+    await settle();
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: captureQrV2Text(NEW), image: { src: "data:image/svg+xml;charset=utf-8,new", modules: 113 } });
+    expect(bodyOf(island).qrFailed).toBe(false);
+  });
+
+  it("Task 34 m1: an encode OVERTAKEN (a refused reissue blanks the code, Retry brings the same code back) never reports its late failure over the live encode", async () => {
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.reissue = () => { throw new ApiV1Error("the match is over", 422, "fixture_finished"); };
+    let failFirst!: (e: Error) => void;
+    let landSecond!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr
+      .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { landSecond = resolve; }));
+    const island = track(await mount(s));
+    confirmMock.mockResolvedValueOnce(true);
+    bodyOf(island).onReissue();
+    await settle();
+    expect(bodyOf(island).code, "the refused reissue: the code's error card").toEqual({ status: "error" });
+    bodyOf(island).onRetryCode();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls, "the same code back: a second encode").toEqual([[CODE_TEXT], [CODE_TEXT]]);
+    failFirst(new Error("the first, overtaken, encode fails late"));
+    await settle();
+    expect(bodyOf(island).qrFailed, "the live encode is still running: no error line").toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    landSecond({ src: "data:image/svg+xml;charset=utf-8,second", modules: 113 });
+    await settle();
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: { src: "data:image/svg+xml;charset=utf-8,second", modules: 113 } });
+    expect(bodyOf(island).qrFailed).toBe(false);
   });
 
   it("W3: the code is encoded CLIENT-side from its own text — exactly the four keys (a fixture's code carries no `exp`; only a court code does, court stream §5.1) — once per text; Copy writes that text", async () => {
@@ -3500,6 +3701,134 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onRetryCode();
     await settle();
     expect(bodyOf(island).code).toMatchObject({ status: "ok" });
+  });
+
+  // Task 35 (owner 2026-11-24, "when phone is pair then can we close the QR automatically"). A phone pairing at Ready already
+  // folds the card (F4: Ready with no phone draws the code card; paired draws the fold, and `codeOpen` starts false). What is
+  // pinned here is the fold the ORGANISER opened with "Show the code again": the container's own poll of the read model closes
+  // it once a phone pairs — a phone where there was none, or another phone taking the slot — and never on a re-poll of the
+  // same pairing, so re-opened it stays open. The read model has no pairing id; a takeover's instant is the identity it serves.
+  describe("Task 35: the fold the organiser opened closes once a phone pairs", () => {
+    const TOOK_AT = "2026-09-14T11:50:00.000Z";
+    /** The pairing the takeover made: a new phone's claim, at the takeover's instant (T35 review m1: the read names it by `pairedAt`). */
+    const TAKEN = facts({ model: "Galaxy S24", pairedAt: TOOK_AT });
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    const NEW_AT = "2026-09-14T11:55:00.000Z";
+    const NEW_CODE = { issuedAt: NEW_AT, state: "active" as const, endCause: null };
+    /** One more read model poll, landed. */
+    const poll = async (n = 1) => {
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * n);
+      await settle();
+    };
+    /** What the body draws for the fold: open or not, and whether the code's QR is inside it. */
+    const fold = (island: { tree: () => ReactElement[] }) => {
+      const tree = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      const d = byTestId(tree, "stream-code-disclosure");
+      return { drawn: d !== undefined, open: d ? attr(d, "open") : undefined, qr: qrImageOf(tree, "stream-qr") !== undefined };
+    };
+
+    it("another phone takes the slot → the open fold closes; the same pairing re-polled keeps it open, before and after (re-opened, it stays)", async () => {
+      const s = serve({ current: null, targets: TARGETS });
+      const island = track(await mount(s));
+      expect(bodyOf(island).codeOpen, "PREMISE (F4): paired, the fold starts closed").toBe(false);
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(fold(island), "opened: the QR is in it").toEqual({ drawn: true, open: true, qr: true });
+      // The same pairing, re-polled — its own facts moving (a later beat) — twice.
+      s.phone = readModel({ phone: facts({ elapsedMs: 20_000 }) });
+      const before = phoneReads();
+      await poll(2);
+      expect(phoneReads() - before, "PREMISE: two more reads landed").toBe(2);
+      expect(bodyOf(island).codeOpen, "the same pairing re-polled: still open").toBe(true);
+      // Another phone scans the shown code and takes the slot (§7.5): a new pairing, and the takeover's notice.
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 0 }, phone: TAKEN });
+      await poll();
+      expect(bodyOf(island).codeOpen, "a new pairing closes it").toBe(false);
+      expect(fold(island), "closed: the fold is drawn, shut, no QR").toEqual({ drawn: true, open: false, qr: false });
+      // Re-opened ("Show the code again" still works), and that pairing re-polled — the notice ageing — leaves it open.
+      bodyOf(island).onToggleCode(true);
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 10_000 }, phone: TAKEN });
+      await poll(2);
+      expect(fold(island), "the close was once: re-opened, it stays open").toEqual({ drawn: true, open: true, qr: true });
+    });
+
+    it("the EMPTY case: no phone, read after read, changes nothing (live, the fold open); then a phone pairs → closed", async () => {
+      const s = serve({ current: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, phone: readModel({ phone: null }) });
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(fold(island), "PREMISE: live with no phone still draws the fold, open").toMatchObject({ drawn: true, open: true });
+      const before = phoneReads();
+      await poll(2);
+      expect(phoneReads() - before, "PREMISE: two more reads landed").toBe(2);
+      expect(bodyOf(island).codeOpen, "no phone: no change").toBe(true);
+      s.phone = readModel();
+      await poll();
+      expect(bodyOf(island).codeOpen, "a phone where there was none closes it").toBe(false);
+    });
+
+    it("a re-pair after Revoke & reissue: the reissue keeps it open (no phone on the new code: the card), the phone that scans the NEW code closes it", async () => {
+      const s = serve({ current: null, targets: TARGETS });
+      s.reissue = () => {
+        // The old code ends; the new one has no phone (the claim on the old one ended with it).
+        s.phone = readModel({ phone: null, code: NEW_CODE });
+        return { qr: NEW, issuedAt: NEW_AT };
+      };
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      bodyOf(island).onReissue();
+      await settle();
+      expect(calls().filter((c) => c === REISSUE), "PREMISE: reissued").toHaveLength(1);
+      expect(bodyOf(island).phone?.phone, "PREMISE: the read after the reissue names no phone").toBeNull();
+      expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
+      await poll();
+      expect(bodyOf(island).codeOpen, "no phone on the new code: nothing paired, nothing closed").toBe(true);
+      s.phone = readModel({ code: NEW_CODE, phone: facts({ pairedAt: "2026-09-14T11:56:00.000Z" }) });
+      await poll();
+      expect(bodyOf(island).codeOpen, "the phone on the new code closes it").toBe(false);
+      expect(fold(island)).toEqual({ drawn: true, open: false, qr: false });
+    });
+
+    it("Revoke & reissue answering a TAKEOVER on a live session: the takeover goes from the read, the held phone stays — the fold stays open on the new code", async () => {
+      const s = serve({
+        current: session({ state: "live", startedAt: "2026-09-14T11:40:00Z" }),
+        targets: TARGETS,
+        phone: readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 60_000 }, phone: TAKEN }),
+      });
+      s.reissue = () => {
+        // B7 review I-2: a takeover on an ended code is never served; the session's phone is held (C1b): the SAME pairing.
+        s.phone = readModel({ code: NEW_CODE, lastTakeover: null, phone: TAKEN });
+        return { qr: NEW, issuedAt: NEW_AT };
+      };
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      bodyOf(island).onReissue();
+      await settle();
+      expect(bodyOf(island).phone?.lastTakeover, "PREMISE: the takeover is no longer served").toBeNull();
+      await poll(2);
+      expect(bodyOf(island).codeOpen, "the organiser's new code stays in front of them").toBe(true);
+      expect(fold(island)).toEqual({ drawn: true, open: true, qr: true });
+    });
+
+    it("T35 review m1: a REPLACEMENT phone read in the old one's place — no takeover served, never empty in between — closes it; re-polled, it stays open", async () => {
+      // A live session's phone dies; another phone pairs on the code between two polls. The read model names the new pairing by
+      // its claim, with no takeover notice (a replacement, not a slot taken from a live phone): it was invisible to the old
+      // takeover-instant identity.
+      const s = serve({ current: session({ state: "live", startedAt: "2026-09-14T11:40:00Z" }), targets: TARGETS });
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(bodyOf(island).phone?.phone?.pairedAt, "PREMISE: the first phone's pairing").toBe("2026-09-14T11:05:00.000Z");
+      s.phone = readModel({ lastTakeover: null, phone: facts({ model: "iPhone 15", pairedAt: "2026-09-14T11:58:00.000Z" }) });
+      await poll();
+      expect(bodyOf(island).phone?.lastTakeover, "PREMISE: no takeover served").toBeNull();
+      expect(bodyOf(island).codeOpen, "the replacement phone closes it").toBe(false);
+      bodyOf(island).onToggleCode(true);
+      await poll(2);
+      expect(bodyOf(island).codeOpen, "that phone re-polled: the re-opened fold stays open").toBe(true);
+    });
   });
 
   it("§6.7.3: a pick writes the fixture's pre-pick (PUT stream-settings); the saved pre-pick is what the picker opens at until the organiser picks", async () => {
@@ -4261,9 +4590,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("M2: the ONE loader module — the only specifier of the sheet anywhere in the panel, and no warm-up on the chooser", () => {
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
-    expect(src.match(/import\("\.\/stream-checkout-modal"\)/g) ?? [], "the panel imports the sheet itself").toHaveLength(0);
+    expect(src.match(/import\("\.\.?\/stream-checkout-modal"\)/g) ?? [], "the panel imports the sheet itself").toHaveLength(0);
     expect(loaderSrc.match(/import\("\.\/stream-checkout-modal"\)/g) ?? []).toHaveLength(1);
     // The loader module is in the panel's STATIC graph, so it must carry nothing but the dynamic import.
     expect(loaderSrc).not.toMatch(/^\s*import\s/m);
@@ -4381,6 +4710,12 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
       await settle();
       expect(island.tree()).toEqual([]);
+    });
+
+    it("m4 (T33c review): an ending Seazn session's probe names the destination by its brand, 'Seazn Hosted', never the stored 'Seazn'", async () => {
+      const seazn = { id: "t-seazn", kind: "seazn" as const, label: "Seazn" }; // V541's stored label
+      const island = await probe({ current: session({ id: "s1", state: "ending", target: seazn }), targets: TARGETS });
+      expect(textAt(island.tree(), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Seazn Hosted" }));
     });
 
     it("F1: a probe the frozen division page mounts NAMES its fixture; a row's own probe (no label) adds no line", async () => {
@@ -5670,9 +6005,10 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
       }
     }
     expect(checked).toBe(6);
-    // A fixture with nothing stored: never chosen, the sport's default style.
+    // A fixture with nothing stored: never chosen — no style of its own (Task 38: null sends no themeId, so the server's chain, the
+    // club's then the sport's default, decides; the style the picker SHOWS is not the match's choice).
     const none = scoreOf(openPanel({ relayEntitled: true, composedAvailable: true }));
-    expect([none.stored, none.template]).toEqual([null, defaultTemplateFor("football")]);
+    expect([none.stored, none.template]).toEqual([null, null]);
   });
 
   it("the sequence: Camera only → PUT { streamMode: passthrough }, shown at once; Add the score back → PUT { streamMode: composed }; a failed save puts the stored mode back and says so", async () => {
@@ -6416,13 +6752,32 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(marks("https://youtu.be/abc", "twitch"), "twitch kind, YouTube link: the link is YouTube's").toBe(1);
   });
 
-  it("EVERY place that prints the 'ending' destination passes it through youtubeTargetLabel — the card AND the stop probe (the probe needs a live provider, so its call site is swept)", () => {
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+  // T33c review m4: the ending line names the destination as every other surface does (`targetName`: Seazn's own destination is its
+  // brand, any other its localised label), so it is handed the whole TARGET (its kind decides), never the bare stored label.
+  it("EVERY place that prints the 'ending' destination passes the whole target through targetName — the card AND the stop probe (swept, beside the behaviour tests)", () => {
+    const src = panelSource();
     const sites = [...src.matchAll(/msg\("stream\.phone\.ending",\s*\{([^}]*)\}\)/g)].map((m) => m[1]!);
     expect(sites.length, "anti-vacuity: the card's and the probe's call sites were both found").toBeGreaterThanOrEqual(2);
     for (const [i, args] of sites.entries()) {
-      expect(args, `call site ${i}: the destination is localised, never the raw stored label`).toMatch(/destination:\s*youtubeTargetLabel\(msg,/);
+      expect(args, `call site ${i}: the destination is named from the whole target, never the raw stored label`).toMatch(/destination:\s*targetName\(msg,\s*[\w.]*target\)/);
     }
+  });
+
+  // Owner 2026-11-23: Seazn's own destination is "Seazn Hosted" (V541 stores the label 'Seazn'). The panel's chain says so; the
+  // ending line under it said "…to Seazn" (T33c review m4). Both surfaces that print it, in the owner's literal.
+  it("m4: the ending line names a Seazn destination by its brand, 'Seazn Hosted', never the stored label; a YouTube one keeps its label", () => {
+    const BRAND = "Seazn Hosted"; // the owner's words, a brand in every locale
+    let checked = 0;
+    for (const label of ["Seazn", "Club stored label"]) {
+      const tree = body({ view: session({ state: "ending", target: { id: "t-seazn", kind: "seazn", label } }), balance: 1 });
+      expect(textAt(tree, "stream-ending"), `stored label ${label}`).toBe(m("stream.phone.ending", { destination: BRAND }));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: another kind still names its own label.
+    expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Seazn" } }), balance: 1 }), "stream-ending")).toBe(
+      m("stream.phone.ending", { destination: "Seazn" }),
+    );
   });
 
   it("the ending line and the Signal path name a disconnected channel in the dictionary's words (read in es), never the stored English literal", () => {
@@ -7004,5 +7359,136 @@ describe("the preview's fetch is the read-only door", () => {
     openPanel();
     expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
     expect(fetchOverlayFixture).toHaveBeenCalledWith(FIXTURE.id, undefined, { preview: true });
+  });
+});
+
+// Task 38 (Seazn-hosted video, Phase 4): the club's default style and timing on the match's panel. A compact row — "Club style: X · N s —
+// Change for this match" — opens today's controls as a per-match override; "Use club style" writes null for BOTH fields in one save. The
+// expected words come from the dictionary (`m`) and the registry, never typed here (TEST-STRATEGY rule 3).
+describe("Task 38: the match panel's club row, the override box and Use club style", () => {
+  const OTHER = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+  const OTHER_LABEL = m(resolveTemplate(OTHER.id, "football").labelKey as MessageKey);
+  const CLUB = { overlayTemplate: OTHER.id, overlayDelayMs: 4500 };
+  const NONE = { overlayTemplate: null, overlayDelayMs: null };
+  const scoreOf = (island: ReturnType<typeof openPanel>) => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+  const editor = (island: ReturnType<typeof openPanel>, court = false): ReactElement[] => {
+    const sc = scoreOf(island);
+    return walk((court ? sc.courtEditor : sc.editor) as ReactElement);
+  };
+  const withClub = (club: StreamPanelContext["clubStyle"], stored: { overlayTemplate: string | null; overlayDelayMs: number | null } = NONE) =>
+    openPanel({ relayEntitled: true, composedAvailable: true, clubStyle: club, streamPrefs: { [FIXTURE.id]: { streamMode: null, ...stored, revision: 1 } } });
+  const timingProps = (tree: ReactElement[]) => propsOf(tree.find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+
+  it("a club style and timing, nothing of the match's own: ONE closed row naming both, with Change for this match — no picker, no timing field yet", () => {
+    const island = withClub(CLUB);
+    const t = editor(island);
+    expect(textAt(t, "stream-club-text")).toBe(m("stream.club.row", { style: OTHER_LABEL, seconds: "4.5" }));
+    expect(textAt(t, "stream-club-change")).toBe(m("stream.club.change"));
+    expect(attr(byTestId(t, "stream-club-change")!, "aria-expanded")).toBe(false);
+    expect(byTestId(t, "stream-club-override"), "closed").toBeUndefined();
+    expect(t.find((el) => el.type === StreamTemplatePicker), "no picker while closed").toBeUndefined();
+    expect(t.find((el) => el.type === ScoreTiming), "no timing while closed").toBeUndefined();
+    expect(scoreOf(island).template, "the match has no style of its own to send").toBeNull();
+  });
+
+  it("Change for this match opens today's controls on the CLUB's values (the picker selected on the club style, the timing's default the club's, marked so); Keep the club style closes it with nothing saved", () => {
+    const island = withClub(CLUB);
+    apiV1.mockClear();
+    click(byTestId(editor(island), "stream-club-change"));
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override")).toBeDefined();
+    expect(byTestId(t, "stream-club-override-tag"), "no override yet: no tag").toBeUndefined();
+    expect(byTestId(t, "stream-club-override-title"), "no override yet: the title 'has its own' is not said").toBeUndefined();
+    expect(byTestId(t, "stream-club-use"), "nothing to go back to").toBeUndefined();
+    expect(propsOf(t.find((el) => el.type === StreamTemplatePicker)!).selected, "the effective style: the club's").toBe(OTHER.id);
+    expect(timingProps(t).defaultMs).toBe(4500);
+    expect(timingProps(t).clubDefault).toBe(true);
+    expect(timingProps(t).storedMs).toBeNull();
+    expect(textAt(t, "stream-club-change")).toBe(m("stream.club.keep"));
+    click(byTestId(t, "stream-club-change"));
+    expect(byTestId(editor(island), "stream-club-override"), "closed again").toBeUndefined();
+    expect(apiV1, "opening and closing saves nothing").not.toHaveBeenCalled();
+  });
+
+  it("a COURT-streamed match: the row names the club's STYLE alone and its timing default is the court's own 0 s, never the club's; a club with timing only shows a court the plain controls", () => {
+    const island = withClub(CLUB);
+    expect(textAt(editor(island, true), "stream-club-text")).toBe(m("stream.club.rowStyle", { style: OTHER_LABEL }));
+    click(byTestId(editor(island, true), "stream-club-change"));
+    const t = editor(island, true);
+    expect(timingProps(t).defaultMs, "a court keeps 0 s").toBe(0);
+    expect(timingProps(t).clubDefault, "and says nothing of the club").toBeFalsy();
+    // Timing only: it names the club's timing on a match of its own, and nothing at all applies to a court.
+    const timingOnly = withClub({ overlayTemplate: null, overlayDelayMs: 4500 });
+    expect(textAt(editor(timingOnly), "stream-club-text")).toBe(m("stream.club.rowTiming", { seconds: "4.5" }));
+    const courtTiming = editor(timingOnly, true);
+    expect(byTestId(courtTiming, "stream-club"), "nothing of the club's reaches a court").toBeUndefined();
+    expect(courtTiming.find((el) => el.type === StreamTemplatePicker), "the plain controls").toBeDefined();
+    expect(timingProps(courtTiming).defaultMs).toBe(0);
+  });
+
+  it("no club default: today's controls, no row (the empty case)", () => {
+    const island = withClub(NONE);
+    for (const court of [false, true]) {
+      const t = editor(island, court);
+      expect(byTestId(t, "stream-club"), `court ${court}`).toBeUndefined();
+      expect(t.find((el) => el.type === StreamTemplatePicker), `court ${court}`).toBeDefined();
+      expect(timingProps(t).clubDefault, `court ${court}`).toBeFalsy();
+    }
+  });
+
+  it("the picker's pick is the MATCH's own: PUT { overlayTemplate } alone, the box opens as an override, and Go live now carries that style", () => {
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null }, [2]);
+    const island = withClub(CLUB);
+    click(byTestId(editor(island), "stream-club-change"));
+    const bar = templatesForSport("football").find((t) => t.id !== OTHER.id)!;
+    (propsOf(editor(island).find((el) => el.type === StreamTemplatePicker)!).onPick as (id: string) => void)(bar.id);
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayTemplate: bar.id } });
+    expect(scoreOf(island).template).toBe(bar.id);
+    expect(byTestId(editor(island), "stream-club-override-tag"), "an override now").toBeDefined();
+    expect(byTestId(editor(island), "stream-club-override-title"), "an override now: the title is said").toBeDefined();
+  });
+
+  it("an override already stored: the box is open with its Override tag; Use club style writes null for BOTH fields in ONE save and the row stands alone again", async () => {
+    const mine = templatesForSport("football").find((t) => t.id !== OTHER.id)!;
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: mine.id, overlayDelayMs: 2500 }, [2]);
+    const island = withClub(CLUB, { overlayTemplate: mine.id, overlayDelayMs: 2500 });
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override-tag")).toBeDefined();
+    expect(byTestId(t, "stream-club-change"), "an override cannot be closed away").toBeUndefined();
+    expect(textAt(t, "stream-club-use")).toBe(m("stream.club.use"));
+    expect(timingProps(t).storedMs).toBe(2500);
+    apiV1.mockClear();
+    click(byTestId(t, "stream-club-use"));
+    const puts = apiV1.mock.calls.filter(([url, o]) => url.endsWith("/stream-settings") && o?.method === "PUT");
+    expect(puts, "one request").toHaveLength(1);
+    expect(puts[0]![1]!.json, "both fields, null").toEqual({ overlayTemplate: null, overlayDelayMs: null });
+    expect(byTestId(editor(island), "stream-club-override"), "shown at once: the row alone").toBeUndefined();
+    expect(scoreOf(island).template).toBeNull();
+    expect(scoreOf(island).delayMs).toBeNull();
+    await vi.waitFor(() => expect(apiV1).toHaveBeenCalledTimes(1));
+    expect(byTestId(editor(island), "stream-club-override"), "the save landed: still the row alone").toBeUndefined();
+  });
+
+  it("a failed Use club style puts the match's own choice back, with the way to retry — never a half-cleared override", async () => {
+    const own = templatesForSport("football").find((t) => t.id !== OTHER.id)!.id;
+    const island = withClub(CLUB, { overlayTemplate: own, overlayDelayMs: 2500 });
+    apiV1.mockReset();
+    apiV1.mockRejectedValueOnce(new Error("offline"));
+    click(byTestId(editor(island), "stream-club-use"));
+    expect(scoreOf(island).template, "shown cleared at once").toBeNull();
+    await vi.waitFor(() => expect(scoreOf(island).template).toBe(own));
+    expect(scoreOf(island).delayMs, "both fields come back together").toBe(2500);
+    expect(byTestId(editor(island), "stream-club-use"), "retry is there").toBeDefined();
+  });
+
+  it("the OBS tab's link follows the chain: the club's style while the match has none, the match's own once it does, the sport's default with neither", () => {
+    const own = templatesForSport("football").find((t) => t.id !== OTHER.id)!.id;
+    const urlOf = (club: StreamPanelContext["clubStyle"], stored: { overlayTemplate: string | null; overlayDelayMs: number | null }) => {
+      const island = open({ relayEntitled: true, composedAvailable: true, clubStyle: club, streamPrefs: { [FIXTURE.id]: { streamMode: null, ...stored, revision: 1 } } });
+      return String(attr(byTestId(island.tree(), "stream-link")!, "value"));
+    };
+    expect(urlOf(CLUB, NONE)).toContain(`template=${OTHER.id}`);
+    expect(urlOf(CLUB, { overlayTemplate: own, overlayDelayMs: null })).toContain(`template=${own}`);
+    expect(urlOf(NONE, NONE)).toContain(`template=${defaultTemplateFor("football")}`);
   });
 });

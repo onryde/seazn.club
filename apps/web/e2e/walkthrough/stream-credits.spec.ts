@@ -311,7 +311,7 @@ async function openPhoneTab(page: Page, rig: OverlayRig): Promise<void> {
   });
 }
 
-/** What the tab says the org holds. ≥ 1: the chip names the number. 0: there is NO chip (fixture-stream-panel.tsx
+/** What the tab says the org holds. ≥ 1: the chip names the number. 0: there is NO chip (fixture-stream-panel/phone-tab-body.tsx
  *  renders it only at ≥ 1), and an idle tab shows the forced chooser instead — both halves asserted, so "no chip"
  *  can never pass for a tab that simply failed to render. */
 async function expectBalance(page: Page, n: number): Promise<void> {

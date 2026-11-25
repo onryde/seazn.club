@@ -43,6 +43,31 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
   void purgeCdn();
 }
 
+/** A stream session of this fixture went INTO or OUT OF `live` (Seazn-hosted video T47: the match card's camera). The hub carries the camera
+ *  (`HubMatch.stream`, hub-stream-flags.ts), so the division's tags are expired (`fireDivisionRevalidate`, the hub's page entry carries
+ *  every division's) and the competition's Redis hub document is dropped by name (`publicHubCacheKey`, in the order `afterScheduleWrite`
+ *  uses: the tags first, so a poll rebuilding from the dropped key never bakes an unexpired entry back). Without it the camera appears and
+ *  clears up to the document's own window late (15 s Redis, 30 s ISR).
+ *
+ *  FIRE-AND-FORGET and never rejects: the caller is a session transition that has already committed, and a failed invalidation must not
+ *  fail it (the same contract as every `fire*Revalidate` here). One pooled read names the fixture's division and competition; a fixture
+ *  that no longer exists has nothing to expire. Returns the work's promise for the tests; callers do not await it. */
+export function fireStreamPresenceRevalidate(fixtureId: string): Promise<void> {
+  return (async () => {
+    try {
+      const [row] = await sql<{ division_id: string; competition_id: string }[]>`
+        select f.division_id, d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
+      if (!row) return;
+      fireDivisionRevalidate(row.division_id, row.competition_id);
+      // Both copies, as `dropNamedPublicDocuments` drops them: the stale (last-known-good) copy would otherwise serve the old camera to a poll
+      // that waited out a rebuild.
+      await cacheDel(publicHubCacheKey(row.competition_id), publicHubStaleCacheKey(row.competition_id));
+    } catch (err) {
+      log.warn({ fixtureId, err: err instanceof Error ? err.message : String(err) }, "stream presence: the public hub could not be expired (the session change stands)");
+    }
+  })();
+}
+
 /** A write to what the public pages show about a PERSON: their consent
  *  (`setMyConsent`, `patchPerson`), name or date of birth (`patchPerson`),
  *  photo (`setMyPersonPhoto`, `setPersonPhoto`), or a merge and its reversal

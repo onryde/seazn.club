@@ -24,7 +24,7 @@ import { courtCodeView } from "@/server/relay/domain/court-stream";
 import { type CodeCall, codeServes, codeStatus, type CodeView, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
 import type { CourtLinkRef, ResolvedCourtCode } from "./court-stream-codes";
 import { liveCourtLinkFor } from "./court-streams";
-import { seaznOrder, seaznWhere } from "./stream-targets";
+import { seaznClosed, seaznOrder, seaznWhere } from "./stream-targets";
 import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fireNudge, nudgeCodesOver } from "./stream-sessions/nudge";
 
@@ -532,11 +532,12 @@ export async function writeStreamSettings(
   tx: Tx, a: { orgId: string; fixtureId: string; targetId: string | null; updatedBy: string | null },
 ): Promise<{ targetId: string | null }> {
   if (a.targetId !== null) {
-    const live = await tx<{ seazn: boolean }[]>`
-      select kind = 'seazn' as seazn from org_stream_targets where id = ${a.targetId} and org_id = ${a.orgId} and archived_at is null`;
+    const live = await tx<{ seazn: boolean; offered: boolean }[]>`
+      select kind = 'seazn' as seazn, offered from org_stream_targets where id = ${a.targetId} and org_id = ${a.orgId} and archived_at is null`;
     if (live.length === 0) throw new HttpError(404, "stream target not found");
-    // Seazn-hosted video: with LIVE off the row is hidden from every list, so naming it is refused rather than stored.
-    if (live[0]!.seazn && !seaznHostedLive()) throw new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE);
+    // Seazn-hosted video: with LIVE off, or the org's Seazn switch off (V559, Task 33), the row is hidden from every list, so naming
+    // it is refused rather than stored. A pick saved while it was offered stays stored and resolves to none until it is offered again.
+    if (seaznClosed(live[0]!)) throw new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE);
   }
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen, updated_by, updated_at, revision)

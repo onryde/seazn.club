@@ -21,6 +21,10 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
 vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ expireTargetHolders: async () => undefined, defaultDeps: () => ({}) }));
+// Task 38: the club's Score style section is streaming-page-club.test.tsx's; here its two server reads and the island are doubled.
+vi.mock("@/server/usecases/org-stream-defaults", () => ({ orgStreamDefaultsOf: async () => ({ overlayTemplate: null, overlayDelayMs: null, revision: null }) }));
+vi.mock("@/server/stream-club-score", () => ({ clubScorePreview: async () => ({ sports: [], fallback: true, snapshots: {}, sides: [] }) }));
+vi.mock("@/components/v2/stream-club-score", () => ({ StreamClubScore: () => null }));
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel's own client dependencies, doubled; the panel itself is REAL.
 vi.mock("next/navigation", () => ({
@@ -50,12 +54,18 @@ const channelRow = {
 };
 
 beforeEach(() => {
+  // This file is the YouTube landing's: it pins the Seazn Hosted flag OFF itself, so a developer's SEAZN_HOSTED_LIVE (.env.local) cannot
+  // make the page read the org's switch (Task 33b), which this file's stream-targets mock does not double (review m8).
+  vi.stubEnv("SEAZN_HOSTED_LIVE", "");
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
 });
-afterEach(() => setRelayDriversForTest(null));
+afterEach(() => {
+  setRelayDriversForTest(null);
+  vi.unstubAllEnvs();
+});
 
 describe("Streaming page + real panel — the connect round trip's landing reaches the screen", () => {
   it("EVERY banner code in the URL shows ITS sentence (twelve checked), and only that one", async () => {

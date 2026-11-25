@@ -13,8 +13,12 @@ export interface SeaznVideoLabels {
   part: string;
   /** The replay region's name (the same word as the match page's "Replay" link). */
   replay: string;
-  /** The one quiet line in the player's held box while a session is starting, or has just stopped and its recording is not ready. */
-  starting: string;
+  /** The held box's one quiet line while a LIVE is what comes next (Task 33f: the session on its way up, `liveExpected`). */
+  startingLive: string;
+  /** The held box's one quiet line while a REPLAY is what comes next (Task 33f: the stream has stopped, its recording is not ready). */
+  startingReplay: string;
+  /** The line under the LIVE player only (Task 33c), a template: `{min}` and `{max}` are `SEAZN_LIVE_DELAY_SECONDS`'s. */
+  delay: string;
 }
 
 export function seaznVideoLabels(dict: Dict): SeaznVideoLabels {
@@ -23,6 +27,8 @@ export function seaznVideoLabels(dict: Dict): SeaznVideoLabels {
     unavailable: t(dict, "seaznVideo.unavailable"),
     part: t(dict, "seaznVideo.part"),
     replay: t(dict, "overlay.replay"),
-    starting: t(dict, "seaznVideo.starting"),
+    startingLive: t(dict, "seaznVideo.startingLive"),
+    startingReplay: t(dict, "seaznVideo.startingReplay"),
+    delay: t(dict, "seaznVideo.delay"),
   };
 }

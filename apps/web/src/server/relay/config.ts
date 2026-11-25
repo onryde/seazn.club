@@ -187,6 +187,13 @@ export const STALE_HEARTBEAT_SECONDS = 90;
 export const RUNNER_STOP_GRACE_SECONDS = 20;
 /** How long after the grace we wait to OBSERVE auto_destroy before forcing it. */
 export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
+/** Seazn-hosted Task 43 (stg session d908c90c, 2026-11-24: `ending` 09:42:40.656 → `completed` 09:42:56.009, 15.4 s, the Machine
+ *  observed `stopping` three times): how long a phone's OWN stopped session is expected to stay `ending` — the Machine's stop grace,
+ *  the drain it is given before Fly's SIGKILL. The phone start's 503 `unavailable` for that session carries `Retry-After` = this
+ *  minus the seconds since the session began ending (`ending_at`), floored at 1 and capped at OWN_ENDING_RETRY_AFTER_MAX_SECONDS. */
+export const OWN_ENDING_DRAIN_SECONDS = RUNNER_STOP_GRACE_SECONDS;
+/** The phone team's ceiling (2026-11-25): the phone re-asks ONCE when `Retry-After` ≤ 20 s, so the start never answers more. */
+export const OWN_ENDING_RETRY_AFTER_MAX_SECONDS = 20;
 /** Design §6.4: ONE retry — two attempts, ever. Invariant 3's bound derives from this. */
 export const RUNNER_MAX_ATTEMPTS = 2;
 /** Compositor ADR 0004 (owner, 2026-10-14) and ADR 0007 host-contract item 5: the host restarts a crashed compositor IN
@@ -249,6 +256,15 @@ export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
  *  the LOWER edge of the YouTube split threshold, 15–30 s of output gap (compositor `_FINDINGS.md` F-004 addendum): the
  *  in-place restart is what keeps a crash inside it; this window only decides when web stops waiting for one. */
 export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS) / 1000;
+/** Task 46 (the brief's words): on the phone's beat answer (`delivery`, domain/delivery.ts), "a relay fact older than 3 relay
+ *  beats ... is omitted, not reported stale-as-fresh" — defined from the cadence the compositor is served, never a literal. A
+ *  stored beat exactly this old is still told; a millisecond older is not. */
+export const DELIVERY_RELAY_FRESH_MS = 3 * RELAY_HEARTBEAT_INTERVAL_MS;
+/** T44 part 2: the longest a single HEARTBEAT sample counts for in the session's time-weighted summary (relay-sweep.ts, summary phase), in
+ *  seconds: a beat's reading holds until the next beat, but only for the three missed beats after which the runner is `lost`
+ *  (`STALE_HEARTBEAT_SECONDS_COMPOSED`), so a Machine that went quiet for ten minutes does not have its last fps stand for ten minutes.
+ *  The same product as `DELIVERY_RELAY_FRESH_MS` (a relay fact older than three beats is not reported fresh), by definition. */
+export const SAMPLE_BEAT_SPAN_MAX_SECONDS = DELIVERY_RELAY_FRESH_MS / 1000;
 /** Compositor plan Global Constraints "Exit codes" (`78`: unauthorized or not found), whose final beat says
  *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A
  *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry
@@ -350,6 +366,19 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
   if (v === "false") return false;
   throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
 }
+/** Task 34: whether the stream code's paste field and its Copy show under the QR (the QR itself always does). They are for
+ *  developers and the harnesses — e2e/helpers/fake-capture-phone.ts reads the field to drive the phone routes — never for a
+ *  club. Unset or blank: shown where the relay driver is fake (every e2e, CI and smoke server sets `RELAY_DRIVERS=fake`) or
+ *  outside production (next dev, vitest); hidden on stg and prod. The raw `RELAY_DRIVERS`, not `relayDriverMode`: a page
+ *  must not throw on a setting this flag does not own. Parsed like STREAM_SRT_ENABLED; anything but true/false throws,
+ *  naming the variable. A server setting only, never `NEXT_PUBLIC_` (stg and prod run one image). Read per call. */
+export function streamPasteCodeShown(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.STREAM_PASTE_CODE?.trim().toLowerCase();
+  if (!v) return env.RELAY_DRIVERS === "fake" || env.NODE_ENV !== "production";
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`STREAM_PASTE_CODE must be "true" or "false" (unset = true on a fake relay or outside production), got ${JSON.stringify(env.STREAM_PASTE_CODE)}`);
+}
 /** Seazn-hosted video (Phase 1-3 flags). Off by default, read at the request and never cached, like STREAM_SRT_ENABLED,
  *  but unset = false and the value is matched case-insensitively. Anything but true/false throws, naming the variable.
  *  LIVE gates new picks and starts only, never playback of what already exists. */
@@ -373,6 +402,16 @@ export function seaznHostedReplay(env: Record<string, string | undefined> = proc
 }
 export function seaznHostedCost(env: Record<string, string | undefined> = process.env): boolean {
   return seaznFlag("SEAZN_HOSTED_COST", env);
+}
+/** T44 (compositor Owed 110 + 111): whether web copies `RELAY_INPUT_BEAT=1` into each relay Machine's env, which makes the
+ *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat). Web's heartbeat
+ *  contract declares them from T44, so it accepts the beat either way; the flag is what asks for them. DEFAULT OFF, and OFF in prod
+ *  until the owner says: the keys add a few fields to every beat and every sample's raw, and nothing reads them yet. Named like
+ *  RELAY_AIRINGS, the other switch web passes through to the Machine, and read the same way (runner-fly.ts): ONLY the exact "1"
+ *  turns it on, so a typo reads as off rather than throwing in the middle of a Machine create (the money path). Read at each create,
+ *  never cached: New Machines read it; a running stream keeps what it booted with. */
+export function relayInputBeat(env: Record<string, string | undefined> = process.env): boolean {
+  return env.RELAY_INPUT_BEAT === "1";
 }
 /** SEAZN_VIDEO_ORIGINS: comma-separated bare hostnames (the Cloudflare `allowedOrigins` for Seazn playback), trimmed and
  *  de-duplicated in first-seen order. Null when unset or blank. An entry with a scheme, port or path throws. */
@@ -398,6 +437,10 @@ export const SEAZN_TOKEN_FAILURE_CACHE_SECONDS = 60;
 /** Phase 1 review I1: a token mint not answered in this long is abandoned (ingest-cf.ts, `AbortSignal.timeout`) and counts as a
  *  failed mint. Every viewer of a uid waits on the one mint in flight, so a hung one held them all. */
 export const SEAZN_TOKEN_MINT_TIMEOUT_MS = 10_000;
+/** Owner 2026-11-23 (Task 33c): how far a Seazn LIVE picture runs behind the live action, said under the live player ("Video runs
+ *  about {min}–{max} seconds behind the live action."; "court" became "the live action" 2026-11-24, for every sport). The owner's figure from the stg live test of 2026-11-23 (court clock against the
+ *  picture), NOT a measurement this code makes; HLS latency moves with the phone's keyframe interval and the viewer's buffer. */
+export const SEAZN_LIVE_DELAY_SECONDS = { min: 15, max: 20 } as const;
 
 // ---- Seazn-hosted replays (Phase 2, Task 24): moving a recording to the replay host ---------------------------------
 /** Owner ruling 2026-11-21 (G-A): a decided fixture's recordings are moved this long after its result (`fixtures.finished_at`).
@@ -584,12 +627,38 @@ export const SEAZN_LIVE_MEASURE_BREAKER_FAILURES = 3;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
-/** Ruling 13 (capture everything) has one cost line: fixture_stream_samples.
- *  3 h (MAX_DURATION_MINUTES) at one heartbeat AND one poll every 5 s is 4,320
- *  rows; the cap sits above that so a legitimate session never hits it, and a
- *  runaway client (a poll loop at 100 ms) cannot write 180,000. The writer
- *  returns "capped" and the usecase records ONE `samples_capped` event. */
-export const SAMPLES_PER_SESSION_CAP = 8000;
+/** T44 part 2 (the C2 review): the LEAST gap between two heartbeats from a composed Machine, in ms. Beyond the 5 s cadence
+ *  (`RELAY_HEARTBEAT_INTERVAL_MS`) the compositor sends an "edge beat" when its programme phase changes, and spaces any two beats at
+ *  least `phase_beat_gap_ms` apart: `resume_after_ms`, 1 000 ms today ("one beat a second at most, against the cadence's one in five",
+ *  compositor crates/domain/src/config.rs `Thresholds::phase_beat_gap_ms`, read at origin/main 73c9c2ff). Defined here and pinned in
+ *  config.test.ts to that figure; a compositor change to the gap is a change here, which moves `SAMPLES_PER_SESSION_CAP` with it. */
+export const RELAY_EDGE_BEAT_MIN_GAP_MS = 1_000;
+/** T44 part 2: the FASTEST period of the stream tick, in seconds (prod's cron fires every minute; stg's every five, so
+ *  `STREAM_TICK_PERIOD_SECONDS` above is the slowest). The tick writes one `poll` sample per live session per firing, so this is the
+ *  densest the polls come. config.test.ts reads it back off apps/cron-worker/wrangler.json. */
+export const STREAM_TICK_FASTEST_PERIOD_SECONDS = 60;
+/** T44 part 2: the room kept above a session's worst-case samples for what the two rates do not count: a webhook notification, a
+ *  boot beat, the last beats of an ending, a session that outlives its nominal hard cap by its grace. A quarter, which is 2 745
+ *  rows at the figures below. */
+const SAMPLES_HEADROOM = 1.25;
+
+/** Ruling 13 (capture everything) has one cost line: fixture_stream_samples. What the cap protects is that table's ROW COUNT per
+ *  session (and so the daily summary's scan and the 90-day retention's storage): a legitimate session must never hit it, and a runaway
+ *  client (a poll loop at 100 ms) must not write 180,000. The writer returns "capped" and the usecase records ONE `samples_capped` event.
+ *
+ *  DERIVED, never a literal (T44 part 2; the old 8 000 assumed a beat and a poll per 5 s, 4,320 rows, and lost the last ~45 min of a
+ *  session whose edge beats came at the compositor's least gap): the worst session runs the hard cap (`MAX_DURATION_MINUTES`, 3 h) with
+ *  a beat at every `RELAY_EDGE_BEAT_MIN_GAP_MS` (10,800 rows; the 5 s cadence beats are subsumed, an edge beat restarts the gap) and a
+ *  poll at every `STREAM_TICK_FASTEST_PERIOD_SECONDS` (180 rows), times `SAMPLES_HEADROOM`: 13,725.
+ *
+ *  What the new number COSTS: a session that hits it holds 13,725 rows instead of 8,000 (+5,725, +72%): a full beat's row measures about
+ *  920 bytes (pg_column_size of its columns with the 784-byte raw of heartbeat-full plus the camera's six), so about 12.6 MB at the new
+ *  cap against 7.4 MB at the old, for the rare session that fills it, kept 90 days (`SAMPLE_RETENTION_DAYS`) and summarised once at the end. An ordinary session is untouched: a
+ *  beat per 5 s cadence for 3 h is 2,160 rows, a fifth of the cap. The runaway ceiling is 13,725 rows instead of 180,000 (a 100 ms loop
+ *  for 3 h), so the guard against a loop is as good as it was. */
+export const SAMPLES_PER_SESSION_CAP = Math.ceil(
+  (Math.ceil((MAX_DURATION_MINUTES * 60 * 1000) / RELAY_EDGE_BEAT_MIN_GAP_MS) + Math.ceil((MAX_DURATION_MINUTES * 60) / STREAM_TICK_FASTEST_PERIOD_SECONDS)) * SAMPLES_HEADROOM,
+);
 /** RULED by the owner at Task 0 ("2 is ok"; plan §"Data captured"): the daily
  *  sweep (Task 12) deletes raw samples older than this, and ONLY for sessions
  *  whose `sample_summary` is already written — an unsummarised session keeps

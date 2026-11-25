@@ -23,6 +23,10 @@ export interface SeaznWalkClock {
   END_MS: number;
   /** One server round trip or one short poll: a dialog closing, a beat, the recording control, the stream tick, a pill. */
   CALL_MS: number;
+  /** A FRESH look at the public match page (Task 33f, step 9's warming check). The page is ISR (`revalidate = 30`), and its cached
+   *  render is the one drawn before kick-off (step 2), minutes old by then: the first request is answered stale and starts a fresh
+   *  render, and a later one carries it. One page load covers that render. */
+  FRESH_PAGE_MS: number;
   /** stream-credits.spec.ts's key, taken only for the instant of the global tick: a wait of one pool cycle, as youtube-connect's. */
   CREDITS_KEY_WAIT_MS: number;
   /** The first hold of the stream-slot pool: the first Go live to the tick. */
@@ -41,6 +45,7 @@ export function seaznWalkClock(fakeConnectMs: number): SeaznWalkClock {
   const CALL_MS = POLL_WAIT_MS;
   const budget = poolBudget(fakeConnectMs);
   const CREDITS_KEY_WAIT_MS = budget.cycleMs;
+  const FRESH_PAGE_MS = NAV_MS;
   /** One Go live, tap to a live panel: the session row, the composed session's facts, the stand-in's first beat, the live pill. */
   const GO_LIVE_MS = CALL_MS + LIVE_WAIT_MS + CALL_MS + LIVE_WAIT_MS;
   /** One Stop, tap to an Ended panel: the dialog, the stand-in's last beat, the session completing, the Ended pill. */
@@ -55,14 +60,23 @@ export function seaznWalkClock(fakeConnectMs: number): SeaznWalkClock {
   // replay check holds no slot.
   //  1. the first Go live; the open page turning live, its address reaching the player; the Stop; the open page losing the live
   //     player; the tick;
-  //  2. Start another's idle pill; the second Go live; the open page turning live again, its address reaching the player; the
-  //     provider-call poll; the teardown.
+  //  2. Start another's idle pill; the second Go live, with a fresh look at the public page while it warms (Task 33f: between its
+  //     facts and its first beat); the open page turning live again, its address reaching the player; the provider-call poll; the
+  //     teardown.
   const HOLD_1_MS = GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + STOP_MS + ONE_RE_READ_MS + TICK_MS;
-  const HOLD_2_MS = CALL_MS + GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + CALL_MS + TEARDOWN_MS;
+  const HOLD_2_MS = CALL_MS + GO_LIVE_MS + FRESH_PAGE_MS + ONE_RE_READ_MS + CALL_MS + CALL_MS + TEARDOWN_MS;
   // The walk, in step order: the seed; the fixture page; the spectator's page before kick-off and its first read; the pairing and the
   // panel's reload; the first hold (and its wait for the pool); the replay showing and its address reaching the player (outside any
   // hold); the second hold (and its wait).
   const WALK_MS =
     SEED_MS + NAV_MS + NAV_MS + NAV_MS + PAIR_MS + NAV_MS + budget.slotWaitMs + HOLD_1_MS + ONE_RE_READ_MS + CALL_MS + budget.slotWaitMs + HOLD_2_MS;
-  return { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS };
+  return { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, FRESH_PAGE_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS };
 }
+
+/** streaming-destinations.spec.ts case 13 (Task 38, the club's Score style and timing), one width: the seed; the Streaming page, its reload,
+ *  the match page, the viewer's sign-in and Streaming page (6 loads); the style, the timing, their API reads, the match's two saves and
+ *  reads, the viewer's read (8 round trips). Kept here so the spec's own test timeout and e2e-seazn's job timeout are ONE derivation. */
+export const CLUB_STYLE_CASE_NAVS = 6;
+export const CLUB_STYLE_CASE_SAVES = 8;
+export const CLUB_STYLE_WIDTHS = [320, 768, 1280] as const;
+export const clubStyleCaseMs = (): number => SEED_MS + CLUB_STYLE_CASE_NAVS * NAV_MS + CLUB_STYLE_CASE_SAVES * POLL_WAIT_MS;

@@ -3684,6 +3684,18 @@
                                           "offline"
                                         ]
                                       },
+                                      "paired_at": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "format": "date-time",
+                                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
                                       "refusal": {
                                         "anyOf": [
                                           {
@@ -3720,6 +3732,7 @@
                                       "target_label",
                                       "expires_at",
                                       "phone",
+                                      "paired_at",
                                       "refusal",
                                       "tail_ends_at"
                                     ],
@@ -4413,6 +4426,7 @@
                           "target_label": "example",
                           "expires_at": "2026-08-01T09:00:00Z",
                           "phone": "unpaired",
+                          "paired_at": "2026-08-01T09:00:00Z",
                           "refusal": "no_destination",
                           "tail_ends_at": "2026-08-01T09:00:00Z"
                         }
@@ -53224,6 +53238,13 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "stream": {
+                                "type": "string",
+                                "enum": [
+                                  "live",
+                                  "replay"
+                                ]
                               }
                             },
                             "required": [
@@ -58644,7 +58665,7 @@
     },
     "/api/v1/public/fixtures/{id}/video": {
       "get": {
-        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`",
+        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [], session: null }`; `session` is the fixture's latest stream session when it is a Seazn one (its `state` and whether it ever went live, `wentLive`), so an open page can follow a Stop or a cancel",
         "tags": [
           "public"
         ],
@@ -58739,6 +58760,44 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "session": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "requested",
+                                    "provisioning",
+                                    "warming",
+                                    "live",
+                                    "ending",
+                                    "completed",
+                                    "failed"
+                                  ]
+                                },
+                                "wentLive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "wentLive"
+                              ],
+                              "additionalProperties": false,
+                              "examples": [
+                                {
+                                  "state": "live",
+                                  "wentLive": true
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -58767,7 +58826,11 @@
                         "partNo": 1,
                         "player": "hls"
                       }
-                    ]
+                    ],
+                    "session": {
+                      "state": "live",
+                      "wentLive": true
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

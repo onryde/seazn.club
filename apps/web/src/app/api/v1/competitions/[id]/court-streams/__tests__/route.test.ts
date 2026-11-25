@@ -2,7 +2,7 @@
 // driven through their real handlers over a real session. The use-case suite proves the rules; this file proves the ROUTES:
 // the wire shape (snake_case, v1 envelope), the status codes, and that the live QR is never cacheable.
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
@@ -22,6 +22,9 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { buildOpenApiDocument } from "@/server/api-v1/openapi";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { CourtStream } from "@/server/api-v1/schemas";
 import { rigApiTarget, rigTarget } from "@/server/relay/__tests__/_session-rig";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
@@ -44,6 +47,8 @@ afterAll(async () => {
   g._sql = undefined;
   await client?.end();
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message: string } }
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -106,6 +111,50 @@ describe.skipIf(!HAS_DB)("court stream routes", () => {
     const pasted = await rigTarget(day.orgId, "Pasted");
     const refused = await linkPost(post({ court_id: day.courts.c2, target_id: pasted }), ctx(day.comp.id));
     expect(refused.status).toBe(422);
-    expect(((await refused.json()) as Envelope<unknown>).error!.code).toBe("court_destination_not_youtube");
+    expect(((await refused.json()) as Envelope<unknown>).error!.code).toBe("court_destination_unsupported");
+  });
+  // Task 37: a court may stream to the org's Seazn destination. The wire answers are the use case's, through the real door.
+  it("Task 37: POST on the org's Seazn destination is 201 with a no-store QR while LIVE is on; LIVE off is 422 seazn_unavailable and writes nothing; a pasted key is 422 court_destination_unsupported — and the operation documents all three", async () => {
+    const day = await seedDay();
+    authState.userId = day.auth.userId!;
+    const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${day.orgId} and kind = 'seazn'`;
+    expect(seazn, "PREMISE: the org has its Seazn row").toBeDefined();
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const ok = await linkPost(post({ court_id: day.courts.c2, target_id: seazn!.id }), ctx(day.comp.id));
+    expect(ok.status).toBe(201);
+    expect(ok.headers.get("cache-control")).toBe("private, no-store");
+    expect(CourtStream.parse(((await ok.json()) as Envelope<unknown>).data)).toMatchObject({ target: { id: seazn!.id } });
+
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    const closed = await linkPost(post({ court_id: day.courts.c1, target_id: seazn!.id }), ctx(day.comp.id));
+    expect([closed.status, ((await closed.json()) as Envelope<unknown>).error!.code]).toEqual([422, "seazn_unavailable"]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from court_stream_links where org_id = ${day.orgId}`;
+    expect(n, "only the first link was written").toBe(1);
+
+    const op = (buildOpenApiDocument() as { paths: Record<string, Record<string, { summary: string }>> }).paths["/api/v1/competitions/{id}/court-streams"]!.post!;
+    for (const code of ["court_destination_unsupported", "seazn_unavailable"]) expect(op.summary, code).toContain(code);
+    expect(op.summary, "the retired code is gone from the summary").not.toContain("court_destination_not_youtube");
+  });
+
+  // Task 37 (T33e): a court start by a paused admin. The Match Day card reads the 402's `feature_key` to say so (`linkFailureKey`), so
+  // THIS is the wire shape it reads — the door's write scope, which the use case's own role check does not see.
+  it("Task 37: a FROZEN admin seat (members.max, doc 10 §2.4) is 402 PAYMENT_REQUIRED with feature_key members.max on the link door, nothing written; the owner of the same org links", async () => {
+    const day = await seedDay();
+    const api = await rigApiTarget(day.orgId, "Club channel");
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason) values (${day.orgId}, 'members.max', 1, 'frozen seat')
+              on conflict (org_id, feature_key) do update set int_value = 1`;
+    await invalidateOrgEntitlements(day.orgId);
+    const admin = await makeUser("admin");
+    await sql`insert into org_members (org_id, user_id, role) values (${day.orgId}, ${admin.id}, 'admin')`;
+    expect((await frozenMemberIds(day.orgId)).has(admin.id), "PREMISE: the admin's seat is frozen").toBe(true);
+    authState.userId = admin.id;
+    const refused = await linkPost(post({ court_id: day.courts.c2, target_id: api.targetId }), ctx(day.comp.id));
+    expect(refused.status).toBe(402);
+    const body = (await refused.json()) as { error: { code: string; feature_key?: string } };
+    expect(body.error.code).toBe("PAYMENT_REQUIRED");
+    expect(body.error.feature_key, "the paused seat's 402 names members.max").toBe("members.max");
+    expect((await sql`select 1 from court_stream_links where org_id = ${day.orgId}`).length, "nothing written").toBe(0);
+    authState.userId = day.auth.userId!;
+    expect((await linkPost(post({ court_id: day.courts.c2, target_id: api.targetId }), ctx(day.comp.id))).status, "the owner is never frozen").toBe(201);
   });
 });

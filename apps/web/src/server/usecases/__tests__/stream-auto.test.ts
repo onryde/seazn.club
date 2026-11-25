@@ -210,14 +210,20 @@ describe("autoStartRefusalOf — the mapper from startBroadcast's refusals to th
   });
 
   // Seazn-hosted video (Task 11): a Seazn destination makes an automatic start composed whatever `startModeFor` resolved, so the
-  // composed gate CAN answer it now (R2001's old guard is gone). It and the Seazn destination's two refusals are the retried
+  // composed gate CAN answer it now (R2001's old guard is gone). It and an unconfigured Seazn are the deployment's: the retried
   // `unavailable` family (the plan), one test row per code.
   it.each([
     ["composed_unavailable", new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable")],
     ["seazn_video_unconfigured", new HttpError(503, "x", SEAZN_VIDEO_UNCONFIGURED)],
-    ["seazn_unavailable", new HttpError(422, "x", SEAZN_UNAVAILABLE)],
   ] as const)("Task 11: %s → unavailable (retried), never a thrown caller bug", (_name, err) => {
     expect(autoStartRefusalOf(err)).toBe("unavailable");
+  });
+
+  // Task 33 fix round 1 (m2): since V559 `seazn_unavailable` also means "the organisation switched Seazn off" — the organiser's to fix
+  // (turn it on, or pick another destination), as the steady state already says (the resolver hides the row, so the start stores
+  // no_destination) and as the phone's own start maps it (`phoneStartRefusal`: 409 no_destination).
+  it("Task 33: seazn_unavailable → no_destination (the organiser's to fix), never the retried `unavailable`", () => {
+    expect(autoStartRefusalOf(new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE))).toBe("no_destination");
   });
 
   it("YouTube Connect T11 fix round 1 (I-2): EVERY refusal an API-backed start can meet (YOUTUBE_REFUSAL_CODES) is a stored reason — the organiser fixes the destination (no_destination) or it is retried (unavailable); never null (an unmapped error reported to Sentry every 60 s); checked === the declaration's length", () => {

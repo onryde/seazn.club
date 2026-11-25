@@ -103,6 +103,11 @@ vi.mock("../points-adjustments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../points-adjustments")>()),
   loadPointsAdjustments: pointsAdjustmentsMock,
 }));
+// Seazn-hosted video T47: the camera's batched read is SQL (`hub-stream-flags-db.test.ts` drives it, and the hub through it, against a
+// real database). Here it is a double that answers no camera, so the document ASSEMBLY below is proved on every run; the T47 describe at
+// the end of this file proves what the builder does with its answer.
+const streamFlagsMock = vi.hoisted(() => vi.fn<(fixtures: readonly { id: string; status: string }[], now: Date) => Promise<Map<string, "live" | "replay">>>(async () => new Map()));
+vi.mock("../hub-stream-flags", () => ({ readHubStreamFlags: streamFlagsMock }));
 // Observed, not silenced for its own sake: a read the hub swallows must still
 // leave a warning behind, or a broken discipline query reads as "no bans".
 const logMock = vi.hoisted(() => ({
@@ -892,6 +897,7 @@ beforeEach(() => {
   readLeaderRowsMock.mockResolvedValue([]);
   suspensionEntriesMock.mockResolvedValue([]);
   tableWithdrawalsMock.mockResolvedValue([]);
+  streamFlagsMock.mockImplementation(async () => new Map());
   memberRefsMock.mockResolvedValue({});
   registrationMock.mockResolvedValue({
     competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
@@ -3538,5 +3544,51 @@ describe("loadCompetitionHub - W3 app-B T3: a Swiss table marks the bye and the 
     expect(doc.tables).toHaveLength(1);
     expect(doc.tables[0]!.rows.length, "rows checked").toBeGreaterThan(0);
     for (const r of doc.tables[0]!.rows) expect(r.markers, r.entrantId).toBeUndefined();
+  });
+});
+
+describe("loadCompetitionHub - T47: the camera on a card", () => {
+  const load = async () => {
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    return doc;
+  };
+
+  it("EMPTY FIRST: no flags, no `stream` key on any card (the document is what it was)", async () => {
+    getPublicDivisionMock.mockResolvedValue(divisionDetail());
+    const doc = await load();
+    expect(doc.matches.length, "cards checked").toBe(3);
+    for (const m of doc.matches) expect(Object.hasOwn(m, "stream"), m.fixtureId).toBe(false);
+  });
+
+  it("ONE read for every fixture of every division, with each fixture's status; the flags land on exactly their cards", async () => {
+    const reserves: PublicDivision = { ...DIV, id: "div-2", slug: "reserves", name: "Reserves" };
+    getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [DIV, reserves], liveNow: [] });
+    getPublicDivisionMock.mockImplementation(async (_o: string, _c: string, slug: string) =>
+      slug === "reserves" ? divisionDetail({ division: reserves, fixtures: [F({ id: "fx-r1", status: "scheduled" })] }) : divisionDetail(),
+    );
+    streamFlagsMock.mockImplementation(async () => new Map([["fx-live", "live" as const], ["fx-r1", "replay" as const]]));
+    const doc = await load();
+    expect(streamFlagsMock).toHaveBeenCalledTimes(1);
+    const [asked, at] = streamFlagsMock.mock.calls[0]!;
+    expect([...asked].map((x) => [x.id, x.status]).sort()).toEqual(
+      [["fx-decided", "decided"], ["fx-live", "in_play"], ["fx-r1", "scheduled"], ["fx-scheduled", "scheduled"]],
+    );
+    expect(at, "the hub's injected clock, not a second `new Date()`").toEqual(NOW);
+    expect(Object.fromEntries(doc.matches.map((m) => [m.fixtureId, m.stream ?? null]))).toEqual({
+      "fx-decided": null, "fx-live": "live", "fx-scheduled": null, "fx-r1": "replay",
+    });
+  });
+
+  it("a stream read that FAILS is no camera on any card, never a hub-down, and the failure is reported", async () => {
+    getPublicDivisionMock.mockResolvedValue(divisionDetail());
+    streamFlagsMock.mockRejectedValue(new Error("connection reset"));
+    const doc = await load();
+    expect(doc.matches.length).toBe(3);
+    expect(doc.matches.some((m) => m.stream !== undefined)).toBe(false);
+    expect(logMock.warn).toHaveBeenCalledWith(
+      { competitionId: COMP.id, err: "connection reset" },
+      "competition-hub: the stream flags read failed; no match card carries a camera",
+    );
   });
 });

@@ -55,7 +55,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "54ba1d77b29b8881d29beb6dd8bf6671503602e7cbcc26de71d264abc36ddcac";
+const SHA256 = "292f54e37a26f64e5b76242845de5e67553522e10dc9cb9a459b5abbaa377ebf";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -106,7 +106,12 @@ const ADDED = ["programmePhase", "input", "output", "graphics", "inputKicks", "i
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): the channel the overlay page reads its phase from.
   "phaseChannel",
   // R4 S8 (sponsors spec 2026-10-27 §3.6.2): the proof-of-play items and the compositor's overflow count.
-  "airings", "airingsDropped"];
+  "airings", "airingsDropped",
+  // T44 (compositor Owed 110, 111): the camera as the relay receives it.
+  "inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns"];
+/** T44 (compositor Owed 110 and 111, `docs/specs/2026-11-24-heartbeat-input-keys.proposed.json`): the camera as the relay
+ *  receives it. Typed here from those two Owed rows (four from C2, two from C3), never read off the twin or the file. */
+const CAMERA_KEYS = ["inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns"];
 /** R4 S8 (ruling R14): the one declared field `heartbeat-full` does NOT carry — the proof-of-play list rides its own vector,
  *  `heartbeat-airings`, because the server records it as airings and keeps it out of both beat stores. */
 const AIRINGS_FIELD = "airings";
@@ -148,8 +153,8 @@ const OVERLAY_PATH = (fixtureId: string) => `/overlay/fixtures/${fixtureId}`;
 /** Per fixture prefix: its $def, its twin and the exact count (never 0). First match wins. */
 const ROUTES: [prefix: string, def: string, count: number][] = [
   ["session-", "session", 6],
-  // R4 S8: heartbeat-airings and heartbeat-invalid-airing-unknown-key.
-  ["heartbeat-", "heartbeat", 12],
+  // R4 S8: heartbeat-airings and heartbeat-invalid-airing-unknown-key. T44: heartbeat-camera and heartbeat-invalid-give-up-reason.
+  ["heartbeat-", "heartbeat", 14],
   // reply-live, reply-ending, and Owed 108 fix (b)'s five: live-edge, live-edge-zero, live-edge-null, and the two invalid.
   ["reply-", "heartbeatReply", 7],
   // R2007 PR B: the compositor's loopback reply (never "reply-": that prefix is the web heartbeat's 200).
@@ -302,7 +307,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       total += count;
     }
     expect(names.length, "every fixture was routed").toBe(total);
-    expect(total).toBe(27);
+    expect(total).toBe(29);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
     expect(refusedSeen).toBe(2);
@@ -506,7 +511,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(JSON.stringify(fixture(name)), name).not.toContain(RETIRED_RUNG);
       vectors++;
     }
-    expect(vectors, "anti-vacuity: every vector read").toBe(27);
+    expect(vectors, "anti-vacuity: every vector read").toBe(29);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {
@@ -520,7 +525,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(parses(S.RelayHeartbeat, { state: "playing", [field]: null }), `${field}: the twin admits null`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(15);
+    expect(checked).toBe(21);
     // exitDetail's bound: the twin's 200 UTF-16 units, the file's 100 code points (review M1). Each refuses one past its
     // own bound, and a longer one is refused, never cut by the server.
     const fileAdmits = fileValidator();
@@ -556,12 +561,12 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect(Object.keys(fixture("heartbeat-minimal"))).toEqual(["state"]);
     const zero = fixture("heartbeat-zero-is-a-measurement");
     expect(zero).toHaveProperty("fps", 0);
-    // heartbeat-full carries every field the twin declares but the final beat's two and the airing list (R14);
-    // heartbeat-final-fatal carries the two (review M6), heartbeat-airings the list. Between them the route tests
-    // round-trip every declared field.
+    // heartbeat-full carries every field the twin declares but the final beat's two, the airing list (R14) and the camera's six
+    // (T44); heartbeat-final-fatal carries the two (review M6), heartbeat-airings the list, heartbeat-camera the six. Between
+    // them the route tests round-trip every declared field.
     const declared = Object.keys(S.RelayHeartbeat.shape).sort();
     expect(declared, "premise: the twin declares the airing list").toContain(AIRINGS_FIELD);
-    expect(Object.keys(fixture("heartbeat-full")).sort()).toEqual(declared.filter((k) => !EXIT_FIELDS.includes(k) && k !== AIRINGS_FIELD));
+    expect(Object.keys(fixture("heartbeat-full")).sort()).toEqual(declared.filter((k) => !EXIT_FIELDS.includes(k) && k !== AIRINGS_FIELD && !CAMERA_KEYS.includes(k)));
     expect(fixture("heartbeat-full"), "R14: the overflow count stays on the full beat").toHaveProperty("airingsDropped");
     expect(Object.keys(fixture("heartbeat-final-fatal")).sort()).toEqual(["state", ...EXIT_FIELDS].sort());
     expect(Object.keys(fixture("heartbeat-airings")), "the airing vector carries the list").toContain(AIRINGS_FIELD);
@@ -933,5 +938,120 @@ describe("R4 S8: the beat's proof-of-play airings", () => {
       counted++;
     }
     expect(counted).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// T44 (Seazn-hosted video, Phase 4): the relay's camera beat keys. Compositor Owed 110 (C2: inputGiveUpReason, inputGiveUpGen,
+// inputReceivedFps, inputReceivedKbps) and Owed 111 (C3: inputWithheldSpans, inputQueueOverruns) are PROPOSED in the
+// compositor's docs/specs/2026-11-24-heartbeat-input-keys.proposed.json, which holds all six. The compositor sends them only
+// when RELAY_INPUT_BEAT=1, and its crates/adapters/tests/contract.rs checks the vendored declarations' TYPES against that file,
+// so web's must be the same declarations: this test reads the proposal and compares.
+//
+// WHICH SOURCE: a FIXTURE COPIED with its identity noted, not the compositor repo read live (CI has no compositor checkout).
+// compositor-proposals/2026-11-24-heartbeat-input-keys.proposed.json is `git show origin/main:docs/specs/…` at compositor
+// origin/main 73c9c2ff0f25b0c26de77aefc5b9e3a4b6df516b (the file's last commit c15ee08796412df42a51c9110df1bfb58ff37444),
+// byte for byte; its sha256 is pinned below so a hand edit of the copy fails first. A compositor change to the proposal is a
+// re-copy plus the sha, in the same commit that moves this file's.
+// ---------------------------------------------------------------------------------------------------------------
+const PROPOSAL_SHA256 = "77fe2f1876c9431eaf132b492051f7f102c2ae1bcafddab97e9d1c8a0a5fcceb";
+const proposalText = (): string => readFileSync(resolve(import.meta.dirname, "compositor-proposals/2026-11-24-heartbeat-input-keys.proposed.json"), "utf8");
+const proposal = (): Record<string, Json> => (JSON.parse(proposalText()) as { properties: Record<string, Json> }).properties;
+/** A node's branch that is not the null one (every proposed key is `anyOf [value, null]`). */
+const valueBranch = (node: Json): Json => {
+  const branches = (node.anyOf as Json[]).filter((b) => b.type !== "null");
+  expect(branches, "one value branch beside the null one").toHaveLength(1);
+  return branches[0]!;
+};
+
+describe("T44: the relay's camera beat keys (compositor Owed 110 + 111)", () => {
+  it("the copy of the compositor's proposal is the pinned bytes, and it declares exactly the six keys the two Owed rows name", () => {
+    expect(createHash("sha256").update(proposalText()).digest("hex")).toBe(PROPOSAL_SHA256);
+    expect(Object.keys(proposal()).sort()).toEqual([...CAMERA_KEYS].sort());
+    expect(CAMERA_KEYS, "premise: Owed 110's four and Owed 111's two").toHaveLength(6);
+  });
+
+  it("each key's declaration in the file equals the proposal's, verbatim but for the prose (types, enum, bounds, the null branch), and the twin publishes the same", () => {
+    const beat = defOf(contract(), "heartbeat");
+    const twin = zodJson(S.RelayHeartbeat, "input");
+    let checked = 0;
+    for (const [key, declared] of Object.entries(proposal())) {
+      expect(normalise(propOf(beat, key)), `${key}: the file`).toEqual(normalise(declared));
+      expect(normalise(propOf(twin, key)), `${key}: the twin`).toEqual(normalise(declared));
+      expect(typeof propOf(beat, key).description, `${key}: the file says what it is`).toBe("string");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: six declarations compared").toBe(6);
+    // Every one is OPTIONAL: `required` is still `state` alone.
+    expect(beat.required).toEqual(["state"]);
+  });
+
+  it("every bound the proposal declares is enforced by the twin AND the published bytes: the enum's words, a whole non-negative count to 2^53-1, a non-negative rate; null admitted; a present 0 is a measurement", () => {
+    const fileAdmits = fileValidator();
+    const both = (key: string, value: unknown, admitted: boolean, why: string): void => {
+      expect(parses(S.RelayHeartbeat, { state: "playing", [key]: value }), `the twin: ${key} ${why}`).toBe(admitted);
+      expect(fileAdmits("heartbeat", { state: "playing", [key]: value }), `the file: ${key} ${why}`).toBe(admitted);
+    };
+    let checked = 0;
+    for (const [key, declared] of Object.entries(proposal())) {
+      const branch = valueBranch(declared);
+      both(key, null, true, "null");
+      checked++;
+      if (branch.type === "string") {
+        const words = branch.enum as string[];
+        expect(words.length, `${key}: the proposal's words`).toBeGreaterThan(0);
+        for (const w of words) both(key, w, true, w);
+        both(key, "crashed", false, "a word outside the enum");
+        both(key, 3, false, "a number");
+        checked += words.length + 2;
+        continue;
+      }
+      const min = branch.minimum as number;
+      const max = branch.maximum as number | undefined;
+      both(key, min, true, `the minimum ${min}`);
+      both(key, min - 1, false, `below the minimum ${min}`);
+      both(key, "2", false, "a string");
+      checked += 3;
+      if (branch.type === "integer") {
+        expect(max, `${key}: an integer declares its ceiling`).toBe(Number.MAX_SAFE_INTEGER);
+        both(key, max, true, "the ceiling");
+        both(key, max! + 1, false, "past the ceiling");
+        both(key, min + 0.5, false, "a fraction");
+        checked += 3;
+      } else {
+        expect(branch.type).toBe("number");
+        expect(max, `${key}: a rate has no ceiling`).toBeUndefined();
+        both(key, 27.9, true, "a fractional rate");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every key's every bound exercised").toBeGreaterThan(30);
+  });
+
+  it("a beat WITHOUT the keys parses exactly as before (every pre-T44 vector, the twin and the file), and the new vector carries all six and nothing the twin refuses", () => {
+    const fileAdmits = fileValidator();
+    let old = 0;
+    for (const name of fixtureNames().filter((n) => n.startsWith("heartbeat-") && !n.includes("invalid") && n !== "heartbeat-camera")) {
+      const beat = fixture(name);
+      for (const key of CAMERA_KEYS) expect(beat, `premise: ${name} carries no ${key}`).not.toHaveProperty(key);
+      expect(parses(S.RelayHeartbeat, beat), `${name}: the twin`).toBe(true);
+      expect(fileAdmits("heartbeat", beat), `${name}: the file`).toBe(true);
+      old++;
+    }
+    expect(old, "anti-vacuity: the 14 heartbeat vectors less the 6 invalid ones and the camera vector").toBe(7);
+    const camera = fixture("heartbeat-camera");
+    expect(Object.keys(camera).filter((k) => CAMERA_KEYS.includes(k)).sort(), "the vector carries all six").toEqual([...CAMERA_KEYS].sort());
+    expect(parses(S.RelayHeartbeat, camera)).toBe(true);
+    expect(fileAdmits("heartbeat", camera)).toBe(true);
+    // The invalid vector is a ONE-FIELD edit of the camera one, refused on that field alone.
+    const bad = fixture("heartbeat-invalid-give-up-reason");
+    expect(Object.keys(bad).filter((k) => bad[k] !== camera[k])).toEqual(["inputGiveUpReason"]);
+    const issues = S.RelayHeartbeat.safeParse(bad).error?.issues ?? [];
+    expect(issues.map((i) => i.path.join("."))).toEqual(["inputGiveUpReason"]);
+  });
+
+  it("the keys are STRICT-schema members, not a loosening: an unknown camera-ish key is still a 400 beside them", () => {
+    expect(parses(S.RelayHeartbeat, { ...fixture("heartbeat-camera"), inputReceivedBps: 1 })).toBe(false);
+    expect(fileValidator()("heartbeat", { ...fixture("heartbeat-camera"), inputReceivedBps: 1 })).toBe(false);
   });
 });

@@ -615,7 +615,7 @@ test("operator start from the phone: 200 {sid}; the panel open at Ready shows it
   // I-2 within ONE poll, counted in answers, not seconds (B9 review I-1): read-model requests issued after the start
   // resolved go through until one of their answers has been DELIVERED; from then on a request is HELD unanswered —
   // unless an earlier one is still in flight, because the panel keeps only the NEWEST read's answer
-  // (fixture-stream-panel.tsx `phoneSeq`): holding the request that supersedes an in-flight answer would discard that
+  // (fixture-stream-panel/phone-tab.tsx `phoneSeq`): holding the request that supersedes an in-flight answer would discard that
   // answer and leave the panel nothing to land (re-review n-1: a first answer slower than one poll was a false red).
   // So the panel can land exactly ONE answer after the start — the newest of the batch that went through — and a pickup
   // on any later answer never sees one and reds, however long it waits. Seconds are not the measure here, answers are:
@@ -1168,7 +1168,7 @@ test("W23: go live, then three restarts that reach video are free — the line c
 test("Revoke & reissue: the organiser confirms a new code → the old QR's beat, claim and GET are 401 code_ended, the panel shows the NEW code with no phone, and a phone that scans the new one pairs", async ({
   page,
 }) => {
-  test.setTimeout(SEED_MS + NAV_MS + 6 * POLL_WAIT_MS + 30_000);
+  test.setTimeout(SEED_MS + NAV_MS + 9 * POLL_WAIT_MS + 30_000); // Task 35: three more poll waits (the fold shut by the pairing)
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page);
   await addTargetApi(page, rig.orgId, "Reissue destination");
@@ -1202,6 +1202,13 @@ test("Revoke & reissue: the organiser confirms a new code → the old QR's beat,
   const fresh = await pairedPhone(page);
   expect(fresh.qr.code, "the panel shows a NEW code").not.toBe(old.qr.code);
   await expect(body.getByTestId("stream-go-live"), "the new code's phone: Go live").toBeEnabled({ timeout: POLL_WAIT_MS });
+  // Task 35 (owner 2026-11-24): "Show the code again" was opened above to reach Revoke & reissue. The phone that scanned the NEW
+  // code closes it by itself — the fold is back shut and its QR gone — and the organiser's own tap still opens it.
+  await expect(fold, "a phone on the new code: the fold is back").toBeAttached({ timeout: POLL_WAIT_MS });
+  await expect(fold, "…shut by the pairing, not by a tap").not.toHaveAttribute("open", /.*/, { timeout: POLL_WAIT_MS });
+  await expect(body.getByTestId("stream-qr"), "the QR is gone").toHaveCount(0);
+  await fold.locator("summary").click();
+  await expect(body.getByTestId("stream-qr"), "Show the code again still opens it").toBeVisible({ timeout: POLL_WAIT_MS });
   const codes = await withDb((sql) => sql<{ code: string; end_cause: string | null }[]>`
     select code, end_cause from fixture_stream_codes where fixture_id = ${f.id} order by created_at`);
   expect(codes, "the old code ended reissued; one active").toEqual([

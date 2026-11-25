@@ -23,7 +23,7 @@ import { posterSvg, routePosterArt, storagePublicUrl } from "../helpers/poster-a
 import { projectViewport, projectTag } from "./_shared";
 import publicEn from "../../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../../src/components/public-site/match-centre/seazn-video-schedule";
-import { finishSeaznMatch, playsHlsNatively, seedSeaznMatch, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
+import { finishSeaznMatch, lockRecordings, playsHlsNatively, seedSeaznMatch, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
 
 // Not serial: no test here reads state another test writes (no module-level `let` is shared), so one red does not skip the rest (AGENTS.md class 21).
 
@@ -538,6 +538,63 @@ test("RB5-W2 an expunged leaver's hub Matches cards read Abandoned, struck, no h
   await expect(card(k.played)).not.toHaveAttribute("data-expunged", "true");
   await expectNoHorizontalScroll(page);
 });
+
+// Seazn-hosted video T47 (owner 2026-11-24, option A): the little camera on a hub match card, at every width project. A match that is
+// ON AIR to Seazn carries a red camera with a pulsing dot ("Live stream"); once it has ended and its recording is there, a slate camera
+// with no dot ("Replay available"). Both sit in the card's top-right slot, beside the time, are titled and DESCRIBE the card (the card's
+// aria-label replaces its contents, so the words reach a screen reader through `aria-describedby`), never take a tap of their own (the
+// card is the one link) and never push the card past the viewport or make the page scroll sideways, whatever the width. The rows are the
+// producer's output (helpers/seazn-video-seed.ts says why); the rule that reads them is proved against real producers in vitest
+// (server/public-site/__tests__/hub-stream-flags-db.test.ts). Not serial: each case seeds its own competition.
+for (const state of ["live", "replay"] as const) {
+  test(`T47 hub match card camera (${state}): in its slot beside the time, titled and described, no horizontal scroll`, async ({ page }) => {
+    const vp = projectViewport();
+    expect(vp, "this project declares a viewport").not.toBeNull();
+    const LOGIN_MS = 30_000;
+    const SEED_MS = 60_000;
+    test.setTimeout(Math.max(FLOOR_MS, LOGIN_MS + SEED_MS + 6 * ROUTE_CHECK_MS));
+    await loginUi(page, `delivered+hub-camera-${state}-${TAG}-${projectTag()}@resend.dev`);
+    const m = await seedSeaznMatch(page, { name: `Hub Camera ${state} ${TAG} ${projectTag()}`, ensurePro: true, live: true });
+    try {
+      if (state === "replay") {
+        await finishSeaznMatch(m);
+        expect((await lockRecordings(m, 1)).length, "premise: one recording is locked under the session").toBe(1);
+      }
+      const hubPath = m.publicPath.split("/").slice(0, 4).join("/");
+      await page.goto(`${hubPath}?tab=matches`, { waitUntil: "load" });
+      await dismissCookieBanner(page);
+      const card = page.getByTestId(`mh-match-${m.fixtureId}`).first();
+      await expect(card, "the card is on the Matches tab").toBeVisible({ timeout: 30_000 });
+      const cam = card.getByTestId("mh-match-stream");
+      await expect(cam, "the camera is on the card").toBeAttached();
+      await expect(cam).toHaveAttribute("data-stream", state);
+      const words = publicEn[state === "live" ? "matchesHub.stream.live" : "matchesHub.stream.replay"];
+      await expect(cam).toHaveAttribute("title", words);
+      const dot = card.getByTestId("mh-match-stream-dot");
+      if (state === "live") await expect(dot, "live carries the pulsing dot").toBeAttached();
+      else await expect(dot, "a replay carries none").toHaveCount(0);
+      // The card is ONE link and describes itself with the camera's words (aria-label alone would hide them).
+      expect(await card.evaluate((el) => el.tagName), "the card is the link").toBe("A");
+      const ids = (await card.getAttribute("aria-describedby"))?.split(" ") ?? [];
+      expect(ids.length, "the card names a description").toBeGreaterThan(0);
+      const described = await card.evaluate((el, list) => list.map((id) => el.querySelector(`[id="${id}"]`)?.textContent ?? null), ids);
+      expect(described, "the description is the camera's words").toContain(words);
+      // Geometry: the glyph is painted inside the card's own box and inside the viewport; the card ends inside the viewport.
+      const camBox = await cam.boundingBox();
+      const cardBox = await card.boundingBox();
+      expect(camBox && cardBox, "the camera and the card have boxes").toBeTruthy();
+      expect(camBox!.x, "inside the card, right side").toBeGreaterThanOrEqual(cardBox!.x + cardBox!.width / 2);
+      expect(camBox!.x + camBox!.width, `inside the viewport at ${vp!.width}px`).toBeLessThanOrEqual(vp!.width + 0.5);
+      expect(cardBox!.x + cardBox!.width, `the card ends inside the viewport at ${vp!.width}px`).toBeLessThanOrEqual(vp!.width + 0.5);
+      expect(camBox!.width, "a small icon, not a button").toBeLessThanOrEqual(24);
+      await expectNoHorizontalScroll(page);
+      const { clipped } = await overflowingIn(page, `[data-testid="mh-match-${m.fixtureId}"]`, "span,div", "the card was not in the DOM");
+      expect(clipped, `the card clips content at ${vp!.width}px`).toEqual([]);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+}
 
 // Seazn-hosted video, Phase 1 Task 15 (spec §5.1): the match page's live player at every width project. The stage is 16:9 with a 200px floor
 // inside the court card, so on a 320px phone it is the floor that sets its height; the live chip sits over the picture and the page must

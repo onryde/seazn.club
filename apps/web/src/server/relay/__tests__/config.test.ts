@@ -2,7 +2,7 @@
 // And the money guard: a process that was never told RELAY_DRIVERS=live runs the fake drivers — outside production. In
 // production (Task 14b, R5) it runs NO drivers: "disabled", and createSession refuses. Explicit fake is refused on stg/prod.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
 import { CF_ANALYTICS_MAX_WINDOW_DAYS } from "../../video/cf-analytics";
@@ -545,6 +545,98 @@ describe("Seazn-hosted flags and settings (Task 8)", () => {
   });
 });
 
+// Task 34: the stream code's paste field and its Copy are for developers and the harnesses (fake-capture-phone.ts reads the
+// field to drive the phone routes), never for a club. The rule is the brief's: unset = shown where the relay driver is fake
+// (every e2e, CI and smoke server) or outside production (next dev, vitest); hidden on stg and prod.
+describe("streamPasteCodeShown — STREAM_PASTE_CODE, the stream code's paste field and Copy (Task 34)", () => {
+  const shown = (env: Record<string, string | undefined>) => config.streamPasteCodeShown(env);
+  it("unset or blank, under the fake relay driver: shown, production build or not (the e2e, CI and smoke servers run server.js as production)", () => {
+    const rows: Record<string, string | undefined>[] = [
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "local", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production", STREAM_PASTE_CODE: "" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production", STREAM_PASTE_CODE: "  " },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "local", NODE_ENV: "development" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(true);
+    expect(rows).toHaveLength(5);
+  });
+  it("unset or blank, outside production: shown whatever the relay driver (next dev, vitest)", () => {
+    const rows: Record<string, string | undefined>[] = [
+      {},
+      { NODE_ENV: "development" },
+      { NODE_ENV: "test" },
+      { NODE_ENV: "development", RELAY_DRIVERS: "live", ENV_NAME: "local" },
+      { NODE_ENV: "test", STREAM_PASTE_CODE: "" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(true);
+    expect(rows).toHaveLength(5);
+  });
+  it("unset or blank, a production server not on the fake driver: hidden — stg and prod (the live Cloudflare driver), and a server with no relay", () => {
+    const rows: Record<string, string | undefined>[] = [
+      { RELAY_DRIVERS: "live", ENV_NAME: "stg", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production", STREAM_PASTE_CODE: " " },
+      { NODE_ENV: "production" },
+      { NODE_ENV: "production", RELAY_DRIVERS: "" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(false);
+    expect(rows).toHaveLength(5);
+  });
+  it("an explicit value wins over the default either way, trimmed and case-insensitive: false on a fake server hides it, true on prod shows it", () => {
+    const rows: [Record<string, string | undefined>, boolean][] = [
+      [{ STREAM_PASTE_CODE: "false", RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" }, false],
+      [{ STREAM_PASTE_CODE: " False ", NODE_ENV: "development" }, false],
+      [{ STREAM_PASTE_CODE: "FALSE" }, false],
+      [{ STREAM_PASTE_CODE: "true", RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" }, true],
+      [{ STREAM_PASTE_CODE: " TRUE ", NODE_ENV: "production" }, true],
+    ];
+    for (const [env, want] of rows) expect(shown(env), JSON.stringify(env)).toBe(want);
+    expect(rows).toHaveLength(5);
+  });
+  it("anything but true/false throws naming the variable — on a fake server and on prod alike, so a typo is never read as the default", () => {
+    let checked = 0;
+    for (const bad of ["yes", "no", "1", "0", "on", "ture", "flase"]) {
+      for (const base of [{ RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" }, { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" }]) {
+        expect(() => shown({ ...base, STREAM_PASTE_CODE: bad }), `${bad} on ${base.RELAY_DRIVERS}`).toThrow(/STREAM_PASTE_CODE/);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 values x 2 servers").toBe(14);
+  });
+  // The invariant behind the default, read off the RELAY's own declaration (relayDriverMode), not this function: every server
+  // whose relay runs the fake driver shows the paste code, and every production server whose relay does not hides it.
+  it("SWEEP RELAY_DRIVERS x ENV_NAME x NODE_ENV, unset: a server relayDriverMode resolves to fake shows it; a production one it resolves to live or disabled hides it", () => {
+    const counts = { fakeShown: 0, prodHidden: 0, devShown: 0, refused: 0 };
+    for (const RELAY_DRIVERS of [undefined, "", "fake", "live"]) {
+      for (const ENV_NAME of [undefined, "local", "ci", "stg", "prod"]) {
+        for (const NODE_ENV of [undefined, "production", "development", "test"]) {
+          const env = { RELAY_DRIVERS, ENV_NAME, NODE_ENV };
+          let mode: config.RelayDriverMode;
+          try {
+            mode = config.relayDriverMode(env);
+          } catch {
+            counts.refused++; // a refused setting answers 500 to every request (config.ts relayDriverMode), so no panel renders
+            continue;
+          }
+          if (mode === "fake") {
+            expect(shown(env), JSON.stringify(env)).toBe(true);
+            counts.fakeShown++;
+          } else if (NODE_ENV === "production") {
+            expect(shown(env), JSON.stringify(env)).toBe(false);
+            counts.prodHidden++;
+          } else {
+            expect(shown(env), JSON.stringify(env)).toBe(true);
+            counts.devShown++;
+          }
+        }
+      }
+    }
+    expect(Object.values(counts).reduce((a, b) => a + b, 0), "anti-vacuity: 4 x 5 x 4 settings").toBe(80);
+    for (const [k, n] of Object.entries(counts)) expect(n, `the sweep reaches ${k}`).toBeGreaterThan(0);
+  });
+});
+
 describe("replayDriverMode — REPLAY_DRIVER, which replay host this process talks to (Task 21)", () => {
   it("fake and bunny are taken as set, trimmed, whatever the relay driver is", () => {
     const rows: [Record<string, string>, "fake" | "bunny"][] = [
@@ -802,5 +894,80 @@ describe("STREAM_TICK_PERIOD_SECONDS and SEAZN_RECORDING_LOCK_BY_SECONDS (review
   it("the lock lands within the finalisation grace plus one whole tick period of the end: Cloudflare's own hold and a tick period both fit inside it", () => {
     expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS).toBeGreaterThanOrEqual(config.INGEST_TIMEOUT_SECONDS + config.HOLD_SLACK_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
     expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS, "a whole period beyond the grace the recording is finished by").toBeGreaterThanOrEqual(config.FINALISATION_GRACE_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+  });
+});
+
+// T44 (compositor Owed 110 + 111): web's flag for the camera's beat keys.
+describe("T44 — relayInputBeat, the flag that asks the compositor for the camera's beat keys", () => {
+  it("is on for exactly the string \"1\" and off for every other value, unset included; it reads its argument, not a cached env", () => {
+    let checked = 0;
+    for (const [value, want] of [["1", true], [undefined, false], ["", false], ["0", false], ["true", false], ["yes", false], [" 1", false], ["1 ", false], ["on", false]] as const) {
+      expect(config.relayInputBeat({ RELAY_INPUT_BEAT: value }), JSON.stringify(value)).toBe(want);
+      checked++;
+    }
+    expect(config.relayInputBeat({}), "absent key").toBe(false);
+    expect(checked).toBe(9);
+    // The default argument is process.env, read at each call.
+    vi.stubEnv("RELAY_INPUT_BEAT", "1");
+    expect(config.relayInputBeat()).toBe(true);
+    vi.stubEnv("RELAY_INPUT_BEAT", "0");
+    expect(config.relayInputBeat()).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it("is documented in .env.example as a commented-out, empty entry (default off), and no workflow or deploy config of this repo turns it on", () => {
+    const root = resolve(import.meta.dirname, "../../../../../..");
+    const example = readFileSync(resolve(root, ".env.example"), "utf8").split("\n");
+    const lines = example.filter((l) => /RELAY_INPUT_BEAT/.test(l));
+    expect(lines.filter((l) => /^#\s*RELAY_INPUT_BEAT=\s*$/.test(l)), "one commented, empty entry").toHaveLength(1);
+    expect(lines.filter((l) => /^RELAY_INPUT_BEAT=/.test(l)), "never an active entry").toEqual([]);
+    // "OFF in prod": no file that configures a deployment sets it. Swept by content over every workflow and fly config.
+    const dirs = [resolve(root, ".github/workflows")];
+    const files = dirs.flatMap((d) => readdirSync(d).filter((f) => /\.ya?ml$/.test(f)).map((f) => resolve(d, f)));
+    for (const f of readdirSync(root).filter((f) => /^fly.*\.toml$/.test(f))) files.push(resolve(root, f));
+    expect(files.length, "anti-vacuity: the workflows and both fly configs were read").toBeGreaterThan(10);
+    expect(files.filter((f) => readFileSync(f, "utf8").includes("RELAY_INPUT_BEAT"))).toEqual([]);
+  });
+});
+
+// T44 part 2 (the C2 review): the per-session sample cap protects the table from a runaway client, and must not cut a LEGITIMATE
+// session. Its inputs are declared, not typed into the cap.
+describe("T44 — SAMPLES_PER_SESSION_CAP holds a full session at the edge beat's fastest rate", () => {
+  type Wrangler = { env: Record<string, { triggers: { crons: string[] } }> };
+  const wrangler = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../cron-worker/wrangler.json"), "utf8")) as Wrangler;
+
+  it("the edge beat's least gap is the compositor's `phase_beat_gap_ms` = `resume_after_ms`, 1 000 ms (compositor crates/domain config.rs: \"one beat a second at most\"), and is under the cadence", () => {
+    // Source of the 1 000: compositor crates/domain/src/config.rs ~L411-423, `Thresholds::phase_beat_gap_ms()` = `resume_after_ms`
+    // ("1 000 ms today: one beat a second at most"), read at compositor origin/main 73c9c2ff. A literal pin: the compositor repo is not
+    // readable from CI, so a change there is a change here (record only).
+    expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS).toBe(1_000);
+    expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS, "an edge beat comes before the cadence's").toBeLessThan(config.RELAY_HEARTBEAT_INTERVAL_MS);
+  });
+
+  it("the fastest tick is the smallest period the Worker is deployed with (read off wrangler.json)", () => {
+    const every = (cron: string): number | null => {
+      const [minute, ...rest] = cron.trim().split(/\s+/);
+      if (rest.length !== 4 || rest.some((f) => f !== "*")) return null;
+      if (minute === "*") return 60;
+      const m = /^\*\/(\d+)$/.exec(minute!);
+      return m === null ? null : Number(m[1]) * 60;
+    };
+    const periods = Object.values(wrangler.env).flatMap((e) => e.triggers.crons.map(every).filter((p): p is number => p !== null));
+    expect(periods.length, "anti-vacuity: both deployments' fast triggers were read").toBe(2);
+    expect(config.STREAM_TICK_FASTEST_PERIOD_SECONDS).toBe(Math.min(...periods));
+  });
+
+  it("the cap holds every sample of a session that runs its hard cap with a beat at the least gap the whole time, plus a poll at every fastest tick, with headroom; and it is not the old 8 000", () => {
+    // The brief's own arithmetic: 3 h at 1 beat/s is 10 800 samples (C2 review), the figure the old cap of 8 000 lost the last ~45 min to.
+    const beats = (config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_EDGE_BEAT_MIN_GAP_MS;
+    expect(beats, "3 h at one beat a second").toBe(10_800);
+    const polls = (config.MAX_DURATION_MINUTES * 60) / config.STREAM_TICK_FASTEST_PERIOD_SECONDS;
+    expect(polls, "3 h at one poll a minute").toBe(180);
+    expect(config.SAMPLES_PER_SESSION_CAP, "every beat and poll fits").toBeGreaterThanOrEqual(beats + polls);
+    expect(config.SAMPLES_PER_SESSION_CAP, "headroom beyond them: a webhook notification, a boot beat, an ending's last beats").toBeGreaterThan(beats + polls);
+    expect(config.SAMPLES_PER_SESSION_CAP, "headroom is bounded: a runaway client at 100 ms (180 000 rows) is still cut at a tenth of that").toBeLessThan(18_000);
+    expect(config.SAMPLES_PER_SESSION_CAP, "a whole number").toBe(Math.floor(config.SAMPLES_PER_SESSION_CAP));
+    // The ordinary session is nowhere near it: a beat per 5 s cadence for 3 h is 2 160, a fifth of the cap.
+    expect((config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_HEARTBEAT_INTERVAL_MS).toBe(2_160);
   });
 });

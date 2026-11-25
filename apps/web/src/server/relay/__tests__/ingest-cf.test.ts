@@ -175,7 +175,7 @@ function cfReply(c: Call): Reply {
     // a recording is live, AND on one that errored before it had dimensions.
     return { status: 200, body: { success: true, result: [
       { uid: "v_live", created: "2026-09-01T00:00:00Z", status: { state: "live-inprogress" }, liveInput: "in_abc", duration: -1, size: -1, input: { width: 0, height: 0 } },
-      { uid: "v_done", created: "2026-09-01T00:00:00Z", status: { state: "ready" }, liveInput: null, duration: 61.5, size: 734003200, input: { width: 1280, height: 720 } },
+      { uid: "v_done", created: "2026-09-01T00:00:00Z", status: { state: "ready" }, readyToStream: true, liveInput: null, duration: 61.5, size: 734003200, input: { width: 1280, height: 720 } },
       { uid: "v_err", created: "2026-09-01T00:00:00Z", status: { state: "error", errorReasonCode: "ERR_NON_VIDEO" }, liveInput: null, duration: -1, size: -1, input: { width: 0, height: 0 } },
     ] } };
   // R2004 (review I2): ONE input's recordings — the documented account listing filtered by input (OpenAPI "List videos",
@@ -353,9 +353,11 @@ describe("CloudflareIngest", () => {
     expect(Number(url.searchParams.get(LIST_VIDEOS_QUERY.limit))).toBe(LIST_VIDEOS_LIMIT_MAX);
     expect(rec.calls[0]!.init.method).toBe("GET");
     expect(vids).toEqual([
-      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: true },
-      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: false },
-      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
+      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: true, ready: null },
+      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: false, ready: true },
+      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null, ready: null },
+      // T39: an explicit `readyToStream: false` is false; an ABSENT key is null (not said), never false.
+      { videoId: "v_cam_queued", inputId: "in_abc", createdAt: "2026-09-01T03:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "queued", errorReasonCode: null, signed: true, ready: false },
     ]);
     expect(vids, "anti-vacuity: every fixture item mapped").toHaveLength(LIST_VIDEOS_BY_INPUT_200.result.length);
     const err = await ingest.listInputVideos("in_failed_list").catch((e: unknown) => e);
@@ -548,12 +550,12 @@ describe("CloudflareIngest", () => {
     expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=1000`);
     expect(LIST_VIDEOS_PAGE_LIMIT).toBe(1000);
     expect(vids).toEqual([
-      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: null },
-      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
+      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: null, ready: null },
+      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null, ready: true },
       // The differential the "map on the value" rule exists for: this one is
       // NOT live-inprogress, so a state-keyed mapping would pass its -1 straight
       // into recording_bytes.
-      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO", signed: null },
+      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO", signed: null, ready: null },
     ]);
     expect(await ingest.deleteVideo("v_live")).toBe("in_progress");
     expect(await ingest.deleteVideo("v_done")).toBe("deleted");
@@ -1502,8 +1504,8 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
   it("both listings carry the video's own `requireSignedURLs` as `signed` — true, false, and null when the item does not say (C3, C7)", async () => {
     const { cf } = build();
     const byInput = await cf.listInputVideos("in_abc");
-    expect(byInput.map((v) => [v.videoId, v.signed])).toEqual([["v_cam_live", true], ["v_cam_done", false], ["v_cam_unnamed", null]]);
+    expect(byInput.map((v) => [v.videoId, v.signed])).toEqual([["v_cam_live", true], ["v_cam_done", false], ["v_cam_unnamed", null], ["v_cam_queued", true]]);
     // The pair: the fixture really holds the two values and the absence, so the mapping is not answering a constant.
-    expect(LIST_VIDEOS_BY_INPUT_200.result.map((v) => ("requireSignedURLs" in v ? v.requireSignedURLs : "absent"))).toEqual([true, false, "absent"]);
+    expect(LIST_VIDEOS_BY_INPUT_200.result.map((v) => ("requireSignedURLs" in v ? v.requireSignedURLs : "absent"))).toEqual([true, false, "absent", true]);
   });
 });

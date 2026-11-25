@@ -27,7 +27,7 @@ import { routes } from "../src/lib/routes";
 import publicEn from "../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../src/components/public-site/match-centre/seazn-video-schedule";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
-import { finishSeaznMatch, goLive, lockRecordings, playsHlsNatively, seedSeaznMatch, signedAddressPattern, stubFakePlaybackHost } from "./helpers/seazn-video-seed";
+import { finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
 
 const SPONSOR_HOST = "sponsor-s10.example";
 /** A realistic long title sponsor (AGENTS.md: a 43-character name is what found the last phone overflow). */
@@ -197,6 +197,17 @@ const SEAZN_NAV_MS = 30_000;
 const ONE_RE_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS + 15_000;
 const VIDEO_ROUTE = /\/api\/v1\/public\/fixtures\/[^/]+\/video$/;
 const seaznPlayer = (page: Page) => page.locator('[data-testid="seazn-player"] video');
+/** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming — a live on its way up, or the replay of a
+ *  stream that has stopped. The owner's words, literal (never the dictionary the code reads, T33c review m2), so a swapped or reworded
+ *  line reds here. */
+const LIVE_COMING = "The live video will start here shortly";
+const REPLAY_COMING = "The replay will be ready here in a few minutes";
+/** The held box's status line(s) in a page's SERVER HTML, read inside the box's own section: the page's flight payload carries the island's
+ *  labels, so BOTH lines are somewhere in the document and a bare `toContain` would pass for either. */
+const heldLinesIn = (html: string): string[] => {
+  const box = /<section data-testid="seazn-video-starting"[^>]*>([\s\S]*?)<\/section>/.exec(html);
+  return box === null ? [] : [...box[1]!.matchAll(/<p [^>]*role="status"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+};
 
 // Phase 1 visual re-capture R1 and R2 (a browser fact a node render cannot see, AGENTS.md class 2: the SSR proxies compare class sets, and
 // class sets cannot see UA or global CSS): the player's box and the picker's row are on the page from the SERVER render, and the player
@@ -205,6 +216,11 @@ const seaznPlayer = (page: Page) => page.locator('[data-testid="seazn-player"] v
 interface Box { top: number; height: number }
 interface SeaznGeometry {
   summary: Box | null; frame: Box | null; ghostRow: Box | null; tablist: Box | null; player: Box | null; line: string | null;
+  /** Task 33c: the live player's delay line, or the held box's invisible row for it (whichever is on the page). */
+  delay: Box | null;
+  /** Task 33f: whether the held box's line fits its frame (nothing clipped or spilling: the status element does not overflow, and the
+   *  text's own box sits inside the frame); null with no line. Either line must, at every width, or the "same box" claim is false. */
+  lineFits: boolean | null;
 }
 const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
   page.evaluate(() => {
@@ -221,6 +237,18 @@ const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
       tablist: box('[data-testid="seazn-video"] [role="tablist"]'),
       player: box('[data-testid="seazn-player"]'),
       line: document.querySelector('[data-testid="seazn-video-starting"] [role="status"]')?.textContent?.trim() ?? null,
+      delay: box('[data-testid="seazn-video-delay"], [data-testid="seazn-video-delay-reserved"]'),
+      lineFits: (() => {
+        const line = document.querySelector('[data-testid="seazn-video-starting"] [role="status"]');
+        const frame = document.querySelector('[data-testid="seazn-video-starting"] [data-testid="seazn-video-frame"]');
+        if (!line || !frame) return null;
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        const t = range.getBoundingClientRect();
+        const f = frame.getBoundingClientRect();
+        const inside = t.width > 0 && t.left >= f.left - 0.5 && t.right <= f.right + 0.5 && t.top >= f.top - 0.5 && t.bottom <= f.bottom + 0.5;
+        return inside && line.scrollHeight <= line.clientHeight + 1 && line.scrollWidth <= line.clientWidth + 1;
+      })(),
     };
   });
 /** Layout shifts from navigation start that moved the island's box or the Summary panel (install BEFORE the first goto). */
@@ -314,7 +342,7 @@ for (const width of [320, 768, 1280] as const) {
         const server = await (await page.request.get(m.publicPath)).text();
         expect(server, "the picker's row is in the server markup").toContain('data-testid="seazn-video-picker-reserved"');
         expect(server, "and the box, with its line").toContain('data-testid="seazn-video-starting"');
-        expect(server).toContain(publicEn["seaznVideo.starting"]);
+        expect(heldLinesIn(server), "T33f: stopped, so the box says the replay is coming, and only that").toEqual([REPLAY_COMING]);
         await stubFakePlaybackHost(page);
         await observeSeaznShifts(page);
         await delayFirstRead(page, FIRST_READ_DELAY_MS);
@@ -322,7 +350,8 @@ for (const width of [320, 768, 1280] as const) {
         await page.goto(m.publicPath);
         // BEFORE any answer is in: the row, the box and the Summary below them.
         const held = await seaznGeometry(page);
-        expect(held.line, "the line, in the page's words").toBe(publicEn["seaznVideo.starting"]);
+        expect(held.line, "the line, in the owner's words: the replay is coming (T33f)").toBe(REPLAY_COMING);
+        expect(held.lineFits, `T33f: the replay line fits its frame at ${width}`).toBe(true);
         expect(held.ghostRow, "the held row is laid out").not.toBeNull();
         expect(held.ghostRow!.height, "it is a real row: the pills' own height").toBeGreaterThanOrEqual(44);
         expect(held.frame!.height, "the box keeps its 200 px floor").toBeGreaterThanOrEqual(200);
@@ -352,6 +381,7 @@ for (const width of [320, 768, 1280] as const) {
           await finishSeaznMatch(m);
           const server = await (await page.request.get(m.publicPath)).text();
           expect(server, "the box and its line are in the server markup").toContain('data-testid="seazn-video-starting"');
+          expect(heldLinesIn(server), "T33f: its line says the replay is coming").toEqual([REPLAY_COMING]);
           expect(server, "no recording yet, so no picker row").not.toContain("seazn-video-picker-reserved");
           await stubFakePlaybackHost(page);
           await observeSeaznShifts(page);
@@ -359,12 +389,13 @@ for (const width of [320, 768, 1280] as const) {
           const firstRead = page.waitForResponse((r) => VIDEO_ROUTE.test(r.url()));
           await page.goto(m.publicPath);
           const before = await seaznGeometry(page);
-          expect(before.line, "before any answer: the line").toBe(publicEn["seaznVideo.starting"]);
+          expect(before.line, "before any answer: the line, the replay's (T33f: the stream has stopped)").toBe(REPLAY_COMING);
+          expect(before.lineFits, `T33f: the replay line fits its frame at ${width}`).toBe(true);
           expect(before.frame, "and the box").not.toBeNull();
           const answer = (await (await firstRead).json()) as { data: { live: unknown; replay: unknown[] } };
-          expect(answer.data, "premise: the first answer has nothing to play").toEqual({ live: null, replay: [] });
+          expect(answer.data, "premise: the first answer has nothing to play, from a session that went live and ended").toEqual({ live: null, replay: [], session: { state: "completed", wentLive: true } });
           const read = await seaznGeometry(page);
-          expect(read.line, "the empty answer does not collapse the box: the line is still there").toBe(publicEn["seaznVideo.starting"]);
+          expect(read.line, "the empty answer does not collapse the box: the line is still there").toBe(REPLAY_COMING);
           samePlace("the box across the first read", before.frame, read.frame);
           samePlace("the Summary across the first read", before.summary, read.summary, { height: false });
           // The tick locks the recording: the next re-read puts it in the same box.
@@ -382,6 +413,48 @@ for (const width of [320, 768, 1280] as const) {
         }
       });
     }
+  });
+}
+
+// Task 42: the rung hls.js STARTS on is the cap hls.js computes for the player's box, not the lowest. Three boxes (a 320 phone at 3x, a
+// 768 tablet at 1x, a 1280 laptop at 3x), the master playlist a five-rung ladder with CODECS; the page is a real server's, the host the
+// browser's stand-in. The page is FORCED onto hls.js (`forceHlsJs`: the pinned Chromium says "maybe" to HLS and would take the native
+// path, where none of this runs, and a case that took it would pass on nothing). The expected rung is hls.js's documented cap rule
+// (cap-level-controller.ts getMaxLevelByMediaSize: the first rung whose width OR height reaches max(box w, h) x dpr, else the top)
+// applied to the ladder and the box the browser laid out, never the player's code.
+for (const [width, deviceScaleFactor] of [[320, 3], [768, 1], [1280, 3]] as const) {
+  test.describe(`the Seazn player's start rung at ${width}px, ${deviceScaleFactor}x`, () => {
+    test.use({ viewport: { width, height: 900 }, deviceScaleFactor });
+
+    test("the first rung playlist asked for is the rung hls.js caps the box at", async ({ page }) => {
+      test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + ONE_RE_READ_MS + 20_000);
+      const m = await seedSeaznMatch(page, { name: `Seazn Start Rung ${width} ${TAG}`, live: true });
+      try {
+        await forceHlsJs(page);
+        const stub = await stubFakePlaybackHost(page, { ladder: STUB_LADDER_HEIGHTS });
+        await page.goto(m.publicPath);
+        await dismissCookieBanner(page);
+        const video = seaznPlayer(page);
+        await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
+        expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+        const address = (await video.getAttribute("data-src"))!;
+        // The master is read at once; media (and so a rung) only from the first play.
+        await expect.poll(() => stub.requests, { message: "hls.js read the master playlist" }).toContain(address);
+        const isRung = (u: string) => /\/rung-\d+\.m3u8$/.test(u);
+        expect(stub.requests.filter(isRung), "no rung before play").toEqual([]);
+        await video.evaluate((el: HTMLVideoElement) => { el.muted = true; void el.play().catch(() => undefined); });
+        const rungs = (): number[] => stub.requests.filter(isRung).map((u) => Number(/rung-(\d+)\.m3u8$/.exec(u)![1]));
+        await expect.poll(() => rungs().length, { message: "hls.js asked for a rung playlist after play (the hls.js path ran)", timeout: 20_000 }).toBeGreaterThan(0);
+        const { w, h, dpr } = await video.evaluate((el: HTMLVideoElement) => ({ w: el.clientWidth, h: el.clientHeight, dpr: window.devicePixelRatio }));
+        expect(dpr, "premise: the page runs at the pixel ratio this case sets").toBe(deviceScaleFactor);
+        expect(h, "premise: the box is laid out").toBeGreaterThan(0);
+        const square = Math.max(w, h) * dpr;
+        const expected = STUB_LADDER_HEIGHTS.find((rung) => stubRungWidth(rung) >= square || rung >= square) ?? STUB_LADDER_HEIGHTS[STUB_LADDER_HEIGHTS.length - 1]!;
+        expect(rungs()[0], `box ${w}x${h} at ${dpr}x = ${square} device px: the first rung asked for`).toBe(expected);
+      } finally {
+        await finishSeaznMatch(m);
+      }
+    });
   });
 }
 
@@ -410,6 +483,7 @@ test.describe("the Seazn player over time (1280)", () => {
       await observeSeaznShifts(page);
       const server = await (await page.request.get(m.publicPath)).text();
       expect(server, "re-capture R2: the warming session's box and line are in the server markup").toContain('data-testid="seazn-video-starting"');
+      expect(heldLinesIn(server), "T33f: warming, so the box says the LIVE video is coming, and only that").toEqual([LIVE_COMING]);
       const firstRead = page.waitForResponse((r) => VIDEO_ROUTE.test(r.url()));
       await page.goto(m.publicPath);
       await dismissCookieBanner(page);
@@ -418,9 +492,10 @@ test.describe("the Seazn player over time (1280)", () => {
       await expect(page.getByTestId("mc-court-card"), "the page itself rendered").toBeVisible();
       // Re-capture R2: the empty answer does not collapse the box. It stays, with its one quiet line, and draws no PLAYER yet.
       await expect(page.getByTestId("seazn-video-starting"), "the island holds the player's box through the empty answer").toBeVisible();
-      await expect(page.getByTestId("seazn-video-starting").getByRole("status"), "with its line").toHaveText(publicEn["seaznVideo.starting"]);
+      await expect(page.getByTestId("seazn-video-starting").getByRole("status"), "with its line: the live video is coming (T33f)").toHaveText(LIVE_COMING);
       await expect(page.getByTestId("seazn-video"), "and draws no player yet").toHaveCount(0);
       const held = await seaznGeometry(page);
+      expect(held.lineFits, "T33f: the live line fits its frame").toBe(true);
       expect(held.frame, "the held box is laid out").not.toBeNull();
       expect(held.frame!.height, "at its 200 px floor").toBeGreaterThanOrEqual(200);
       // The page must not reload from here on: a marker on the window survives only the same document.
@@ -434,6 +509,9 @@ test.describe("the Seazn player over time (1280)", () => {
       // Re-capture R2: the live player is in the very box the page held, and the Summary below it did not move.
       const arrived = await seaznGeometry(page);
       samePlace("the live player takes the held box's place", held.frame, arrived.player);
+      // Task 33c: the live player carries its delay line under it; the warming box held that row (invisible), so the line lands in it.
+      await expect(page.getByTestId("seazn-video-delay"), "the live player's delay line").toBeVisible();
+      samePlace("the delay line takes the row the box held for it", held.delay, arrived.delay);
       samePlace("the Summary after the player arrives", held.summary, arrived.summary, { height: false });
       await expect(page.getByTestId("seazn-video-starting"), "the line is gone with the box's arrival").toHaveCount(0);
       expect(await seaznShift(page), "warming to live moved nothing: no layout shift reached the box or the Summary").toBe(0);
@@ -463,6 +541,115 @@ test.describe("the Seazn player over time (1280)", () => {
           .toBe(true);
         expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
       }
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // Task 33g (T33f review m1): an OPEN page follows the latest session's state. The page is drawn while a Go live warms and says the live
+  // video will start shortly; the island's reads then carry the session itself (`session` in the route's answer), so a Go live that is
+  // CANCELLED (stopped before it ever went live: nothing is coming) clears the line at the very next read, instead of keeping it for the
+  // rest of the plan's warming hold (up to ~14 minutes). The cancel here is the row the real Stop leaves (finishSeaznMatch: completed, its
+  // `started_at` never set; the producer is proved in vitest, seazn-video.test.ts "the latest session decides").
+  test("an open page drawn while a Go live warms loses the 'will start shortly' line, and its box, at the next read after the Go live is CANCELLED — without a reload", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Cancelled ${TAG}` });
+    try {
+      const server = await (await page.request.get(m.publicPath)).text();
+      expect(heldLinesIn(server), "the page is drawn while warming: the LIVE video is coming, and only that").toEqual([LIVE_COMING]);
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const starting = page.getByTestId("seazn-video-starting");
+      await expect(starting, "the open page holds the box for the live").toBeVisible();
+      await expect(starting.getByRole("status"), "with the live line").toHaveText(LIVE_COMING);
+      await page.evaluate(() => { (window as unknown as { __seaznSameDocument: boolean }).__seaznSameDocument = true; });
+
+      await finishSeaznMatch(m);
+      const [row] = await withDb((sql) => sql<{ state: string; started: boolean }[]>`select state, started_at is not null as started from fixture_stream_sessions where id = ${m.sessionId}`);
+      expect(row, "premise: the cancelled session is over and never went live").toEqual({ state: "completed", started: false });
+      await expect(starting, "the next read says it ended without going live: the box and its line are gone").toHaveCount(0, { timeout: ONE_RE_READ_MS });
+      await expect(page.getByText(LIVE_COMING), "and the live line is nowhere on the page").toHaveCount(0);
+      await expect(page.getByTestId("seazn-video"), "no player was drawn").toHaveCount(0);
+      await expect(page.getByTestId("mc-court-card"), "the match page itself is still there").toBeVisible();
+      expect(await page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument), "and nothing reloaded").toBe(true);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // The sibling: the live is MISSED whole (a hidden tab, or a live shorter than one read). The open page, drawn while warming, next hears
+  // that the session went live and has already ended: no live is coming any more, but a recording is, so the line turns from the live
+  // video's to the replay's (the box stays), and the recording, once locked, plays in it.
+  test("an open page drawn while a Go live warms turns from the live line to the replay line when the live is missed whole, and then plays the recording", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Missed ${TAG}` });
+    try {
+      await stubFakePlaybackHost(page);
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const starting = page.getByTestId("seazn-video-starting");
+      await expect(starting.getByRole("status"), "drawn while warming: the live line").toHaveText(LIVE_COMING);
+      await page.evaluate(() => { (window as unknown as { __seaznSameDocument: boolean }).__seaznSameDocument = true; });
+
+      // The whole live happens between two of the island's reads: it goes live and ends again, its recording not locked yet.
+      await goLive(m);
+      await finishSeaznMatch(m);
+      await expect(starting.getByRole("status"), "the next read: it went live and ended, so the REPLAY is what is coming").toHaveText(REPLAY_COMING, { timeout: ONE_RE_READ_MS });
+      await expect(page.getByTestId("seazn-video-delay-reserved"), "and no row is held for a live line").toHaveCount(0);
+      await expect(page.getByTestId("seazn-video"), "still no player").toHaveCount(0);
+
+      const [recording] = await lockRecordings(m, 1);
+      await expect(seaznPlayer(page), "a later read plays the recording in the held box's place").toHaveAttribute("data-src", signedAddressPattern(recording!), { timeout: ONE_RE_READ_MS });
+      await expect(starting, "the line went with the box").toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument), "and nothing reloaded").toBe(true);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // The T15 seam on the hls.js path, witnessed in CI: the test above takes whichever path this Chromium has, and the pinned build answers
+  // "maybe" to HLS (the native path, where a refresh is a `video.src` re-point and hls.js never runs). Forced onto hls.js here, so the
+  // per-request token rewrite is what is proved: one manifest load under the first token, then, after a refresh, a segment asked for
+  // under the NEWEST token. (The stand-in answers the segment with a playlist, which hls.js will not accept: that failure comes after the
+  // request this asserts, and nothing here follows it.)
+  test("on hls.js a refreshed address is not a reload: the manifest is loaded once, and the segment goes out under the refreshed token", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Refresh hls.js ${TAG}`, live: true });
+    try {
+      await forceHlsJs(page);
+      const stub = await stubFakePlaybackHost(page);
+      // The REAL route's answer; only its expiry (the island's own schedule re-reads at the floor) and, from the second read on, the token
+      // segment of its address are changed.
+      let liveReads = 0;
+      await page.route(VIDEO_ROUTE, async (route) => {
+        const real = await route.fetch();
+        const body = (await real.json()) as { ok: boolean; data: { live: { src: string; expiresAt: string } | null } };
+        if (body.data?.live) {
+          liveReads += 1;
+          body.data.live.expiresAt = new Date(Date.now() + (SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS + 1_000)).toISOString();
+          if (liveReads >= 2) body.data.live.src = body.data.live.src.replace(/\/fake\.[^/]+\//, `/refreshed-${liveReads}/`);
+        }
+        await route.fulfill({ response: real, json: body });
+      });
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const video = seaznPlayer(page);
+      await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
+      expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+      const first = (await video.getAttribute("data-src"))!;
+      expect(first, "premise: the first address is the unrefreshed one").not.toMatch(/\/refreshed-\d+\//);
+      await expect.poll(() => stub.requests, { message: "hls.js loaded the manifest under the first token" }).toContain(first);
+      const element = await video.elementHandle();
+      await expect(video, "the next re-read hands over the refreshed address").toHaveAttribute("data-src", /\/refreshed-2\//, { timeout: ONE_RE_READ_MS });
+      expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, element)), "the same <video> node").toBe(true);
+      // A refresh is NOT a load on hls.js: handing it another address would detach the media; nothing asked for the refreshed manifest.
+      expect(stub.requests.filter((u) => /\/refreshed-\d+\//.test(u)), "no request yet names the refreshed token").toEqual([]);
+      expect(stub.requests.filter((u) => /\/manifest\/video\.m3u8$/.test(u)).every((u) => u === first), "the manifest was only ever asked for under the first token").toBe(true);
+      await video.evaluate((el: HTMLVideoElement) => { el.muted = true; void el.play().catch(() => undefined); });
+      await expect
+        .poll(() => stub.requests.some((u) => /\/refreshed-\d+\/manifest\/seg0\.ts$/.test(u)), { message: "the segment went out under the refreshed token", timeout: 15_000 })
+        .toBe(true);
+      expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
     } finally {
       await finishSeaznMatch(m);
     }

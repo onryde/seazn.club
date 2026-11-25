@@ -15,7 +15,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayCourtStream, MatchDayFixture, MatchDayQueued } from "@/lib/match-day/types";
 import {
-  canLinkCourt, lastWorkingMinute, linkFailureKey, phoneKey, switchFailureKey, switchSpec, youtubeTargets,
+  canLinkCourt, lastWorkingMinute, linkFailureKey, phoneKey, switchFailureKey, switchSpec, courtTargets,
 } from "@/lib/match-day/court-stream";
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
@@ -23,7 +23,7 @@ import { CourtList } from "@/components/v2/match-day/court-list";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
 import publicEn from "@/dictionaries/en/public.json";
-import type { StreamTarget } from "@/server/api-v1/schemas";
+import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
 const dict = en as Dict;
@@ -77,15 +77,20 @@ const queued = (o: Partial<MatchDayFixture> = {}): MatchDayQueued => ({
   estimated_at: "2026-10-31T12:20:00.000Z",
 });
 
-const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => ({
-  link_id: "link-1",
-  target_label: "Riverside CC on YouTube",
-  expires_at: "2026-11-01T00:00:00.000Z",
-  phone: "waiting",
-  refusal: null,
-  tail_ends_at: null,
-  ...o,
-});
+const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => {
+  const phone = o.phone ?? "waiting";
+  // The pairing's claim comes from the same row as the status: none with no phone (T35 review m1).
+  return {
+    link_id: "link-1",
+    target_label: "Riverside CC on YouTube",
+    expires_at: "2026-11-01T00:00:00.000Z",
+    phone,
+    paired_at: phone === "unpaired" ? null : "2026-10-31T11:50:00.000Z",
+    refusal: null,
+    tail_ends_at: null,
+    ...o,
+  };
+};
 
 const court = (o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: "c-2",
@@ -468,17 +473,43 @@ describe("the channel picker", () => {
     inUse: null,
     youtube,
   } as StreamTarget);
+  const seazn = (id: string): StreamTarget => ({ ...target(id, null), kind: "seazn", label: `Dest ${id}` }) as StreamTarget;
   const yt = { connectionId: "c1", channelId: "UC1", channelTitle: "Riverside Live", privacy: "public", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 } as StreamTarget["youtube"];
   const pick = (list: StreamTarget[], d: Dict = dict) =>
     renderToStaticMarkup(<TargetPicker dict={d} state={{ status: "ok", list }} value={null} onChange={() => {}} />);
 
-  it("lists the YouTube channels only", () => {
-    const html = pick([target("a", yt), target("b", null)]);
-    expect(count(html, "md-cs-target")).toBe(1);
+  it("lists Seazn FIRST, then the connected YouTube channels; a pasted key is no court destination", () => {
+    const html = pick([target("a", yt), target("p", null), seazn("s")]);
+    expect(count(html, "md-cs-target")).toBe(2);
     expect(html).toContain("Dest a");
-    expect(html).not.toContain("Dest b");
-    expect(html).toContain("YouTube channel");
-    expect(youtubeTargets([target("a", yt), target("b", null)])).toHaveLength(1);
+    expect(html).not.toContain("Dest p");
+    expect(html.indexOf("Dest s"), "Seazn is listed before the channel").toBeGreaterThan(-1);
+    expect(html.indexOf("Dest s")).toBeLessThan(html.indexOf("Dest a"));
+    expect(html).toContain("Where to stream");
+    expect(html, "the Seazn card says no channel needs connecting").toContain("Hosted by Seazn. No channel to connect, one video per match.");
+    expect(count(html, "md-cs-target-seazn"), "one Seazn card").toBe(1);
+    expect(courtTargets([target("a", yt), target("p", null), seazn("s")]).map((t) => t.id)).toEqual(["s", "a"]);
+  });
+
+  it("swept over every destination kind (the schema's own list): only Seazn and a connected YouTube channel are court destinations; Seazn leads wherever it sits in the list", () => {
+    const kinds = StreamTargetKind.options;
+    expect(kinds, "PREMISE: the schema lists Seazn and YouTube").toEqual(expect.arrayContaining(["seazn", "youtube"]));
+    const all = kinds.map((kind) => ({ ...target(kind, kind === "youtube" ? yt : null), kind }) as StreamTarget);
+    let checked = 0;
+    for (const order of [all, [...all].reverse()]) {
+      const got = courtTargets(order).map((t) => t.kind);
+      expect(got, "Seazn first, then the one connected channel").toEqual(["seazn", "youtube"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(courtTargets([]), "the empty case").toEqual([]);
+    expect(courtTargets([seazn("s"), seazn("s2")]).length, "Seazn alone").toBe(2);
+  });
+
+  it("Seazn alone is a destination: no 'connect YouTube' box", () => {
+    const html = pick([seazn("s")]);
+    expect(count(html, "md-cs-target")).toBe(1);
+    expect(has(html, "md-cs-youtube-only")).toBe(false);
   });
 
   it("with none says why and links the Streaming page to connect one", () => {

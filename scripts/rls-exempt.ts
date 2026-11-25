@@ -54,6 +54,8 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "fixture_stream_codes",
   // Per-fixture stream settings, org_id from the code row; non-tenant sql only, zero policies, R1.
   "fixture_stream_settings",
+  // The club's default Score style and timing (V558, Task 38): V430's pattern — org_id from the authorised org, non-tenant sql only, zero policies, FORCE RLS (rls-static.test.ts).
+  "org_stream_defaults",
   // Court stream links (V525): one per (court, venue day), owning the court's code; non-tenant sql only, zero policies, FORCE RLS (rls-static.test.ts).
   "court_stream_links",
   // Phone pairings to a code (claim / takeover history); non-tenant sql only, zero policies, R1.

@@ -28,6 +28,8 @@ import { stopSession } from "./stream-sessions/stop";
 import { finishOwedStop } from "./stream-sessions/apply";
 import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
 import { fireNudge, nudgeCodesOver } from "./stream-sessions/nudge";
+import { seaznUnavailable } from "./stream-sessions/refusals";
+import { seaznClosed } from "./stream-targets";
 import { courtFactsOf, type CourtLinkRef } from "./court-stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
@@ -135,12 +137,17 @@ export async function linkCourtStream(
   const [court] = await sql<{ id: string }[]>`
     select id from courts where id = ${input.courtId} and org_id = ${auth.orgId} and archived_at is null`;
   if (!court) throw new HttpError(404, "court not found");
-  const [target] = await sql<{ id: string; yt: string | null }[]>`
-    select id, youtube_connection_id as yt from org_stream_targets
+  const [target] = await sql<{ id: string; yt: string | null; kind: string; offered: boolean }[]>`
+    select id, youtube_connection_id as yt, kind, offered from org_stream_targets
      where id = ${input.targetId} and org_id = ${auth.orgId} and archived_at is null`;
   if (!target) throw new HttpError(404, "target not found");
-  if (target.yt === null) {
-    throw new HttpError(422, "A court streams to a connected YouTube channel, not a pasted stream key", "court_destination_not_youtube");
+  // Task 37: a court streams to a connected YouTube channel OR to the org's Seazn destination — each match its own session on the
+  // link's target (a pasted key is one match's, never a court's). Seazn is accepted exactly when the pick and the start accept it
+  // (`seaznClosed`: the deployment's flag AND the org's switch), and refused by the pick's own 422 when it is not.
+  if (target.kind === "seazn") {
+    if (seaznClosed({ seazn: true, offered: target.offered })) throw seaznUnavailable();
+  } else if (target.yt === null) {
+    throw new HttpError(422, "A court streams to a connected YouTube channel or to Seazn, not a pasted stream key", "court_destination_unsupported");
   }
   const day = input.day ?? dayKeyInTz(now.getTime(), tz);
   const { opensAt, expiresAt } = dayBounds(day, tz);
@@ -443,16 +450,16 @@ export async function courtStreamsForDay(
   if (courtIds.length > 0) {
     const linkRows = await sql<{
       id: string; court_id: string; label: string; expires_at: Date; opens_at: Date; competition_id: string; target_id: string; court_name: string;
-      last_beat_at: Date | null; answered_poll_seconds: number | null; open_state: SessionState | null;
+      last_beat_at: Date | null; answered_poll_seconds: number | null; claimed_at: Date | null; open_state: SessionState | null;
       result_at: Date | null; session_predates_result: boolean | null; session_mode: string | null;
     }[]>`
-      select l.id, l.court_id, t.label, l.expires_at, l.opens_at, l.competition_id, l.target_id, c.name as court_name, p.last_beat_at, p.answered_poll_seconds, s.state as open_state,
+      select l.id, l.court_id, t.label, l.expires_at, l.opens_at, l.competition_id, l.target_id, c.name as court_name, p.last_beat_at, p.answered_poll_seconds, p.claimed_at, s.state as open_state,
              s.result_at, s.session_predates_result, s.session_mode
         from court_stream_links l
         join org_stream_targets t on t.id = l.target_id
         join courts c on c.id = l.court_id
         left join lateral (
-          select p.last_beat_at, p.answered_poll_seconds
+          select p.last_beat_at, p.answered_poll_seconds, p.claimed_at
             from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
            where k.court_link_id = l.id and k.ended_at is null and p.ended_at is null
            order by p.claimed_at desc, p.id desc limit 1) p on true
@@ -487,6 +494,8 @@ export async function courtStreamsForDay(
           pairing: r.last_beat_at === null ? null : { lastBeatAt: new Date(r.last_beat_at), answeredPoll: r.answered_poll_seconds! },
           openState: r.open_state,
         }, now),
+        // T35 review m1: the pairing's claim, under the same predicate as `phone` (no row → unpaired, and no claim).
+        paired_at: r.last_beat_at === null || r.claimed_at === null ? null : new Date(r.claimed_at).toISOString(),
         refusal: null,
         tail_ends_at: tailEnd === null ? null : tailEnd.toISOString(),
       });

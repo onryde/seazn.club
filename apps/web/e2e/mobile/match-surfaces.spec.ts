@@ -473,7 +473,7 @@ function nlPhoneRead(): Record<string, unknown> {
     code: { issuedAt: at, state: "active", endCause: null },
     phone: {
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator", state: "publishing",
-      notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: at, elapsedMs: 5_000,
+      notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: at, lastBeatAt: at, elapsedMs: 5_000,
       beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
     },
     destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null,

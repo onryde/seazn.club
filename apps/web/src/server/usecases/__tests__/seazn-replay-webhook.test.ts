@@ -4,7 +4,7 @@
 // so each copy on the replay fake is the one the move fetched, under the title the move gave it. The webhook is a TRIGGER, never
 // trust (the binding rule): a "playable" event runs the mover's own check (`verifyReplayCopy`) on the host's own read of the copy.
 // The expected values are the rulings' literals, typed here: the Cloudflare delete 60 min after verification (G-D), a first
-// failure's backoff of 1 min (min(2^0, 60)), the fake's 120 s copy against a 1080p source (720p required, ±2 s).
+// failure's backoff of 1 min (min(2^0, 60)), the fake's 120 s copy against a 1080p source (the source's own 1080 rung required, ±2 s).
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the webhook reads no sport rule; every rig rides `generic`.
 import { randomUUID } from "node:crypto";
@@ -127,7 +127,7 @@ describe.skipIf(!HAS_DB)("applyBunnyEvent — the Bunny Stream webhook (Task 27)
     expect(del.mock.calls.map((c) => c[0]).sort(), "the mover's delete, by each row's own id, at 60 min").toEqual([p1.cf_video_id, p2.cf_video_id].sort());
   });
 
-  it("a copy that FAILS the check is left encoding with nothing written — its length 3 s off the recording's, or (a status 4 before it exists) no 720p rendition for a 1080p source — and the next poll judges it", async () => {
+  it("a copy that FAILS the check is left encoding with nothing written — its length 3 s off the recording's, or (a status 4 before it exists) no 1080 rendition for a 1080p source — and the next poll judges it", async () => {
     const w = await world(2);
     const [short, early] = w.rows as [typeof w.rows[0], typeof w.rows[0]];
     for (const row of w.rows) w.host.advance(row.bunny_video_id!);
@@ -135,17 +135,17 @@ describe.skipIf(!HAS_DB)("applyBunnyEvent — the Bunny Stream webhook (Task 27)
     const realVideo = w.host.video.bind(w.host);
     const video = vi.spyOn(w.host, "video").mockImplementation(async (id) => {
       const v = await realVideo(id);
-      return id === early.bunny_video_id ? { ...v, heights: v.heights.filter((h) => h !== 720) } : v;
+      return id === early.bunny_video_id ? { ...v, heights: v.heights.filter((h) => h !== 1080) } : v;
     });
     const before = [await rowOf(short.id), await rowOf(early.id)];
     const e1 = event(short.bunny_video_id!, 4);
     const e2 = event(early.bunny_video_id!, 4);
     expect(await applyBunnyEvent(w.hook, e1, w.now), "3 s short").toBe("ignored");
-    expect(await applyBunnyEvent(w.hook, e2, w.now), "no 720p yet").toBe("ignored");
+    expect(await applyBunnyEvent(w.hook, e2, w.now), "no 1080p yet").toBe("ignored");
     expect(video, "PREMISE: the host's own read was checked, once each").toHaveBeenCalledTimes(2);
     expect([await rowOf(short.id), await rowOf(early.id)], "nothing written").toEqual(before);
     expect([await marksOf(e1.eventId), await marksOf(e2.eventId)], "each event is marked as handled").toEqual([1, 1]);
-    // The next poll (Task 24) reads the host's finished copy itself: the short one fails its check, the other now lists 720p.
+    // The next poll (Task 24) reads the host's finished copy itself: the short one fails its check, the other now lists 1080p.
     video.mockRestore();
     await w.d.move(w.d.t0 + 15 * MIN);
     expect([(await rowOf(short.id)).state, (await rowOf(early.id)).state]).toEqual(["failed", "playable"]);

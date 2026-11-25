@@ -15,10 +15,16 @@ const m = vi.hoisted(() => ({
   hasFeature: vi.fn<(orgId: string, key: string, competitionId?: string) => Promise<boolean>>(),
   requirePageAuth: vi.fn(),
   listStreamTargets: vi.fn<() => Promise<{ id: string; label: string }[]>>(async () => []),
+  seaznOfferOf: vi.fn<(orgId: string) => Promise<{ offered: boolean }>>(async () => ({ offered: true })),
   hasLiveConnection: vi.fn<(orgId: string) => Promise<boolean>>(async () => false),
   expireTargetHolders: vi.fn(async () => undefined),
   defaultDeps: vi.fn((appUrl: string) => ({ appUrl, marker: "deps" })),
   captureError: vi.fn(),
+  orgStreamDefaultsOf: vi.fn(async () => ({ overlayTemplate: "bug", overlayDelayMs: 4500, revision: 2 })),
+  clubScorePreview: vi.fn(async () => ({
+    sports: [{ key: "football", name: "Football" }, { key: "cricket", name: "Cricket" }], fallback: false,
+    snapshots: { football: { status: "in_play" }, cricket: { status: "in_play" } }, sides: [{ id: "home", name: "H" }, { id: "away", name: "A" }],
+  })),
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
@@ -26,20 +32,29 @@ vi.mock("@/server/page-auth", () => ({ requireOrgPage: m.requirePageAuth }));
 vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
-vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
+vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets, seaznOfferOf: m.seaznOfferOf }));
 // The one read the disconnect-only page adds; the real query is DB-tested in youtube-connections-routes.test.ts.
 vi.mock("@/server/youtube/connections", () => ({ hasLiveConnection: m.hasLiveConnection }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   expireTargetHolders: m.expireTargetHolders, defaultDeps: m.defaultDeps, relayCredits: async () => ({ total: 0, monthly: 0, pack: 0, monthlyAllowance: 0 }),
 }));
+// Task 38: the club's Score style and timing — the two server reads, and the section itself as a marker that shows what it was handed.
+vi.mock("@/server/usecases/org-stream-defaults", () => ({ orgStreamDefaultsOf: m.orgStreamDefaultsOf }));
+vi.mock("@/server/stream-club-score", () => ({ clubScorePreview: m.clubScorePreview }));
+vi.mock("@/components/v2/stream-club-score", () => ({
+  StreamClubScore: (p: { orgId: string; canEdit: boolean; stored: { overlayTemplate: string | null; overlayDelayMs: number | null }; defaultMs: number; courtDefaultMs: number; sports: { key: string }[] }) => (
+    <div data-testid="club-score-stub" data-org={p.orgId} data-can-edit={String(p.canEdit)} data-template={p.stored.overlayTemplate ?? "none"} data-delay={String(p.stored.overlayDelayMs)} data-default-ms={String(p.defaultMs)} data-court-ms={String(p.courtDefaultMs)} data-sports={p.sports.map((x) => x.key).join(",")} />
+  ),
+}));
 // Client islands → identifiable markers.
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel renders the labels it is handed, so a test can see the LIST arrive, not only the panel.
 vi.mock("@/components/v2/stream-destinations-panel", () => ({
-  StreamDestinationsPanel: ({ targets, canEdit, landing }: { targets: { id: string; label: string }[]; canEdit: boolean; landing?: { code: string; pendingId: string | null } | null }) => (
+  StreamDestinationsPanel: ({ targets, canEdit, landing, seazn }: { targets: { id: string; label: string }[]; canEdit: boolean; landing?: { code: string; pendingId: string | null } | null; seazn?: { offered: boolean } | null }) => (
     <div
       data-testid="stream-destinations-panel"
       data-can-edit={String(canEdit)}
+      data-seazn={seazn ? String(seazn.offered) : "none"}
       data-landing-code={landing ? landing.code : "none"}
       data-landing-pending={landing?.pendingId ?? "none"}
     >
@@ -58,7 +73,9 @@ vi.mock("@/components/v2/youtube-disconnect-only-panel", () => ({
 }));
 
 import StreamingPage from "../page";
+import { HttpError } from "@/lib/errors";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { COURT_PHONE_OVERLAY_DELAY_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
@@ -77,10 +94,13 @@ beforeEach(() => {
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
+  m.seaznOfferOf.mockReset().mockResolvedValue({ offered: true });
   m.hasLiveConnection.mockReset().mockResolvedValue(false);
   m.expireTargetHolders.mockReset().mockResolvedValue(undefined);
   m.defaultDeps.mockClear();
   m.captureError.mockClear();
+  m.orgStreamDefaultsOf.mockClear();
+  m.clubScorePreview.mockClear();
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });   // a deployment that can start a stream
 });
 afterEach(() => setRelayDriversForTest(null));
@@ -99,6 +119,50 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
     expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
     expect(m.expireTargetHolders.mock.invocationCallOrder[0]!, "the expiry runs BEFORE the list it unlocks")
       .toBeLessThan(m.listStreamTargets.mock.invocationCallOrder[0]!);
+  });
+
+  // Task 38: the page reads the club's stored defaults and the preview for THIS org, once each, and hands them to the section — and the
+  // disconnect-only and not-offered pages read and draw none of it (a page for an org that cannot go live has no score to style).
+  it("Task 38: the OFFERED page hands the club section the org's stored defaults, the server's default delay and the preview's sports — and canEdit as the page's own", async () => {
+    const html = await render();
+    expect(html).toContain('data-testid="club-score-stub"');
+    expect(html).toContain(`data-org="${ORG}"`);
+    expect(html).toContain('data-template="bug"');
+    expect(html).toContain('data-delay="4500"');
+    expect(html).toContain(`data-default-ms="${RELAY_OVERLAY_DELAY_DEFAULT_MS}"`);
+    expect(html, "the court's own default, from config").toContain(`data-court-ms="${COURT_PHONE_OVERLAY_DELAY_MS}"`);
+    expect(html).toContain('data-sports="football,cricket"');
+    expect(html, "the section's own stub, not the destinations panel's").toMatch(/data-testid="club-score-stub"[^>]*data-can-edit="true"/);
+    expect(m.orgStreamDefaultsOf.mock.calls).toEqual([[ORG]]);
+    expect(m.clubScorePreview.mock.calls.map((c) => (c as unknown[])[0])).toEqual([ORG]);
+    expect(html.indexOf(PANEL), "under the destinations").toBeLessThan(html.indexOf('data-testid="club-score-stub"'));
+  });
+
+  it("Task 38: a member who cannot edit still gets the section, with canEdit false (the route's write gate decides what they may change)", async () => {
+    m.requirePageAuth.mockResolvedValue({
+      auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null },
+      org: { id: ORG, name: "Riverside CC", slug: "riverside", role: "viewer" },
+      canEdit: false,
+    });
+    const html = await render();
+    expect(html).toContain('data-testid="club-score-stub"');
+    // On the section's OWN stub: the destinations panel's stub carries a data-can-edit too, and would satisfy a bare probe.
+    expect(html).toMatch(/data-testid="club-score-stub"[^>]*data-can-edit="false"/);
+    expect(html).toContain('data-template="bug"');
+  });
+
+  it("Task 38: not offered → a 404 that read none of the club's data; the disconnect-only page draws no club section and reads none", async () => {
+    m.hasFeature.mockResolvedValue(false);
+    await expect(render()).rejects.toMatchObject(NOT_FOUND);
+    expect(m.orgStreamDefaultsOf).not.toHaveBeenCalled();
+    expect(m.clubScorePreview).not.toHaveBeenCalled();
+    m.hasFeature.mockResolvedValue(false);
+    m.hasLiveConnection.mockResolvedValue(true);
+    const html = await render();
+    expect(html, "premise: the restricted page rendered").toContain(DISCONNECT_ONLY);
+    expect(html).not.toContain('data-testid="club-score-stub"');
+    expect(m.orgStreamDefaultsOf).not.toHaveBeenCalled();
+    expect(m.clubScorePreview).not.toHaveBeenCalled();
   });
 
   it("R-3 (re-review): the expiry tick is best-effort — when it THROWS (a due expiry's provider effect failing), the error is reported once and the destinations are still listed; a stuck holder simply stays until the next load", async () => {
@@ -342,5 +406,82 @@ describe("Streaming page — the disconnect-only page for an org that is not off
     await expect(render()).rejects.toMatchObject(NOT_FOUND);
     expect(m.listStreamTargets).not.toHaveBeenCalled();
     expect(m.expireTargetHolders).not.toHaveBeenCalled();
+  });
+});
+
+// Task 33b: the Seazn Hosted card reads the org's switch through the page — never the list, which leaves Seazn out while the switch is
+// off (T33's `seaznWhere`): the card would otherwise vanish with the one control that turns it back on.
+describe("Streaming page — the org's Seazn switch reaches the panel (Task 33b)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const live = (v: string) => vi.stubEnv("SEAZN_HOSTED_LIVE", v);
+
+  it("LIVE on: the switch is read for THIS org, once, and handed to the panel — on and off (2 checked)", async () => {
+    live("true");
+    let checked = 0;
+    for (const offered of [true, false]) {
+      m.seaznOfferOf.mockClear().mockResolvedValue({ offered });
+      const html = await render();
+      expect(m.seaznOfferOf, String(offered)).toHaveBeenCalledTimes(1);
+      expect(m.seaznOfferOf, String(offered)).toHaveBeenCalledWith(ORG);
+      expect(html, String(offered)).toContain(`data-seazn="${offered}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("OFF with nothing of the org's own: the list is empty (as the server sends it while off) and the switch still reaches the panel, off", async () => {
+    live("true");
+    m.listStreamTargets.mockResolvedValue([]);
+    m.seaznOfferOf.mockResolvedValue({ offered: false });
+    expect(await render()).toContain('data-seazn="false"');
+  });
+
+  it("LIVE off (the default, and every deployment until the owner turns it on): the switch is not read and the panel draws no card", async () => {
+    let checked = 0;
+    for (const v of ["", "false"]) {
+      live(v);
+      m.seaznOfferOf.mockClear();
+      const html = await render();
+      expect(m.seaznOfferOf, JSON.stringify(v)).not.toHaveBeenCalled();
+      expect(html, JSON.stringify(v)).toContain('data-seazn="none"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a viewer gets the switch too (the card shows it read-only) — canEdit stays false", async () => {
+    live("true");
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
+    const html = await render();
+    expect(html).toContain('data-seazn="true"');
+    expect(html).toContain('data-can-edit="false"');
+  });
+
+  it("an org with no Seazn row (no product path makes one, so it is reported): the page still renders, without the card", async () => {
+    live("true");
+    const missing = new HttpError(404, "the Seazn destination was not found");
+    m.seaznOfferOf.mockRejectedValue(missing);
+    const html = await render();
+    expect(html).toContain(PANEL);
+    expect(html).toContain('data-seazn="none"');
+    expect(m.captureError).toHaveBeenCalledTimes(1);
+    expect(m.captureError).toHaveBeenCalledWith(missing, expect.objectContaining({ orgId: ORG, route: "streaming.seazn_offer" }));
+  });
+
+  it("any OTHER failure reading the switch is not swallowed: the page fails as it does when the list fails", async () => {
+    live("true");
+    const boom = new Error("connection terminated");
+    m.seaznOfferOf.mockRejectedValue(boom);
+    await expect(page()).rejects.toBe(boom);
+    expect(m.captureError, "not reported as the missing row").not.toHaveBeenCalled();
+  });
+
+  it("the restricted page (an org that cannot go live) draws no card and never reads the switch", async () => {
+    live("true");
+    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
+    m.hasLiveConnection.mockResolvedValue(true);
+    const html = await render();
+    expect(html, "premise: the restricted page").toContain(DISCONNECT_ONLY);
+    expect(m.seaznOfferOf).not.toHaveBeenCalled();
   });
 });

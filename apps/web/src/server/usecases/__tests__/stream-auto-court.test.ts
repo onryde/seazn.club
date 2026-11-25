@@ -44,7 +44,7 @@ async function runTails(): Promise<number> {
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
-import { AUTO_START_RETRY_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, COURT_PHONE_OVERLAY_DELAY_MS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -53,6 +53,7 @@ import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { endReplacedCourtSession, postBeat } from "../capture-phone";
 import { postCourtStart } from "../capture-court";
+import { saveOrgStreamDefaults } from "../org-stream-defaults";
 import type { ResolvedCourtCode } from "../court-stream-codes";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { resolveAnyStreamCode } from "../stream-codes";
@@ -416,6 +417,51 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     });
     it("the organiser's Score timing (2.5 s) wins", async () => {
       expect(await composedCourtStart(2500)).toBe(2500);
+    });
+  });
+
+  // Seazn-hosted video, Task 38 (V558): the club's defaults on a COURT stream. The owner's rule (ledger 504, 2026-11-24): the club's
+  // STYLE applies to courts like any other stream; the club's TIMING applies to MATCH streams only — a court keeps its own default
+  // (0 s) however the club set its timing, and the match's own timing still wins.
+  describe("Task 38: the club's style reaches a court stream, its timing does not", () => {
+    const composedCourtSession = async (opts: { club: { overlayTemplate?: string | null; overlayDelayMs?: number | null } | null; stored?: { overlayTemplate?: string; overlayDelayMs?: number } }) => {
+      const prev = { image: process.env.RELAY_IMAGE, secret: process.env.AUTH_SECRET };
+      process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-club-style-test";
+      process.env.AUTH_SECRET = "stream-auto-court-club-style-test-secret";
+      try {
+        await streamOn(A);
+        if (opts.club !== null) await saveOrgStreamDefaults(day.auth, day.orgId, opts.club);
+        if (opts.stored?.overlayTemplate !== undefined) await sql`update fixture_stream_settings set overlay_template = ${opts.stored.overlayTemplate} where fixture_id = ${A}`;
+        if (opts.stored?.overlayDelayMs !== undefined) await sql`update fixture_stream_settings set overlay_delay_ms = ${opts.stored.overlayDelayMs} where fixture_id = ${A}`;
+        await kickoff(A, 0);
+        const go = await kick();
+        if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
+        const [s] = await sql<{ mode: string; court_link_id: string | null; theme_id: string | null; overlay_delay_ms: number }[]>`
+          select mode, court_link_id, theme_id, overlay_delay_ms from fixture_stream_sessions where id = ${go.sid}`;
+        expect(s, "premise: a composed COURT session").toMatchObject({ mode: "composed", court_link_id: linkId });
+        return s!;
+      } finally {
+        if (prev.image === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = prev.image;
+        if (prev.secret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = prev.secret;
+      }
+    };
+    it("the club's style 'bar' + timing 4.5 s: the court gets the STYLE and keeps its own 0 s (the premise: 4.5 s is neither 0 nor the match default)", async () => {
+      expect(COURT_PHONE_OVERLAY_DELAY_MS, "premise").toBe(0);
+      expect(4500).not.toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+      const s = await composedCourtSession({ club: { overlayTemplate: "bar", overlayDelayMs: 4500 } });
+      expect(s.theme_id, "the club's style reaches the court").toBe("bar");
+      expect(s.overlay_delay_ms, "the club's timing does NOT").toBe(COURT_PHONE_OVERLAY_DELAY_MS);
+    });
+    it("the club's timing alone, with no style: a court still serves ITS default and no theme", async () => {
+      expect(await composedCourtSession({ club: { overlayDelayMs: 4500 } })).toMatchObject({ theme_id: null, overlay_delay_ms: COURT_PHONE_OVERLAY_DELAY_MS });
+    });
+    it("the match's own timing and style still win on a court, over the club's", async () => {
+      const s = await composedCourtSession({ club: { overlayTemplate: "bar", overlayDelayMs: 4500 }, stored: { overlayTemplate: "bug", overlayDelayMs: 2500 } });
+      expect(s.theme_id, "the match's own style").toBe("bug");
+      expect(s.overlay_delay_ms, "the match's own timing").toBe(2500);
+    });
+    it("no club row: the court's session carries no theme and 0 s, as before", async () => {
+      expect(await composedCourtSession({ club: null })).toMatchObject({ theme_id: null, overlay_delay_ms: COURT_PHONE_OVERLAY_DELAY_MS });
     });
   });
 

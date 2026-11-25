@@ -209,6 +209,22 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     expect((await sessionRow(first)).state, "the first match is still live").toBe("live");
   });
 
+  it("Task 36d: TWO fixtures start on Seazn at the SAME moment — the target row lock queues them, nothing deadlocks, both are admitted (the one_active_target index carves Seazn out)", async () => {
+    const r = await rig();
+    const [f1, f2] = r.fixtureIds;
+    const settled = await Promise.allSettled([
+      goLive(r, f1!, { mode: "composed", targetId: r.seazn }),
+      goLive(r, f2!, { mode: "composed", targetId: r.seazn }),
+    ]);
+    const refused = settled.flatMap((s) => (s.status === "rejected" ? [s.reason as { code?: string; message?: string }] : []));
+    expect(refused.map((e) => `${e.code ?? "no code"}: ${e.message ?? ""}`), "neither start is refused").toEqual([]);
+    const ids = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value.sessionId] : []));
+    const active = await sql<{ id: string }[]>`
+      select id from fixture_stream_sessions where target_id = ${r.seazn} and state in ${sql([...ACTIVE_STATES])} order by id`;
+    expect(active.map((a) => a.id).sort()).toEqual([...ids].sort());
+    expect(ids).toHaveLength(2);
+  });
+
   it("LIVE off: a Go live naming the Seazn row is 422 seazn_unavailable — zero provider calls, no row, no pre-pick, no key read; the same org's pasted key still starts", async () => {
     const r = await rig();
     const [f1, f2] = r.fixtureIds;

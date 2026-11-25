@@ -5,6 +5,11 @@
 // Follows venues-panel.tsx: inline forms and cards, no modals, `useConfirm` for Remove, `router.refresh()` after each
 // mutation, `apiV1` for every call.
 //
+// Task 33b: the Seazn Hosted card (seazn-destination-card.tsx) sits at the top when the page hands it the org's switch (`seazn`, read by
+// the page with SEAZN_HOSTED_LIVE on), followed by a "Your own channels" divider over Connect YouTube, Add streaming key and the lists.
+// The Seazn destination is never a row of the list any more: the card is its one place, drawn from the switch, never from `targets`
+// (the list leaves Seazn out while the switch is off, and the card must stay to turn it back on).
+//
 // Copy: every refusal is mapped from its machine CODE to this page's own dictionary (`destinationErrorText`). The
 // server's `message` is English API prose and is never rendered — venues-panel's "show err.message" fallback is exactly
 // what this file does not copy (B2 review).
@@ -17,6 +22,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import {
   ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
   type StreamPlatform, SEAZN_TARGET_FIXED,
@@ -25,6 +31,7 @@ import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
 import { useStreamingHref } from "@/components/use-org-paths";
 import { type YoutubeLanding } from "@/lib/youtube";
+import { SeaznDestinationCard } from "./seazn-destination-card";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import {
   YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
@@ -47,10 +54,6 @@ export function destinationMutationOutcome(status: number, _op: RowOp): "refresh
 export function rowLock(t: Pick<StreamTarget, "inUse">): { locked: boolean; matchNo: number | null } {
   return t.inUse ? { locked: true, matchNo: t.inUse.matchNo } : { locked: false, matchNo: null };
 }
-
-/** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth` → entitlement-freeze.ts
- *  `assertMemberNotFrozen`): a 402 PAYMENT_REQUIRED whose `feature_key` is the member limit. */
-const FROZEN_SEAT_FEATURE = "members.max";
 
 /**
  * A refusal as this page's own sentence, by the route's machine code (openapi.ts documents each one). `kind` is the
@@ -112,7 +115,7 @@ type Run = <T>(op: Op, kind: StreamTargetKind, call: () => Promise<T>) => Promis
 type AddBody = { kind: StreamPlatform; label: string; streamKey: string; watchUrl?: string };
 
 export function StreamDestinationsPanel({
-  orgId, canEdit, targets, locale, landing = null, initialAddOpen = false, initialConnectOpen = false,
+  orgId, canEdit, targets, locale, landing = null, seazn = null, initialAddOpen = false, initialConnectOpen = false,
 }: {
   orgId: string;
   /** Owner or admin (the page's `canEdit`, the API's write gate). Every member sees the list; only these see actions. */
@@ -123,6 +126,9 @@ export function StreamDestinationsPanel({
   /** What the YouTube connect round trip landed with (`?youtube=<code>[&pending=<id>]`, read once by the page): a banner, or the
    *  channel picker for a `pick`. Everyone who can see the page sees the banner; only an editor gets the picker. */
   landing?: YoutubeLanding | null;
+  /** The org's Seazn switch (Task 33b), read by the page with SEAZN_HOSTED_LIVE on: draws the Seazn Hosted card and the "Your own
+   *  channels" divider. Null (LIVE off, the restricted page) draws neither, and the page is what it was before the card. */
+  seazn?: { offered: boolean } | null;
   /** Test seam: opens the add form on first render. The page never passes it. */
   initialAddOpen?: boolean;
   /** Test seam: opens the YouTube consent step on first render. The page never passes it. */
@@ -180,12 +186,15 @@ export function StreamDestinationsPanel({
   // The connected channels and the pasted-key destinations are told apart by what the row CARRIES, not by its kind.
   // The channel picker is the way in while it is open (`?youtube=pick`): the empty card's Connect YouTube would be a second one.
   const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
-  // The Seazn row is neither a channel nor a pasted key (Task 16 review I1): it is drawn first, under no heading, so it never reads as a key.
-  // It is the one row told apart by its KIND, and it is left out of BOTH other lists, so one target is always one row (the database
-  // refuses a seazn row that names a connection, V541 org_stream_targets_one_source; the panel does not lean on that).
-  const seaznRows = targets.filter((t) => t.kind === "seazn");
-  const channels = targets.filter((t) => t.youtube !== null && t.kind !== "seazn");
-  const keys = targets.filter((t) => t.youtube === null && t.kind !== "seazn");
+  // The Seazn destination is neither a channel nor a pasted key (Task 16 review I1), told apart by its KIND, and since Task 33b it is no
+  // row of the list at all: the card above is its one place. `own` is what the org brought itself — the channels and the pasted keys
+  // (the database refuses a seazn row that names a connection, V541 org_stream_targets_one_source; the panel does not lean on that).
+  const own = targets.filter((t) => t.kind !== "seazn");
+  const channels = own.filter((t) => t.youtube !== null);
+  const keys = own.filter((t) => t.youtube === null);
+  // With the card, the org's own channels are a section of their own under a divider: there is no "No destinations yet" (Seazn IS one),
+  // an editor's two ways in sit under the divider whatever the org has, and a viewer with nothing of the org's own is told so.
+  const divided = seazn !== null;
   // Connect YouTube is the primary way in and comes first; Add streaming key (a pasted key) is the secondary one (owner 2026-10-30).
   const connectButton = (testid: string) => (
     <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-primary min-h-11">
@@ -199,7 +208,17 @@ export function StreamDestinationsPanel({
       {landing && landing.code !== "pick" && !landingCleared && <YoutubeLandingNotice code={landing.code} />}
       {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
       {disconnected !== null && <YoutubeDisconnectedNotice key={`${disconnected.name}:${disconnected.outcome}:${disconnected.keysLeft}`} name={disconnected.name} outcome={disconnected.outcome} keysLeft={disconnected.keysLeft} onDismiss={() => setDisconnected(null)} />}
-      {canEdit && targets.length > 0 && (
+      {seazn !== null && <SeaznDestinationCard orgId={orgId} offered={seazn.offered} canEdit={canEdit} />}
+      {divided && (
+        <div data-testid="stream-own-divider" className="pt-4">
+          <h2 className="flex items-center gap-3 text-sm font-semibold text-slate-700 after:h-px after:flex-1 after:bg-slate-200 after:content-['']">
+            {msg("streaming.own.heading")}
+          </h2>
+          {/* The line is an instruction ("connect it, or add its streaming key"): only an editor has the buttons to follow it. */}
+          {canEdit && <p className="mt-1 text-sm text-slate-500">{msg("streaming.own.sub")}</p>}
+        </div>
+      )}
+      {canEdit && (own.length > 0 || divided) && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
           {connectButton("youtube-connect")}
           <button
@@ -242,7 +261,11 @@ export function StreamDestinationsPanel({
         />
       )}
       {addError && errorLine(addError)}
-      {targets.length === 0 ? (
+      {own.length === 0 && divided ? (
+        !canEdit && (
+          <p data-testid="stream-own-empty" className="text-sm text-slate-500">{msg("streaming.own.empty")}</p>
+        )
+      ) : own.length === 0 ? (
         <div data-testid="stream-dest-empty" className="card flex flex-col items-center gap-3 p-8 text-center max-md:p-5">
           <span aria-hidden className="grid h-11 w-11 place-items-center rounded-full bg-purple-50 text-purple-700">
             <MonitorPlay className="h-5 w-5" strokeWidth={1.75} />
@@ -262,15 +285,6 @@ export function StreamDestinationsPanel({
         </div>
       ) : (
         <div className="space-y-4">
-          {seaznRows.length > 0 && (
-            <section>
-              <div className="card overflow-visible">
-                <ul data-testid="seazn-destination-list" className="divide-y divide-slate-100" aria-label={msg("stream.dest.kind.seazn")}>
-                  {seaznRows.map((t) => <SeaznRow key={t.id} t={t} />)}
-                </ul>
-              </div>
-            </section>
-          )}
           {channels.length > 0 && (
             <section>
               {keys.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.youtube.channels")}</h2>}
@@ -499,24 +513,6 @@ function badgeOf(t: StreamTarget, msg: Msg): ReactNode {
 }
 
 const ACTION = "btn min-h-11 px-2.5";
-
-/** Task 16: the Seazn row is fixed — always available, nothing to rename, re-key or remove (the server refuses all three, `seazn_destination_fixed`),
- *  so the list draws it with this and never mounts the editable row. */
-export function SeaznRow({ t }: { t: StreamTarget }) {
-  const msg = useMsg();
-  return (
-    <li data-testid="stream-dest-row" data-target-id={t.id} data-fixed="seazn" className="px-4 py-3">
-      <div className="flex items-start gap-3 md:items-center">
-        <PlatformMark kind="seazn" size="md" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold text-slate-900">{msg("stream.dest.kind.seazn")}</p>
-          {/* Phase 1 visual D2: wraps (es/fr/nl are cut at 320, and the cut part is what it does) — no truncate, no clamp. */}
-          <p data-testid="stream-dest-subline" className="text-xs text-slate-500">{msg("stream.dest.seazn.sub")}</p>
-        </div>
-      </div>
-    </li>
-  );
-}
 
 export function DestinationRow({
   t, canEdit, locale, orgId, run,

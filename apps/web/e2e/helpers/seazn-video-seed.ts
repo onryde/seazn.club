@@ -121,14 +121,15 @@ export async function finishSeaznMatch(m: SeaznSession): Promise<void> {
 /** `n` recordings locked under the session's programme input, the row the stream tick's Seazn pass writes (V540: uid, input, lock time),
  *  in lock order, the first the oldest. The pass itself is proved in vitest (seazn-recordings.test.ts) and by the walkthrough's own tick
  *  (walkthrough/seazn-hosted.spec.ts step 7); what the specs that use this prove is what the PAGE does once a recording exists. The route
- *  lists only a TERMINAL session's recordings, so `finishSeaznMatch` first. Returns the video ids. */
+ *  lists only a TERMINAL session's recordings, so `finishSeaznMatch` first. Each is READY (`ready_at` set, Task 39): Cloudflare can play
+ *  it, which is the only kind the route offers. Returns the video ids. */
 export async function lockRecordings(m: SeaznSession, n: number): Promise<string[]> {
   return withDb(async (sql) => {
     const [input] = await sql<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${m.sessionId} and role = 'programme'`;
     expect(input, "premise: the session has its programme input (`goLive` writes it)").toBeTruthy();
     const ids = Array.from({ length: n }, (_, i) => `e2e-recording-${randomBytes(6).toString("hex")}-${i + 1}`);
     for (const [i, videoId] of ids.entries()) {
-      await sql`insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at) values (${videoId}, ${input!.id}, now() - ${(n - i) * 60_000} * interval '1 millisecond')`;
+      await sql`insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at, ready_at) values (${videoId}, ${input!.id}, now() - ${(n - i) * 60_000} * interval '1 millisecond', now() - ${(n - i) * 60_000} * interval '1 millisecond')`;
     }
     return ids;
   });
@@ -138,21 +139,57 @@ export async function lockRecordings(m: SeaznSession, n: number): Promise<string
  *  asks for nothing more. Served in place of the fake host (`playback.fake.invalid` never resolves). */
 export const STUB_MANIFEST = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nseg0.ts\n#EXT-X-ENDLIST\n";
 
+/** A master playlist of one 16:9 rung per height (240p..1080p is Cloudflare's live ladder, seazn-hosted-probes.md C4), BANDWIDTH rising with the
+ *  height. Rung URLs are `rung-<height>.m3u8`, relative to the master. CODECS is on every rung, as Cloudflare's is: hls.js's level cap only
+ *  starts at the manifest parse when the manifest signals a video codec (cap-level-controller.ts `onManifestParsed`), else after the first
+ *  fragment, which would leave the start rung uncapped. */
+export const STUB_LADDER_HEIGHTS: readonly number[] = [240, 360, 480, 720, 1080];
+/** A rung's width: 16:9, even. The one place the ladder's widths are made (the master's RESOLUTION and the specs' oracle read it). */
+export const stubRungWidth = (height: number): number => Math.round((height * 16) / 9 / 2) * 2;
+const stubMaster = (heights: readonly number[]): string =>
+  `#EXTM3U\n#EXT-X-VERSION:3\n${heights
+    .map((h) => `#EXT-X-STREAM-INF:BANDWIDTH=${h * 4000},AVERAGE-BANDWIDTH=${h * 3000},RESOLUTION=${stubRungWidth(h)}x${h},CODECS="avc1.64001f,mp4a.40.2"\nrung-${h}.m3u8\n`)
+    .join("")}`;
+
 const FAKE_HOST_URL = /^https:\/\/playback\.fake\.invalid\//;
 const CORS = { "access-control-allow-origin": "*" };
 
 /** Answers the fake playback host (it never resolves) the way a Stream customer host answers a manifest, and records every request
  *  made to it. `healthy()` turns it from refusing (503) to serving; it starts healthy. This is the browser's stand-in for Cloudflare
  *  ONLY: the signed ADDRESS under test is the real server's, and the request URL is what the specs assert. */
-export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean } = {}): Promise<{ requests: string[]; healthy: (on: boolean) => void }> {
+export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean; ladder?: readonly number[] } = {}): Promise<{ requests: string[]; healthy: (on: boolean) => void }> {
   const requests: string[] = [];
   let up = o.healthy ?? true;
   await page.route(FAKE_HOST_URL, async (route) => {
-    requests.push(route.request().url());
+    const url = route.request().url();
+    requests.push(url);
     if (!up) return route.fulfill({ status: 503, headers: CORS, body: "unavailable" });
+    // With a ladder the address answers as a Cloudflare MASTER playlist (one rung per height, `rung-<height>.m3u8`, ascending BANDWIDTH
+    // as hls.js orders them) and each rung as a media playlist: the specs read which rung hls.js asked for (Task 42). Without one every
+    // request gets the one-segment manifest, as before.
+    if (o.ladder !== undefined) {
+      if (/\/manifest\/video\.m3u8$/.test(url)) {
+        return route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", headers: CORS, body: stubMaster(o.ladder) });
+      }
+      // The one segment every rung names (`seg0.ts`, STUB_MANIFEST): a 188-byte (one TS packet) body, so a fetch is answered, not refused.
+      if (/\/seg0\.ts$/.test(url)) return route.fulfill({ status: 200, contentType: "video/mp2t", headers: CORS, body: Buffer.alloc(188) });
+      if (!/\/rung-\d+\.m3u8$/.test(url)) return route.fulfill({ status: 404, headers: CORS, body: "unexpected request to the stub" });
+    }
     return route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", headers: CORS, body: STUB_MANIFEST });
   });
   return { requests, healthy: (on) => void (up = on) };
+}
+
+/** Makes THIS page's browser say it cannot play HLS itself (`canPlayType` answers "" for the HLS types), so the player takes the hls.js
+ *  path whatever the Chromium build does. Call it BEFORE `page.goto` (an init script). The pinned Playwright Chromium answers "maybe", which
+ *  puts every case that does not force this on the native path, where hls.js, its config and the token rewrite never run. */
+export async function forceHlsJs(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const real = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (type: string): CanPlayTypeResult {
+      return /mpegurl/i.test(type) ? "" : real.call(this, type);
+    };
+  });
 }
 
 /** Does THIS browser play HLS itself (so the page gives it the address through `video.src` and loads no hls.js)? Chromium's answer

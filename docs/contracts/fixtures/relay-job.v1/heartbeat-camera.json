@@ -1,0 +1,11 @@
+{
+  "state": "playing",
+  "programmePhase": "reconnecting",
+  "input": "backoff",
+  "inputGiveUpReason": "stalled",
+  "inputGiveUpGen": 3,
+  "inputReceivedFps": 27.9,
+  "inputReceivedKbps": 2150,
+  "inputWithheldSpans": 2,
+  "inputQueueOverruns": 0
+}

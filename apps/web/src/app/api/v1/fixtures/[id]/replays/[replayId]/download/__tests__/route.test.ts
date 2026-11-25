@@ -36,6 +36,7 @@ vi.mock("@sentry/nextjs", async (importOriginal) => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { replayFileName } from "@/lib/poster-file-name";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
@@ -50,6 +51,7 @@ import { ReplayHostRefused } from "@/server/video/replay-ports";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { SEAZN_REPLAY_CALL_TIMEOUT_MS, type BunnyConfig } from "@/server/relay/config";
+import { bunnyResolutionsBody } from "@/server/video/__tests__/_bunny-resolutions";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, seaznRigFor } from "@/server/video/__tests__/_seazn-session-rig";
 import { GET } from "../route";
@@ -86,6 +88,9 @@ const BUNNY: BunnyConfig = {
   apiKey: "ZZ-api-key-download-route", readOnlyKey: "ZZ-read-only-download-route", tokenKey: "ZZ-token-key-download-route",
   libraryId: "424242", cdnHost: "vz-test0001.b-cdn.net",
 };
+/** The probe the page makes before it saves (`?check=1`). */
+const check = (fixtureId: string, replayId: string, headers: Record<string, string> = {}) =>
+  GET(new Request(`${BASE}/fixtures/${fixtureId}/replays/${replayId}/download?check=1`, { method: "GET", headers }), { params: Promise.resolve({ id: fixtureId, replayId }) });
 const get = (fixtureId: string, replayId: string, headers: Record<string, string> = {}) =>
   GET(new Request(`${BASE}/fixtures/${fixtureId}/replays/${replayId}/download`, { method: "GET", headers }), { params: Promise.resolve({ id: fixtureId, replayId }) });
 const documented = (): string[] =>
@@ -130,7 +135,10 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
         // The route's database work is done by now: the clock goes fake here, before the adapter sets its deadline for the CDN's
         // headers, so the 4 s are counted on it and the test waits for none of them.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        return new Response(JSON.stringify({ guid: "g", status: 4, length: 60, availableResolutions: "720p" }), { status: 200, headers: { "content-type": "application/json" } });
+        const body = String(url).endsWith("/resolutions")
+          ? bunnyResolutionsBody({ guid: "g", mp4: [720] })
+          : { guid: "g", status: 4, length: 60, availableResolutions: "720p" };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
       }
       cdn.signal = init?.signal ?? null;
       cdn.asked();
@@ -288,6 +296,53 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
     expect(cancelled).toBe("viewer left");
   });
 
+  it("Task 48: a part the library reads playable but holds no MP4 file for — an empty file list, or the CDN's 404 — is 409 replay_not_downloadable through the REAL Bunny adapter: one info line, no Sentry, no 500, and nothing of the host in the body; a 403 from the same CDN is still a reported fault", async () => {
+    const o = await organiser();
+    const GUID = o.playable.bunny_video_id!;
+    const files = (heights: number[]) => bunnyResolutionsBody({ guid: GUID, mp4: heights, storage: [240, 720, 1080] });
+    const answer = (mp4: number[], cdnStatus: number) => (async (url: string | URL | Request) => {
+      const u = String(url);
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.endsWith("/resolutions")) return json(files(mp4));
+      if (u.startsWith("https://video.bunnycdn.com/")) return json({ guid: GUID, status: 4, length: 60, availableResolutions: "240p,720p,1080p" });
+      return new Response(cdnStatus < 300 ? "x" : null, { status: cdnStatus });
+    }) as typeof fetch;
+    const info = vi.spyOn(log, "info");
+    const aboutNotReady = () => info.mock.calls.filter((c) => String(c[1]).includes("no file to download yet")).length;
+    sentry.captured.length = 0;
+    // EMPTY CASE FIRST: a file that is there downloads, and says nothing.
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([240, 720], 200), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const ok = await get(o.fixtures[0], o.playable.id);
+    expect(ok.status).toBe(200);
+    await ok.body?.cancel().catch(() => undefined);
+    expect([aboutNotReady(), sentry.captured]).toEqual([0, []]);
+
+    let checked = 0;
+    for (const [label, mp4, cdn] of [["no MP4 file listed (the HLS set holds 1080 and 720)", [], 200], ["the listed file is 404 on the CDN", [720, 240], 404]] as const) {
+      setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([...mp4], cdn), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+      const before = aboutNotReady();
+      const res = await get(o.fixtures[0], o.playable.id);
+      const raw = await res.text();
+      expect([res.status, (JSON.parse(raw) as Envelope).error?.code], label).toEqual([409, "replay_not_downloadable"]);
+      expect(res.headers.get("content-type") ?? "", `${label}: an error envelope, never a file`).not.toMatch(/video\/mp4/);
+      privateNoStore(res, label);
+      for (const piece of ["bcdn_token", "expires=", "b-cdn.net", BUNNY.apiKey, BUNNY.readOnlyKey, BUNNY.tokenKey, GUID]) expect(raw, `${label}: ${piece}`).not.toContain(piece);
+      expect(aboutNotReady() - before, `${label}: exactly one info line`).toBe(1);
+      for (const call of info.mock.calls) for (const piece of ["bcdn_token", BUNNY.apiKey, BUNNY.tokenKey]) expect(JSON.stringify(call), piece).not.toContain(piece);
+      expect(sentry.captured, `${label}: a 409 is not an error`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both ways").toBe(2);
+    expect(documented()).toContain("409");
+
+    // The neighbour: a refused token is a configuration fault, reported, and never "try again".
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([720], 403), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const refused = await get(o.fixtures[0], o.playable.id);
+    expect([refused.status, ((await refused.json()) as Envelope).error?.code]).toEqual([500, "replay_host_refused"]);
+    expect(sentry.captured).toHaveLength(1);
+    info.mockRestore();
+  });
+
   it("a part still processing is 409 replay_not_downloadable (the envelope, documented) and the host is never asked", async () => {
     const o = await organiser();
     const open = vi.spyOn(o.host, "openDownload");
@@ -297,6 +352,86 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
     privateNoStore(res, "409");
     expect(open).not.toHaveBeenCalled();
     expect(documented()).toContain("409");
+  });
+
+  it("Task 48 review m2: `?check=1` answers 204 (empty body, `private, no-store`) when the download would start and opens NOTHING — through the REAL Bunny adapter the host sees two API reads and ZERO CDN requests, no token in any address; a part not ready is the download's own 409 with one info line and no Sentry", async () => {
+    const o = await organiser();
+    const GUID = o.playable.bunny_video_id!;
+    const seen: string[] = [];
+    const answer = (mp4: number[]) => (async (url: string | URL | Request) => {
+      const u = String(url);
+      seen.push(u);
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.endsWith("/resolutions")) return json(bunnyResolutionsBody({ guid: GUID, mp4 }));
+      if (u.startsWith("https://video.bunnycdn.com/")) return json({ guid: GUID, status: 4, length: 60, availableResolutions: "240p,720p,1080p" });
+      throw new Error("the CDN must not be asked by a check");
+    }) as typeof fetch;
+    const info = vi.spyOn(log, "info");
+    sentry.captured.length = 0;
+    // EMPTY CASE FIRST: the fake host, a playable copy — 204, the host's file never opened.
+    const open = vi.spyOn(o.host, "openDownload");
+    const fake = await check(o.fixtures[0], o.playable.id);
+    expect([fake.status, await fake.text()]).toEqual([204, ""]);
+    privateNoStore(fake, "204");
+    expect(open, "a check opens no file").not.toHaveBeenCalled();
+    expect(fake.headers.get("content-type") ?? "", "no file, no mp4").not.toMatch(/video\/mp4/);
+
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([240, 720]), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const ready = await check(o.fixtures[0], o.playable.id);
+    expect([ready.status, await ready.text()]).toEqual([204, ""]);
+    expect(seen.length, "PREMISE: the host was asked").toBe(2);
+    expect(seen.every((u) => u.startsWith("https://video.bunnycdn.com/")), "no CDN request").toBe(true);
+    for (const u of seen) for (const piece of ["bcdn_token", "expires=", "b-cdn.net", BUNNY.tokenKey]) expect(u, piece).not.toContain(piece);
+
+    seen.length = 0;
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([]), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const before = info.mock.calls.filter((c) => String(c[1]).includes("no file to download yet")).length;
+    const notReady = await check(o.fixtures[0], o.playable.id);
+    expect([notReady.status, ((await notReady.json()) as Envelope).error?.code]).toEqual([409, "replay_not_downloadable"]);
+    privateNoStore(notReady, "409");
+    expect(info.mock.calls.filter((c) => String(c[1]).includes("no file to download yet")).length - before, "one info line").toBe(1);
+    expect(seen.length, "still no CDN request").toBe(2);
+    expect(sentry.captured, "a 409 is not an error").toEqual([]);
+
+    // The part the DATABASE says is not playable: the same 409 the download gives, and the host is not asked at all.
+    setReplayDriverForTest(o.host);
+    const checkSpy = vi.spyOn(o.host, "checkDownload");
+    const processing = await check(o.fixtures[0], o.processing.id);
+    expect([processing.status, ((await processing.json()) as Envelope).error?.code]).toEqual([409, "replay_not_downloadable"]);
+    expect(checkSpy).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+
+  it("Task 48 review m2: `?check=1` has the download's own door — a viewer 403, another organisation and an unknown or malformed fixture 404, an API key 403, signed out 401, each `private, no-store`; an admin 204 — and the host is never asked for a refusal", async () => {
+    const o = await organiser();
+    const stranger = await organiser();
+    setReplayDriverForTest(o.host);
+    await override(o.orgId, "api.access", true);
+    await override(o.orgId, "api.write", true);
+    const { secret } = await createApiKey({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null }, { name: `dlc-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
+    const asked = vi.spyOn(o.host, "checkDownload");
+    const answers: [string, number, Response][] = [];
+    authState.userId = await member(o.orgId, "viewer");
+    answers.push(["viewer", 403, await check(o.fixtures[0], o.playable.id)]);
+    authState.userId = stranger.ownerId;
+    answers.push(["another organisation", 404, await check(o.fixtures[0], o.playable.id)]);
+    answers.push(["an unknown fixture", 404, await check(randomUUID(), o.playable.id)]);
+    answers.push(["a malformed fixture", 404, await check("f1", o.playable.id)]);
+    authState.userId = o.ownerId;
+    answers.push(["an API key", 403, await check(o.fixtures[0], o.playable.id, { authorization: `Bearer ${secret}` })]);
+    authState.userId = "";
+    answers.push(["signed out", 401, await check(o.fixtures[0], o.playable.id)]);
+    let checked = 0;
+    for (const [label, status, res] of answers) {
+      expect(res.status, label).toBe(status);
+      privateNoStore(res, label);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(asked, "the host is not asked for a refusal").not.toHaveBeenCalled();
+    authState.userId = await member(o.orgId, "admin");
+    expect((await check(o.fixtures[0], o.playable.id)).status, "the positive pair").toBe(204);
+    expect(asked).toHaveBeenCalledTimes(1);
   });
 
   it("a viewer is 403 (an admin is served, the positive pair); another organisation's member, an unknown and a malformed fixture are 404; an API key is 403 at the door; signed out 401 — each `private, no-store`, and the host is never asked for a refusal", async () => {

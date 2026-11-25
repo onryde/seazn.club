@@ -17,10 +17,12 @@
 // Every rig is a FRESH org: destinations and sessions are org-wide, and the walkthrough leg runs fully parallel.
 //
 // TWO MODES (Seazn-hosted video, Task 19). With SEAZN_HOSTED_LIVE on — the server AND this runner, e2e.yml's e2e-seazn job — every
-// org also has its fixed Seazn destination, listed FIRST on the API, the Streaming page and the match's picker, and it is the match's
-// default pick. The cases here are about the org's OWN destinations, so each reads them apart from the Seazn row (`listApi`, `rows`)
-// and states both modes where the page really differs: no empty state (the Seazn row is a list), the list's own Add, and Seazn
-// offered ahead of the org's own. Every other job runs with it off, where the Seazn row is hidden everywhere.
+// org also has its fixed Seazn destination, listed FIRST on the API and the match's picker, and it is the match's default pick while
+// the org's switch is on (Task 33, default on). The Streaming page draws it as the Seazn Hosted card above a "Your own channels"
+// divider (Task 33b), never as a row of the list. The cases here are about the org's OWN destinations, so each reads them apart from
+// Seazn (`listApi`, `rows`) and states both modes where the page really differs: no empty state (the card is there), the divider's
+// Add, and Seazn offered ahead of the org's own. Case 12 walks the switch. Every other job runs with it off, where Seazn is hidden
+// everywhere and the page has no card.
 //
 // Stream capacity (plan premise 11): a held destination needs a session, and every active session holds a share of the
 // fake ingest's ONE storage pool. This file takes its slots from the stream-slot pool (e2e/helpers/stream-slot-pool.ts,
@@ -34,7 +36,9 @@ import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
+import { CLUB_STYLE_WIDTHS, clubStyleCaseMs } from "../helpers/seazn-hosted-clock";
 import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
+import { defaultTemplateFor, resolveTemplate, templatesForSport } from "../../src/components/overlay/template-registry";
 import { ADDABLE_STREAM_PLATFORMS, STREAM_PLATFORMS, type AddableStreamPlatform, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
@@ -141,8 +145,11 @@ const matchName = (no: number): string => en("breadcrumb.match", { no });
 
 /** Seazn-hosted video (Task 19): the mode this run is in — the runner's flag, which e2e.yml sets beside the server's. */
 const SEAZN_LIVE = process.env.SEAZN_HOSTED_LIVE === "true";
+/** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. A literal, never read from the code
+ *  under test (T33c review m2), so a wrong brand reds here. */
+const SEAZN_BRAND = "Seazn Hosted";
 /** What the match's picker offers AHEAD of the org's own destinations: Seazn's name with LIVE on, nothing with it off. */
-const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [en("stream.dest.kind.seazn")] : [];
+const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [SEAZN_BRAND] : [];
 /** The platforms' names from the product's own table (m11), never typed here. */
 const BRAND: Record<StreamPlatform, string> = STREAM_KIND_BRAND;
 /** The subline's key-hint words ("key ends …" in en), cut from the dictionary's own template around `{hint}` (m11) — so a
@@ -278,24 +285,39 @@ async function openStreaming(page: Page): Promise<Locator> {
   return panel;
 }
 const rowOf = (page: Page, id: string): Locator => page.locator(`[data-testid="stream-dest-row"][data-target-id="${id}"]`);
-/** The org's OWN destination rows: the fixed Seazn row (`seaznRows`) is not one of them. */
-const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]:not([data-fixed="seazn"])');
-const seaznRows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"][data-fixed="seazn"]');
-/** The way to add the org's FIRST destination: the empty state's Add with LIVE off; with it on the Seazn row is already a list, so
- *  there is no empty state and the list's own Add is the way in. */
+/** Every row of the list, which is the org's OWN destinations: the Seazn destination is never a row (Task 33b moved it to the card).
+ *  A Seazn row coming back is a red, not a miscount: every `rows` count in this file is exact (0, 1, 3), and where a case knows the
+ *  Seazn id, `rowOf(page, seazn.id)` is asserted EMPTY beside a `rowOf` that finds the org's key (review m6: the old `data-fixed`
+ *  selector named an attribute nothing renders any more). */
+const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]');
+/** The Seazn Hosted card (Task 33b) and its switch, named as a screen reader names it (the brand, and the dictionary's own words). */
+const SEAZN_NAME = SEAZN_BRAND;
+const seaznCard = (page: Page): Locator => page.getByTestId("seazn-card");
+const seaznSwitch = (page: Page): Locator => seaznCard(page).getByRole("switch", { name: en("streaming.seazn.switch", { name: SEAZN_NAME }), exact: true });
+/** The org's Seazn switch as the API reads it back (`GET /api/v1/orgs/{id}/seazn-hosted`, Task 33). */
+async function offeredApi(page: Page, orgId: string): Promise<boolean | undefined> {
+  return (await apiJson<{ offered: boolean }>(page.request, `/api/v1/orgs/${orgId}/seazn-hosted`)).data?.offered;
+}
+/** The way to add the org's FIRST destination: the empty state's Add with LIVE off; with it on the card stands above the org's own
+ *  channels, so there is no empty state and the divider's Add is the way in. */
 const ADD_FIRST: "stream-dest-add" | "stream-dest-empty-add" = SEAZN_LIVE ? "stream-dest-add" : "stream-dest-empty-add";
-/** The Streaming page with no destination of the org's own. LIVE off: the empty state and its copy, and no Seazn row. LIVE on: no
- *  empty state — the Seazn row alone, saying what it is. */
+/** The Streaming page with no destination of the org's own. LIVE off: the empty state and its copy, and no card. LIVE on: no empty
+ *  state (Seazn IS a destination) — the Seazn Hosted card with its switch on (the default), the "Your own channels" divider, and no
+ *  Seazn row in the list. */
 async function expectNoOwnDestinations(page: Page): Promise<void> {
-  await expect(rows(page), "no destination of the org's own").toHaveCount(0);
+  // The positive first — what the page draws with nothing of the org's own — so the count of none below is read on a rendered page.
   if (SEAZN_LIVE) {
-    await expect(page.getByTestId("stream-dest-empty"), "LIVE on: the Seazn row is a list, so there is no empty state").toHaveCount(0);
-    await expect(seaznRows(page), "LIVE on: the Seazn row alone").toHaveCount(1);
-    await expect(seaznRows(page).getByTestId("stream-dest-subline")).toHaveText(en("stream.dest.seazn.sub"));
+    await expect(seaznCard(page), "LIVE on: the Seazn Hosted card").toBeVisible();
+    await expect(seaznSwitch(page), "on by default").toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("stream-own-divider")).toContainText(en("streaming.own.heading"));
+    await expect(page.getByTestId("stream-dest-empty"), "LIVE on: the card is there, so there is no empty state").toHaveCount(0);
   } else {
     await expect(page.getByTestId("stream-dest-empty")).toContainText(en("streamDest.empty"));
-    await expect(seaznRows(page), "LIVE off: no Seazn row").toHaveCount(0);
+    await expect(seaznCard(page), "LIVE off: no card").toHaveCount(0);
   }
+  // No row at all: nothing of the org's own, and never a Seazn row (with LIVE on, one coming back would make this 1). The selector's
+  // positive pair is this file's exact `rows` counts of 1 and 3 once destinations are added.
+  await expect(rows(page), "no row: nothing of the org's own, and no Seazn row").toHaveCount(0);
 }
 
 /** A row action, the width's own way: the ⋯ menu below 768, the inline button at and above it. */
@@ -788,15 +810,22 @@ test("8+9: three rows (one HELD, one Twitch seeded through the API, one legacy w
   const row = rowOf(page, held.id);
   const menu = row.getByTestId("stream-dest-menu");
   await expect(menu).toBeVisible();
+  // The Seazn card (Task 33b) sits above the rows, so at 320×568 this ⋯ starts below the fold, and elementFromPoint answers null for a
+  // point outside the viewport (CI run 45318017138; measured locally: top 817 of 568, hit null; scrolled in, top 479, hit the ⋯).
+  // Bring it in as a thumb would, then prove the probe ran inside the viewport, so an off-screen null can never read as a miss again.
+  await menu.scrollIntoViewIfNeeded();
   const box = (await menu.boundingBox())!;
   expect(box.width, "⋯ is 44 wide").toBeGreaterThanOrEqual(44);
   expect(box.height, "⋯ is 44 tall").toBeGreaterThanOrEqual(44);
-  const hit = await menu.evaluate((el) => {
+  const probe = await menu.evaluate((el) => {
     const r = el.getBoundingClientRect();
-    const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!h && (h === el || el.contains(h));
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const h = document.elementFromPoint(x, y);
+    return { inView: x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight, hit: !!h && (h === el || el.contains(h)) };
   });
-  expect(hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
+  expect(probe.inView, "premise: ⋯'s centre is inside the viewport when it is probed").toBe(true);
+  expect(probe.hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
   expect(await tapTargets(panel), "the panel's controls were hit-tested").toBeGreaterThan(3);
   await menu.click();
   await expect(row.getByRole("menuitem")).toHaveCount(3);
@@ -930,6 +959,9 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
   const first = await seedRig(page);
   const t = await addTargetApi(page, first.orgId, { label: `Mine ${first.tag}` });
   const second = await seedRig(page); // signs the page in as the SECOND org's owner
+  // The FIRST org switches Seazn off (in the table: its owner is no longer signed in here). The second org's card must read its OWN
+  // switch — still on — never the first's.
+  await withDb((sql) => sql`update org_stream_targets set offered = false where org_id = ${first.orgId} and kind = 'seazn'`);
   await openStreaming(page);
   await expectNoOwnDestinations(page); // the second org's Streaming page has none of its own
   await expect(rowOf(page, t.id)).toHaveCount(0);
@@ -939,19 +971,22 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
   const [firstSeazn, secondSeazn] = [await seaznOf(first.orgId), await seaznOf(second.orgId)];
   expect([firstSeazn.length, secondSeazn.length], "premise: each org has its one Seazn row").toEqual([1, 1]);
   await expect(rowOf(page, firstSeazn[0]!), "the first org's Seazn row is not on the second org's page").toHaveCount(0);
-  if (SEAZN_LIVE) await expect(seaznRows(page)).toHaveAttribute("data-target-id", secondSeazn[0]!);
+  if (SEAZN_LIVE) await expect(seaznSwitch(page), "the second org's own switch (on), not the first org's (off)").toHaveAttribute("aria-checked", "true");
   const base = `/api/v1/orgs/${first.orgId}/stream-targets`;
   const answers = [
     (await page.request.get(base)).status(),
     (await page.request.patch(`${base}/${t.id}`, { data: { label: "stolen" } })).status(),
     (await page.request.patch(`${base}/${t.id}`, { data: { streamKey: ytKey() } })).status(),
     (await page.request.delete(`${base}/${t.id}`)).status(),
+    (await page.request.put(`/api/v1/orgs/${first.orgId}/seazn-hosted`, { data: { offered: true } })).status(),
   ];
   expect(answers.filter((s) => s < 400), `every cross-org call is refused (${answers.join(", ")})`).toEqual([]);
-  expect(answers.length).toBe(4);
+  expect(answers.length).toBe(5);
   const [row] = await withDb((sql) => sql<{ label: string; archived: boolean }[]>`
     select label, archived_at is not null as archived from org_stream_targets where id = ${t.id}`);
   expect(row, "the first org's destination is untouched").toEqual({ label: t.label, archived: false });
+  const [sw] = await withDb((sql) => sql<{ offered: boolean }[]>`select offered from org_stream_targets where org_id = ${first.orgId} and kind = 'seazn'`);
+  expect(sw, "the first org's switch is untouched by the second org's PUT").toEqual({ offered: false });
 });
 
 // ===========================================================================
@@ -1140,7 +1175,7 @@ for (const width of [320, 1280] as const) {
 // it off there is nothing to look at). e2e.yml's e2e-seazn job sets both (Task 19); every other job leaves them off, where the case SKIPS
 // by name — it never passes vacuously.
 for (const width of [320, 768, 1280] as const) {
-  test(`11 @${width}: Seazn is first and selected for a new org's match, the Streaming page's Seazn row has no Rename / Replace key / Remove, and Go live starts a seazn session`, async ({ page }) => {
+  test(`11 @${width}: Seazn is first and selected for a new org's match, the Streaming page shows it as its card (no row, no Rename / Replace key / Remove), and Go live starts a seazn session`, async ({ page }) => {
     test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (not set in the default e2e job)");
     const NAVS = 2;
     test.setTimeout(Math.max(120_000, SEED_MS + SLOT_WAIT_MS + CYCLE_MS) + NAVS * NAV_MS);
@@ -1157,22 +1192,32 @@ for (const width of [320, 768, 1280] as const) {
     await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${seazn!.id}"]`)).toHaveAttribute("aria-selected", "true");
     await body.getByTestId("stream-target").press("Escape");
     await expect(targetPicker(body)).toHaveAttribute("data-value", seazn!.id);
-    await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(en("stream.dest.kind.seazn"));
+    await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(SEAZN_BRAND);
     await expect(targetPicker(body).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.seazn.sub"));
     await expect(body.getByTestId("stream-safety-notice"), "no YouTube safety notice for Seazn").toHaveCount(0);
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-role="fixture-stream-body"]'), `16-${width}-picker-seazn.png`);
 
-    // The Streaming page: the row is there and fixed.
+    // The Streaming page (Task 33b): Seazn is the card at the top — on, saying what it is — and never a row of the list; the card is
+    // fixed (no Rename / Replace key / Remove / menu: the server refuses all three, seazn_destination_fixed), its one control the switch.
     await openStreaming(page);
-    const row = rowOf(page, seazn!.id);
-    await expect(row).toBeVisible();
-    await expect(row.getByTestId("stream-dest-subline")).toHaveText(en("stream.dest.seazn.sub"));
+    const card = seaznCard(page);
+    await expect(card, "the positive first: the card, on the rendered page").toBeVisible();
+    await expect(rowOf(page, seazn!.id), "the Seazn destination is not a row").toHaveCount(0);
+    await expect(rows(page), "no row at all: this org has nothing of its own, and Seazn is the card").toHaveCount(0);
+    await expect(card.getByRole("heading", { name: SEAZN_NAME, exact: true })).toBeVisible();
+    await expect(card).toContainText(en("streaming.seazn.why"));
+    await expect(seaznSwitch(page)).toHaveAttribute("aria-checked", "true");
+    let fixedChecked = 0;
     for (const id of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) {
-      await expect(row.getByTestId(id), id).toHaveCount(0);
+      await expect(card.getByTestId(id), id).toHaveCount(0);
+      fixedChecked++;
     }
+    expect(fixedChecked).toBe(4);
+    // `role="switch"` overrides a button's implicit role, so the count is of <button> elements, not of getByRole("button").
+    await expect(card.locator("button"), "the switch is the card's one control").toHaveCount(1);
     await expectNoHorizontalScroll(page);
-    await shot(page.locator('[data-testid="stream-destinations"]'), `16-${width}-streaming-seazn-row.png`);
+    await shot(page.locator('[data-testid="stream-destinations"]'), `16-${width}-streaming-seazn-card.png`);
 
     // Go live starts a session whose destination is Seazn (width 1280 only: one stream per run). A Seazn start is composed, which
     // reserves two matches of recording (R2004), so it takes the WHOLE pool, as every composed walkthrough does.
@@ -1187,5 +1232,221 @@ for (const width of [320, 768, 1280] as const) {
       })
       .toEqual(["seazn"]);
     await stopApi(page, rig.orgId, f.id);
+  });
+}
+
+// ===========================================================================
+// 12 — Seazn-hosted video (Task 33b): the org's Seazn switch, on the Streaming page's card, decides what the match can pick
+// ===========================================================================
+// LIVE on only (the e2e-seazn job), like case 11: with it off there is no card to tap, and the case SKIPS by name. The organiser's own
+// round trip: the match's picker, then "Manage destinations" (the Streaming page in a NEW tab), the switch off, back to the match —
+// Seazn is gone and the org's own key is the default; the switch on, back — Seazn is first and picked again. Each tap is read back
+// from the API. Nothing starts. Then a member who cannot edit sees the same card read-only.
+for (const width of [320, 768, 1280] as const) {
+  test(`12 @${width}: the Seazn Hosted switch — off: the match's picker offers no Seazn and the card says replays stay up; on: Seazn is back, first and picked; a viewer sees the card read-only`, async ({ page }) => {
+    test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (not set in the default e2e job)");
+    const NAVS = 5; // the fixture page, the Streaming tab, its reload, the viewer's sign-in, the viewer's Streaming page
+    const SAVES = 8; // two taps, their two API reads, two returns, the off reload's read, the viewer's read
+    test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRig(page, { entrants: 2 });
+    const f = rig.fixtures[0]!;
+    const yt = await addTargetApi(page, rig.orgId, { label: `Court 1 ${rig.tag}` });
+    const seazn = (await listAllApi(page, rig.orgId)).find((t) => t.kind === "seazn");
+    expect(seazn, "premise: the API lists the org's Seazn row (the switch defaults on)").toBeTruthy();
+    expect(await offeredApi(page, rig.orgId), "premise: on by default").toBe(true);
+
+    // 1. The match: Seazn first and picked, the org's key after it.
+    const body = await openPhoneTab(page, rig, f.no);
+    expect(await offeredTargetNames(body)).toEqual([...SEAZN_OFFERED, yt.label]);
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(targetPicker(body)).toHaveAttribute("data-value", seazn!.id);
+
+    // 2. Manage destinations → the Streaming page in a NEW tab: the card, on, with its credit line; the switch is a 44 px target.
+    const [dir] = await Promise.all([page.context().waitForEvent("page"), body.getByTestId("stream-manage-destinations").click()]);
+    await dir.setViewportSize({ width, height: 900 });
+    await dir.waitForLoadState();
+    await expect(seaznCard(dir)).toBeVisible({ timeout: NAV_MS });
+    await expect(seaznSwitch(dir)).toHaveAttribute("aria-checked", "true");
+    await expect(seaznCard(dir).getByTestId("seazn-card-cost")).toHaveText(en("streaming.seazn.cost"));
+    await expect(seaznCard(dir).getByTestId("seazn-card-off")).toHaveCount(0);
+    const box = await seaznSwitch(dir).boundingBox();
+    expect(box, "the switch has a box").not.toBeNull();
+    expect(Math.min(box!.width, box!.height), "a 44 px tap target").toBeGreaterThanOrEqual(44);
+    await expect(rowOf(dir, yt.id), "the org's own key, under the divider").toBeVisible();
+    await expect(rowOf(dir, seazn!.id), "by the same selector that found the key: the Seazn destination is no row").toHaveCount(0);
+    await expect(rows(dir), "the key is the list's one row").toHaveCount(1);
+    await expect(rowOf(dir, yt.id).getByTestId("stream-dest-rename"), "an owner's key row has its Rename (the viewer's pair, step 6)").toHaveCount(1);
+    await expect(dir.getByTestId("stream-own-divider"), "the owner is told how to add a channel").toContainText(en("streaming.own.sub"));
+    await expectNoHorizontalScroll(dir);
+    await shot(seaznCard(dir), `12-${width}-card-on.png`);
+
+    // 3. OFF: the switch reads off at once, the off line replaces the credit line, and the API reads it back. A reload keeps it off —
+    //    the page reads the switch, not the list (which now leaves Seazn out): the card that turns it back on is still there.
+    await seaznSwitch(dir).click();
+    await expect(seaznSwitch(dir)).toHaveAttribute("aria-checked", "false");
+    await expect.poll(() => offeredApi(page, rig.orgId), { message: "the PUT saved off", timeout: SAVE_MS }).toBe(false);
+    await expect(seaznCard(dir).getByTestId("seazn-card-off")).toHaveText(en("streaming.seazn.off", { name: SEAZN_NAME }));
+    await expect(seaznCard(dir).getByTestId("seazn-card-cost")).toHaveCount(0);
+    await expect(seaznCard(dir).getByTestId("seazn-card-error")).toHaveCount(0);
+    await expectNoHorizontalScroll(dir);
+    await shot(seaznCard(dir), `12-${width}-card-off.png`);
+    await dir.reload();
+    await expect(seaznSwitch(dir), "after a reload: still there, still off").toHaveAttribute("aria-checked", "false", { timeout: NAV_MS });
+    expect((await listAllApi(page, rig.orgId)).map((t) => t.kind), "the API's list leaves Seazn out while off").not.toContain("seazn");
+
+    // 4. Back to the match: Seazn is no longer offered, and the org's own key is the default.
+    await returnTo(page);
+    await expect.poll(() => offeredTargetNames(body), { message: "the return re-read the list", timeout: SAVE_MS }).toEqual([yt.label]);
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(targetPicker(body), "the default fell to the org's own key").toHaveAttribute("data-value", yt.id);
+    await expectNoHorizontalScroll(page);
+
+    // 5. ON again: the switch, the API, and the match offers Seazn first and picks it again.
+    await dir.bringToFront();
+    await seaznSwitch(dir).click();
+    await expect(seaznSwitch(dir)).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => offeredApi(page, rig.orgId), { message: "the PUT saved on", timeout: SAVE_MS }).toBe(true);
+    await expect(seaznCard(dir).getByTestId("seazn-card-cost")).toBeVisible();
+    await returnTo(page);
+    await expect.poll(() => offeredTargetNames(body), { message: "the return re-read the list", timeout: SAVE_MS }).toEqual([...SEAZN_OFFERED, yt.label]);
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(targetPicker(body), "Seazn is the default again").toHaveAttribute("data-value", seazn!.id);
+    expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
+    await dir.close();
+
+    // 6. A member who cannot edit: the same card, its state in words, no switch — and the org's key without its actions.
+    const viewerEmail = `delivered+dsd-viewer-${rig.tag}@resend.dev`;
+    await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${viewerEmail}, ${"Dest Viewer " + rig.tag}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${rig.orgId}, ${id}, 'viewer')`;
+    });
+    await signInAs(page, viewerEmail);
+    await page.goto(`/o/${rig.orgSlug}/streaming`); // the address decides the org (the cookie may still name the owner's session)
+    await expect(page.getByTestId("stream-destinations")).toBeVisible({ timeout: NAV_MS });
+    await expect(seaznCard(page)).toBeVisible();
+    await expect(seaznCard(page).getByRole("switch"), "read-only: no switch").toHaveCount(0);
+    await expect(seaznCard(page).locator("button"), "read-only: nothing to press").toHaveCount(0);
+    await expect(seaznCard(page).getByTestId("seazn-card-state")).toHaveText(en("streaming.seazn.state.on"));
+    await expect(rowOf(page, yt.id), "the viewer sees the org's key").toBeVisible();
+    await expect(rowOf(page, yt.id).getByTestId("stream-dest-rename"), "…without its Rename (step 2: the owner's row has one)").toHaveCount(0);
+    await expect(page.getByTestId("stream-own-divider"), "the divider's heading").toContainText(en("streaming.own.heading"));
+    await expect(page.getByTestId("stream-own-divider"), "…without the editor's instruction (step 2: the owner's has it)").not.toContainText(en("streaming.own.sub"));
+    await expectNoHorizontalScroll(page);
+    await shot(seaznCard(page), `12-${width}-card-viewer.png`);
+  });
+}
+
+// ===========================================================================
+// 13 — Seazn-hosted video (Task 38): the club's Score style and timing, on the Streaming page, reach the match's own panel
+// ===========================================================================
+// Runs in EVERY job that runs this file (the club section needs no Seazn switch; the match's score card needs the compositor image, which the
+// walkthrough leg's server and the e2e-seazn server both have). The organiser's round trip: the Streaming page's "Score on stream" (a
+// style that is NOT the sport's default, and a timing), each read back from the API and kept across a reload; then the match's Stream panel
+// — "Club style: X · 4.5 s — Change for this match", the controls closed; opened, they stand on the club's values; the match's own pick is
+// an override (read back from the match's settings), and "Use club style" puts BOTH of the match's fields back to none in one tap while the
+// club's own stay. Nothing starts. Then a member who cannot edit reads the same facts in words, with no control.
+const CLUB_SPORT = "generic"; // the seed's one division (seedRig)
+for (const width of CLUB_STYLE_WIDTHS) {
+  test(`13 @${width}: the club's Score style and timing — set on the Streaming page, read back, the match's row names them, Change for this match is an override, Use club style clears it; a viewer reads them in words`, async ({ page }) => {
+    // The clock is helpers/seazn-hosted-clock.ts's (the job's timeout in e2e.yml is held to the same sum by e2e-ci-wiring.test.ts).
+    test.setTimeout(clubStyleCaseMs());
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRig(page, { entrants: 2 });
+    const f = rig.fixtures[0]!;
+    // The rig stores Camera only on its fixtures (this file follows the camera's lifecycle); this case is about the SCORE's card, which
+    // Camera only replaces with one line — so the match gets the default back (null = the score), as the answer says.
+    const scoreBack = await apiJson<{ streamMode: string | null }>(page.request, `/api/v1/fixtures/${f.id}/stream-settings`, "PUT", { streamMode: null });
+    expect(scoreBack.status, `PUT stream-settings { streamMode: null }: ${JSON.stringify(scoreBack.error)}`).toBe(200);
+    expect(scoreBack.data?.streamMode, "the stored mode is none: the score is the default").toBeNull();
+    // Two styles of the sport, the club's and the match's own — derived from the registry, never typed (the club's is not the sport's default,
+    // so it cannot be taken for the fallback the match would show with no club style at all).
+    const sportDefault = defaultTemplateFor(CLUB_SPORT);
+    const clubStyle = templatesForSport(CLUB_SPORT).find((t) => t.id !== sportDefault)!.id;
+    const ownStyle = sportDefault;
+    const label = (id: string): string => en(resolveTemplate(id, CLUB_SPORT).labelKey);
+    const defaultsApi = async () => (await apiJson<{ overlayTemplate: string | null; overlayDelayMs: number | null }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-defaults`)).data;
+    // The match's own stored choice, read from its row (the route has no GET): no row is the same as two nulls.
+    const settingsApi = async () => withDb(async (sql) => {
+      const [r] = await sql<{ overlay_template: string | null; overlay_delay_ms: number | null }[]>`
+        select overlay_template, overlay_delay_ms from fixture_stream_settings where fixture_id = ${f.id}`;
+      return { overlayTemplate: r?.overlay_template ?? null, overlayDelayMs: r?.overlay_delay_ms ?? null };
+    });
+
+    // 1. The Streaming page: the section, nothing set; the style, then the timing.
+    await page.goto(`/o/${rig.orgSlug}/streaming`);
+    const club = page.getByTestId("club-score");
+    await expect(club).toBeVisible({ timeout: NAV_MS });
+    await expect(club.locator("h2")).toHaveText(en("streaming.club.heading"));
+    await expect(club.getByTestId("club-score-style-none"), "nothing set: each sport uses its own").toHaveText(en("streaming.club.style.none"));
+    await expect(club.getByTestId("club-score-scope")).toContainText(en("streaming.club.scope.new"));
+    expect(await defaultsApi(), "premise: the club sets nothing").toEqual({ overlayTemplate: null, overlayDelayMs: null, revision: null });
+    await club.locator(`[role="radio"][data-template="${clubStyle}"]`).click();
+    await expect.poll(async () => (await defaultsApi())?.overlayTemplate, { message: "the style saved", timeout: SAVE_MS }).toBe(clubStyle);
+    await expect(club.locator(`[role="radio"][data-template="${clubStyle}"]`)).toHaveAttribute("aria-checked", "true");
+    await expect(club.getByTestId("club-score-style-none")).toHaveCount(0);
+    await club.getByTestId("stream-timing").locator("summary").click();
+    const input = club.getByTestId("stream-timing-input");
+    await input.fill("4.5");
+    await input.press("Enter");
+    await expect.poll(async () => (await defaultsApi())?.overlayDelayMs, { message: "the timing saved", timeout: SAVE_MS }).toBe(4500);
+    await expectNoHorizontalScroll(page);
+    await shot(club, `13-${width}-club-section.png`);
+
+    // 2. Kept across a reload: the page reads the club's own row back.
+    await page.reload();
+    await expect(club.locator(`[role="radio"][data-template="${clubStyle}"]`), "after a reload: the style is still selected").toHaveAttribute("aria-checked", "true", { timeout: NAV_MS });
+    await expect(club.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "4.5" }));
+
+    // 3. The match: the row names both, the controls are closed; Change for this match opens them on the club's values.
+    const body = await openPhoneTab(page, rig, f.no);
+    const row = body.getByTestId("stream-club-text");
+    await expect(row).toHaveText(en("stream.club.row", { style: label(clubStyle), seconds: "4.5" }), { timeout: NAV_MS });
+    await expect(body.getByTestId("stream-club-override"), "closed").toHaveCount(0);
+    await expect(body.getByTestId("stream-template-picker"), "no picker while closed").toHaveCount(0);
+    await body.getByTestId("stream-club-change").click();
+    const override = body.getByTestId("stream-club-override");
+    await expect(override).toBeVisible();
+    await expect(override.locator(`[role="radio"][data-template="${clubStyle}"]`), "opens on the club's style").toHaveAttribute("aria-checked", "true");
+    await expect(override.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "4.5" }));
+    await expect(override.getByTestId("stream-timing-default"), "the timing is marked as the CLUB's default").toHaveText(en("stream.timing.clubDefault"));
+    await expectNoHorizontalScroll(page);
+    await shot(override, `13-${width}-match-override-open.png`);
+
+    // 4. The match's own pick is an override: its own settings carry it, the club's row stays, and the tag appears.
+    await override.locator(`[role="radio"][data-template="${ownStyle}"]`).click();
+    await expect.poll(async () => (await settingsApi())?.overlayTemplate, { message: "the match saved its own style", timeout: SAVE_MS }).toBe(ownStyle);
+    await expect(body.getByTestId("stream-club-override-tag")).toHaveText(en("stream.club.overrideTag"));
+    expect((await defaultsApi())?.overlayTemplate, "the club's own style is untouched").toBe(clubStyle);
+
+    // 5. Use club style: BOTH of the match's fields go back to none in one tap; the club's stay.
+    await override.getByTestId("stream-timing").locator("summary").click();
+    await override.getByTestId("stream-timing-input").fill("1.5");
+    await override.getByTestId("stream-timing-input").press("Enter");
+    await expect.poll(async () => (await settingsApi())?.overlayDelayMs, { message: "the match saved its own timing", timeout: SAVE_MS }).toBe(1500);
+    await body.getByTestId("stream-club-use").click();
+    await expect.poll(async () => await settingsApi(), { message: "both fields cleared", timeout: SAVE_MS }).toMatchObject({ overlayTemplate: null, overlayDelayMs: null });
+    await expect(body.getByTestId("stream-club-override"), "the row stands alone again").toHaveCount(0, { timeout: SAVE_MS });
+    await expect(row).toHaveText(en("stream.club.row", { style: label(clubStyle), seconds: "4.5" }));
+    expect(await defaultsApi(), "the club's own defaults are untouched").toMatchObject({ overlayTemplate: clubStyle, overlayDelayMs: 4500 });
+    expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
+    await expectNoHorizontalScroll(page);
+
+    // 6. A member who cannot edit: the same facts in words, nothing to press.
+    const viewerEmail = `delivered+dsd-club-viewer-${rig.tag}@resend.dev`;
+    await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${viewerEmail}, ${"Club Viewer " + rig.tag}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${rig.orgId}, ${id}, 'viewer')`;
+    });
+    await signInAs(page, viewerEmail);
+    await page.goto(`/o/${rig.orgSlug}/streaming`);
+    await expect(club).toBeVisible({ timeout: NAV_MS });
+    await expect(club.getByTestId("club-score-readonly-style")).toHaveText(label(clubStyle));
+    await expect(club.getByTestId("club-score-readonly-timing")).toContainText(en("stream.timing.value", { seconds: "4.5" }));
+    await expect(club.locator("button, input"), "read-only: nothing to press or type in").toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await shot(club, `13-${width}-club-viewer.png`);
   });
 }

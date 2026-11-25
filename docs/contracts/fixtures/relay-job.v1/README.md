@@ -82,4 +82,9 @@ stored beat, never a `null` and never a `0`.
   beat once it is above 0: it is a total for the process, an upper bound, and it starts again from 0 when the
   process restarts. The server keeps it with the beat. It never keeps `airings` there: it records the list as
   sponsor airings and strips it from the stored beat.
+- `heartbeat-camera` carries the camera as the relay receives it (compositor Owed 110 and 111, sent only when the
+  Machine carries `RELAY_INPUT_BEAT=1`): the last give-up (`inputGiveUpReason` with its generation `inputGiveUpGen`), the
+  received rates (`inputReceivedFps`, `inputReceivedKbps`) and the two loss totals for the process (`inputWithheldSpans`,
+  `inputQueueOverruns`, a present 0 being a measured zero). All six are optional and nullable; a beat without them (every
+  other vector) is valid as before. `heartbeat-invalid-give-up-reason` is a one-field edit of it: a reason outside the enum.
 - Every id, key, passphrase and token here is a placeholder, never a real credential.

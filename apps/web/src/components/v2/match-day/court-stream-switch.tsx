@@ -62,7 +62,7 @@ export function CourtStreamSwitch({
       setChoice({ base: spec.on, value: next, saved: true });
       onChanged();
     } catch (err) {
-      const words = t(dict, switchFailureKey(err instanceof ApiV1Error ? err.code : ""));
+      const words = t(dict, switchFailureKey(err instanceof ApiV1Error ? err.code : "", err));
       setChoice(null);
       setFailure(words);
       onRefused(words);

@@ -18,6 +18,7 @@ import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 import type { StreamPhone, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { StreamTargetKind } from "@/server/api-v1/schemas";
 import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
+import { minContentWidth, openFace, textWidth } from "@/components/public-site/__tests__/font-advance";
 
 const W = OUTPUT_WARNING_AFTER_MS;
 const view = (state: string, ingest: string | null, output: string | null, elapsedMs = 0) =>
@@ -38,6 +39,13 @@ const DEST = { kind: "youtube" as const, label: "Club YouTube" };
 
 function chainHtml(chain: Chain, destination: { kind: (typeof StreamTargetKind.options)[number]; label: string } = DEST): string {
   return renderToStaticMarkup(<SignalChain chain={chain} destination={destination} />);
+}
+
+/** The destination node's name, as text (its width spans flattened; "" when absent, so a probe on it cannot pass vacuously). */
+function destName(html: string): string {
+  const m = /<span data-testid="stream-chain-dest-name" class="[^"]*">(.*?)<\/span><span class="mt-0\.5/.exec(html);
+  if (!m) throw new Error("no stream-chain-dest-name in the markup");
+  return m[1]!.replace(/<[^>]*>/g, "");
 }
 
 function dict(locale: Locale): Dict {
@@ -123,10 +131,76 @@ describe("SignalChain (spec §3.2)", () => {
     let checked = 0;
     for (const kind of StreamTargetKind.options) {
       const name = platformName((k) => messages[k], kind);
-      expect(chainHtml(chainFor(null)!, { kind, label: "L" }), kind).toContain(`<span class="md:hidden">${name}</span>`);
+      expect(destName(chainHtml(chainFor(null)!, { kind, label: "L" })), kind).toContain(name);
       checked++;
     }
     expect(checked).toBe(StreamTargetKind.options.length);
+  });
+
+  // Owner 2026-11-23 (stg screenshot): the Seazn destination's node read "Seazn · Seazn", the platform joined to the org's stored
+  // label (V541 stores 'Seazn'). It reads "Seazn Hosted" ONCE: the brand, at every width, never the stored label, and no "To {label}"
+  // line under the chain. The stored label is varied, so a join of the two cannot pass by coincidence.
+  it("owner 11-23: the Seazn destination reads 'Seazn Hosted' once at every width, with no label line; every other kind keeps 'platform · label'", () => {
+    const BRAND = "Seazn Hosted"; // the owner's words: a brand, the same in every locale
+    let seazn = 0;
+    for (const label of ["Seazn", "Club stored label"]) {
+      const html = chainHtml(chainFor(null)!, { kind: "seazn", label });
+      expect(destName(html), `stored label ${label}: the brand alone, once, with no width split`).toBe(BRAND);
+      const text = html.replace(/<[^>]*>/g, "|");
+      expect(text.split(BRAND).length - 1, `stored label ${label}: one "Seazn Hosted" in the chain's visible text`).toBe(1);
+      expect(html, `stored label ${label}: the group's accessible name says it too, once`).toMatch(/role="group" aria-label="[^"]*Seazn Hosted[^"]*"/);
+      expect(html, `stored label ${label}: never joined to a label`).not.toContain(" · ");
+      if (label !== "Seazn") expect(html, "never the stored label").not.toContain(label);
+      expect(html, `stored label ${label}: no "To {label}" line under the chain`).not.toContain('data-testid="stream-chain-dest-label"');
+      seazn++;
+    }
+    expect(seazn).toBe(2);
+    // The positive pair: every OTHER kind still joins its platform and its label at ≥768 and keeps the label line below it.
+    let checked = 0;
+    for (const kind of StreamTargetKind.options.filter((k) => k !== "seazn")) {
+      const html = chainHtml(chainFor(null)!, { kind, label: "Club stored label" });
+      const name = platformName((k) => messages[k], kind);
+      expect(html, kind).toContain(`<span class="md:hidden">${name}</span>`);
+      expect(html, kind).toContain(`<span class="max-md:hidden">${name} · Club stored label</span>`);
+      expect(html, kind).toContain('data-testid="stream-chain-dest-label"');
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every non-Seazn kind").toBe(StreamTargetKind.options.length - 1);
+  });
+
+  // T33c review I1: below 768 the destination node is 64 px (`w-16`) and its name is 12 px semibold Geist. "Seazn Hosted" is wider
+  // than that, so a `truncate` there painted "Seazn Ho…", and in Live the node is the only place the panel names the destination.
+  // The oracle is the FONT, not the markup: every kind's name, in every locale, must show whole below 768. A name that truncates
+  // must fit on one line; a name that wraps must fit word by word. Geist Bold (700) is measured for the semibold (600) run, so every
+  // width is an over-estimate, the safe direction for a "fits" gate (font-advance.ts).
+  it("I1: below 768 every destination's name shows WHOLE in its 64-px node, in every locale: one line when it truncates, word by word when it wraps", () => {
+    const NODE_PX = 64; // `w-16` below md (the A11 test below pins the class)
+    const NAME_PX = 12; // `text-xs` below md
+    const bold = openFace(resolve(import.meta.dirname, "../../../../assets/fonts/Geist-Bold.ttf"), "Geist Bold");
+    const BRAND = "Seazn Hosted"; // the owner's words (2026-11-23)
+    expect(textWidth(bold, BRAND, NAME_PX), "premise: the brand cannot sit on one 64-px line, so a truncating node would cut it").toBeGreaterThan(NODE_PX);
+    let checked = 0;
+    let wraps = 0;
+    for (const kind of StreamTargetKind.options) {
+      const html = chainHtml(chainFor(null)!, { kind, label: "Club stored label" });
+      const cls = ` ${/<span data-testid="stream-chain-dest-name" class="([^"]*)">/.exec(html)?.[1] ?? ""} `;
+      const truncates = cls.includes(" truncate ");
+      const wrapsHere = cls.includes(" whitespace-normal ");
+      expect(truncates !== wrapsHere, `${kind}: the name below 768 either truncates or wraps, never both or neither (${cls.trim()})`).toBe(true);
+      if (wrapsHere) wraps++;
+      for (const locale of LOCALES) {
+        const d = dict(locale);
+        const name = platformName((k) => String(d[k] ?? messages[k]), kind);
+        if (truncates) {
+          expect(textWidth(bold, name, NAME_PX), `${kind} in ${locale}: "${name}" truncates below 768, so it must fit one line`).toBeLessThanOrEqual(NODE_PX);
+        } else {
+          expect(minContentWidth(bold, name, NAME_PX), `${kind} in ${locale}: "${name}" wraps below 768, so each word must fit`).toBeLessThanOrEqual(NODE_PX);
+        }
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every kind in every locale").toBe(StreamTargetKind.options.length * LOCALES.length);
+    expect(wraps, "the Seazn name is the one that wraps below 768").toBe(1);
   });
 
   // A11 (stream-relay.spec.ts): browser zoom at 125% on a 320-px phone is a 256-CSS-px layout. Three 64-px nodes that
@@ -234,7 +308,7 @@ describe("SignalChain (spec §3.2)", () => {
   it("the Seazn node's stalled word, in every locale: 'Waiting for video' while the server says stalled, 'Receiving' when it does not", () => {
     const facts = (health: "stalled" | null) => ({
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: null, mode: "automatic" as const, state: "publishing" as const,
-      notReady: null, notReadyShown: false, health, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+      notReady: null, notReadyShown: false, health, startFailed: null, pairedAt: "2026-10-08T11:30:00Z", lastBeatAt: "2026-10-08T12:00:00Z",
       elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
     });
     const seaznOf = (health: "stalled" | null, locale: Locale) => {
@@ -372,7 +446,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   type Facts = NonNullable<StreamPhone["phone"]>;
   const facts = (over: Partial<Facts> = {}): Facts => ({
     present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "1.4.0", mode: "automatic", state: "publishing",
-    notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+    notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-10-08T11:30:00Z", lastBeatAt: "2026-10-08T12:00:00Z",
     elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
   });
   const readModel = (f: Facts | null, over: Partial<StreamPhone> = {}): StreamPhone => ({
@@ -380,10 +454,10 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     auto: null, legacy: false, finished: false, session: null, court: null, ...over,
   });
   const live = { state: "live", ingest: { state: "connected", protocol: "srt" }, output: null, countdown: null } as unknown as StreamSessionCurrent;
-  const html = (s: PhoneStrip, locale: Locale = "en", onBuy?: () => void) =>
+  const html = (s: PhoneStrip, locale: Locale = "en", onBuy?: () => void, buyDisabled?: boolean) =>
     renderToStaticMarkup(
       <DictProvider dict={dict(locale)} locale={locale}>
-        <PhoneStripView id="w" strip={s} caret onBuy={onBuy} />
+        <PhoneStripView id="w" strip={s} caret onBuy={onBuy} buyDisabled={buyDisabled} />
       </DictProvider>,
     );
   /** The strip as a customer reads it: each tag a boundary, entities decoded, whitespace folded. */
@@ -485,5 +559,19 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(text(html(noCredit, "es", () => {}))).toBe("No se pudo iniciar automáticamente: necesitas un crédito Seazn para emitir. Comprar créditos");
     expect(text(html(noCredit, "fr", () => {}))).toBe("Impossible de démarrer automatiquement : il vous faut un crédit Seazn pour passer en direct. Acheter des crédits");
     expect(text(html(noCredit, "nl", () => {}))).toBe("Automatisch starten lukte niet: je hebt een Seazn-credit nodig om live te gaan. Credits kopen");
+  });
+
+  // Task 33e follow-up: a paused seat's Buy credits stays drawn (not hidden) and goes off — disabled and aria-disabled.
+  it("buyDisabled: the Buy credits remedy is drawn disabled and aria-disabled; without it, enabled and with neither attribute", () => {
+    const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: { enabled: true, refusal: "no_credit", wontStart: null, stopApplies: null } }), null)!;
+    const button = (h: string) => /<button[^>]*data-testid="stream-auto-remedy-buy"[^>]*>/.exec(h)?.[0] ?? "";
+    const off = button(html(noCredit, "en", () => {}, true));
+    expect(off, "PREMISE: drawn").not.toBe("");
+    expect(off).toMatch(/\sdisabled(=""|\s|>)/);
+    expect(off).toContain('aria-disabled="true"');
+    const on = button(html(noCredit, "en", () => {}, false));
+    expect(on, "PREMISE: drawn unpaused").not.toBe("");
+    expect(on).not.toMatch(/\sdisabled(=""|\s|>)/);
+    expect(on).not.toContain("aria-disabled");
   });
 });

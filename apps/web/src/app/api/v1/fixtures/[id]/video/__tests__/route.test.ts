@@ -99,7 +99,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     vi.mocked(signLivePlayback).mockClear();
     const res = await read<PublicFixtureVideo>(await get(o.fixtures[0]));
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, data: { live: null, replay: [] } });
+    expect(res.body).toMatchObject({ ok: true, data: { live: null, replay: [], session: null } });
     expect(signLivePlayback, "no session, no live uid, nothing to sign").not.toHaveBeenCalled();
   });
 
@@ -120,7 +120,8 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     expect(res.raw.split(m![1]!).length - 1, "the token is in the address only").toBe(1);
     expect(data.replay).toEqual([]);
     // The fixture beside it, with no session, is still empty: the answer is the PATH's fixture's.
-    expect((await read<PublicFixtureVideo>(await get(o.fixtures[1]))).body.data).toEqual({ live: null, replay: [] });
+    expect((await read<PublicFixtureVideo>(await get(o.fixtures[1]))).body.data).toEqual({ live: null, replay: [], session: null });
+    expect(data.session, "the live answer names its session: live, and it went live").toEqual({ state: "live", wentLive: true });
   });
 
   it("the organisation's own PRIVATE competition: the organiser's door answers the live, the public door answers nothing", async () => {
@@ -129,7 +130,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     await sql`update competitions set visibility = 'private' where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtures[0]})`;
     const organiserSees = await read<PublicFixtureVideo>(await get(o.fixtures[0]));
     expect(organiserSees.body.data?.live, "the organiser's door").not.toBeNull();
-    expect(await seaznFixtureVideo(o.fixtures[0], new Date()), "PREMISE: the public read answers nothing for a private competition").toEqual({ live: null, replay: [] });
+    expect(await seaznFixtureVideo(o.fixtures[0], new Date()), "PREMISE: the public read answers nothing for a private competition").toEqual({ live: null, replay: [], session: null });
   });
 
   it("a stopped Seazn session no longer shows a live (ended)", async () => {
@@ -137,7 +138,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     const sid = await live(o.r, o.fixtures[0], o.r.seazn);
     expect((await read<PublicFixtureVideo>(await get(o.fixtures[0]))).body.data?.live).not.toBeNull();
     await stopAndSettle(o.r, o.fixtures[0], sid);
-    expect((await read<PublicFixtureVideo>(await get(o.fixtures[0]))).body.data).toEqual({ live: null, replay: [] });
+    expect((await read<PublicFixtureVideo>(await get(o.fixtures[0]))).body.data, "stopped: no live, the session ended").toEqual({ live: null, replay: [], session: { state: "completed", wentLive: true } });
   });
 
   it("a VIEWER of the fixture's own organisation reads it (Match Day opens read-only for one); an ADMIN does too", async () => {

@@ -28,6 +28,7 @@ import Link from "next/link";
 import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import { ScoreSentence } from "@/components/score-sentence";
 import { ForfeitTagChip } from "../forfeit-tag-chip";
+import { StreamCamera, streamDescriptionId } from "./stream-camera";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
@@ -234,6 +235,13 @@ export function MatchCard({
   // condition and the content cannot drift apart.
   const starts = startsText();
 
+  // T47 (owner 2026-11-24, option A): the camera, for a live stream or an available replay. Never on a match a withdrawal removed (its
+  // card is struck through, with no time and no score). The card's `aria-label` replaces its contents, so the camera's words are attached
+  // as part of its description beside the forfeit sentence; with neither, the attribute is exactly what it was.
+  const stream = expunged ? undefined : m.stream;
+  const describedBy =
+    [m.forfeit ? `mh-forfeit-${m.fixtureId}` : null, stream ? streamDescriptionId(m.fixtureId) : null].filter(Boolean).join(" ") || undefined;
+
   return (
     <Link
       href={m.href}
@@ -252,7 +260,7 @@ export function MatchCard({
       aria-label={t(dict, "matchesHub.card.label", { home: s0.name, away: s1.name })}
       // W2b Task 13: the label above REPLACES the card's content for a screen reader, so a credited result's sentence
       // is attached as the link's description — the tag below is its visible abbreviation.
-      aria-describedby={m.forfeit ? `mh-forfeit-${m.fixtureId}` : undefined}
+      aria-describedby={describedBy}
       className="block rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm transition hover:border-accent-line"
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-ink-muted">
@@ -280,7 +288,8 @@ export function MatchCard({
               .join(" · ")}
           </span>
         ) : null}
-        <span className="ml-auto shrink-0">
+        <span className={stream ? "ml-auto flex shrink-0 items-center gap-1.5" : "ml-auto shrink-0"}>
+          {stream ? <StreamCamera cue={stream} fixtureId={m.fixtureId} dict={dict} /> : null}
           {expunged ? (
             // W5 T23 (RB5-W2): a match a withdrawal removed is not "Ended" and has no time to show: the match centre's own word.
             <span data-testid="mh-match-expunged">{t(dict, "matchCentre.status.abandoned")}</span>

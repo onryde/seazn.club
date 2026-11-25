@@ -6,8 +6,9 @@
 //  - `LinkCourtAction`: the focus header's "Stream this court" for a court with no link.
 //  - `CourtStreamBand`: a linked court's status block (court-phone-status.tsx) with, for a writer, "Show court QR" and "Stop
 //    streaming". Withdraw asks first, in the band.
-//  - `CourtStreamSheet`: the modal both open. Opened to link, it asks for the YouTube channel (only connected channels: a court
-//    streams one video per match, which a pasted key cannot give), links, and shows the answer's QR at once. Opened on a link that
+//  - `CourtStreamSheet`: the modal both open. Opened to link, it asks where to stream (Task 37: the club's Seazn destination first, when
+//    it is offered, then the connected YouTube channels: a court streams one video per match, which a pasted key cannot give), links,
+//    and shows the answer's QR at once. Opened on a link that
 //    exists it only READS the court's QR (GET) — opening it never makes a code.
 // The two buttons only ASK for the sheet; the focus owns it (court-focus.tsx). The link refreshes the board, which turns the header
 // action into the band: a sheet owned by either would be unmounted with it, in the middle of showing the QR it had just made.
@@ -21,7 +22,7 @@ import { captureQrV2Text } from "@/lib/capture-qr";
 import { fmtPublicTime } from "@/lib/format";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { canWriteCourtStream, lastWorkingMinute, linkFailureKey, youtubeTargets } from "@/lib/match-day/court-stream";
+import { canWriteCourtStream, courtTargets, lastWorkingMinute, linkFailureKey } from "@/lib/match-day/court-stream";
 import type { MatchDayCourt, MatchDayCourtStream } from "@/lib/match-day/types";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { useStreamingHref } from "@/components/use-org-paths";
@@ -32,7 +33,8 @@ import { CourtPhoneStatus } from "./court-phone-status";
 export type TargetsState = { status: "loading" } | { status: "error" } | { status: "ok"; list: readonly StreamTarget[] };
 type QrState = { status: "loading" } | { status: "error" } | { status: "ok"; qr: SeaznQr; expiresAt: string };
 
-/** The channels a court may stream to, as radios. With none connected: why, and the way to connect one (the Streaming page). */
+/** The destinations a court may stream to, as radios: Seazn first (a card of its own, saying nothing needs connecting), then the
+ *  connected YouTube channels. With none: why, and the way to connect a channel (the Streaming page). */
 export function TargetPicker({
   dict,
   state,
@@ -47,7 +49,7 @@ export function TargetPicker({
   const streamingHref = useStreamingHref();
   if (state.status === "loading") return <p className="text-sm text-slate-600">{t(dict, "matchDay.code.loading")}</p>;
   if (state.status === "error") return <p role="alert" className="text-sm text-amber-900">{t(dict, "matchDay.refusal.other")}</p>;
-  const targets = youtubeTargets(state.list);
+  const targets = courtTargets(state.list);
   if (targets.length === 0) {
     return (
       <div data-testid="md-cs-youtube-only" className="grid min-w-0 gap-3">
@@ -70,11 +72,15 @@ export function TargetPicker({
       {targets.map((target) => (
         <label
           key={target.id}
+          data-testid={target.kind === "seazn" ? "md-cs-target-seazn" : undefined}
           className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm ring-1 ring-inset ring-purple-100 has-[:checked]:bg-purple-50 has-[:checked]:ring-purple-400"
         >
           <input type="radio" name="md-cs-target" data-testid="md-cs-target" checked={value === target.id} onChange={() => onChange(target.id)} />
           <span className="min-w-0">
             <span className="block font-medium text-slate-900 [overflow-wrap:anywhere]">{target.label}</span>
+            {target.kind === "seazn" && (
+              <span className="block text-xs text-slate-600 [overflow-wrap:anywhere]">{t(dict, "matchDay.courtStream.seaznHint")}</span>
+            )}
             {target.youtube !== null && target.youtube.channelTitle !== target.label && (
               <span className="block text-xs text-slate-600 [overflow-wrap:anywhere]">{target.youtube.channelTitle}</span>
             )}
@@ -138,7 +144,7 @@ export function CourtStreamSheet({
         if (ctl.signal.aborted) return;
         const all = Array.isArray(list) ? list : [];
         setTargets({ status: "ok", list: all });
-        const only = youtubeTargets(all);
+        const only = courtTargets(all);
         if (only.length === 1) setTarget(only[0]!.id);
       })
       .catch(() => {
@@ -160,7 +166,7 @@ export function CourtStreamSheet({
       setQr(ok === null ? { status: "error" } : { status: "ok", ...ok });
       onChanged();
     } catch (err) {
-      setFailure(t(dict, linkFailureKey(err instanceof ApiV1Error ? err.code : "")));
+      setFailure(t(dict, linkFailureKey(err instanceof ApiV1Error ? err.code : "", err)));
     } finally {
       setBusy(false);
     }

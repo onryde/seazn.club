@@ -48,7 +48,7 @@ const SCORE_OFF: PhoneScore = {
   available: false, stored: null, template: defaultTemplateFor("football"), delayMs: null, sportKey: "football", editor: null,
   modeFailed: false, onMode: () => {},
 };
-const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London", score: SCORE_OFF };
+const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, pasteCodeShown: true, tz: "Europe/London", score: SCORE_OFF };
 const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
 const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
 const TARGETS_URL = "GET /api/v1/orgs/o-1/stream-targets";
@@ -59,7 +59,7 @@ const phoneRead = (court: StreamPhone["court"] = null): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null },
   phone: {
     present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator", state: "paired", notReady: null,
-    notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
+    notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z", lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
     beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
   },
   destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court,

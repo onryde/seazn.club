@@ -17,8 +17,9 @@
 //
 // Only reached when `streamPreviewOf` found something to play; any other live stream (a pasted key, a made-for-kids broadcast)
 // keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5) beyond the Seazn player's held box: before its
-// first read, and after a Stop, where it holds with "The video will appear here shortly" (re-capture R2) until the recording is locked
-// or the next board poll drops the preview (the stream is no longer live), whichever comes first.
+// first read (wordless: this mount holds no wait), and after a Stop, where it holds with the replay's line (`seaznVideo.startingReplay`)
+// (re-capture R2; Task 33f: a player has been on screen, so the replay is what comes next, the public page's rule) until the recording
+// is locked or the next board poll drops the preview (the stream is no longer live), whichever comes first.
 import Link from "@/components/ui/console-link";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
@@ -79,8 +80,9 @@ export function CourtStreamPreview({
       </div>
       <div className="min-w-0 px-4 sm:px-5">
         {preview.kind === "seazn" ? (
-          // On air to Seazn: the player's box is held until the first read (Phase 1 visual D1), so its arrival moves nothing.
-          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} reserve />
+          // On air to Seazn: the player's box is held until the first read (Phase 1 visual D1), so its arrival moves nothing; a live is
+          // what it expects, so it holds the live player's delay line row too (Task 33c).
+          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} reserve liveExpected />
         ) : (
           <ReplayEmbed parts={[preview.part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />
         )}

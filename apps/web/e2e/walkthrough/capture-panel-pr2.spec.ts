@@ -720,7 +720,7 @@ test("T11 refusal: switch on, an automatic phone, the match in play and NO desti
 test("T12 Ready: a second phone claims → the amber notice names ITS model and the venue's time, without Stop; the fold says Paired · that model; the X dismisses it across a reload; a NEW takeover shows again", async ({
   page,
 }) => {
-  test.setTimeout(SEED_MS + 4 * NAV_MS + 6 * POLL_WAIT_MS + 30_000);
+  test.setTimeout(SEED_MS + 4 * NAV_MS + 7 * POLL_WAIT_MS + 30_000); // Task 35: one more poll wait (the fold shut by the takeover)
   await page.setViewportSize({ width: 1280, height: 900 });
   const TZ = "Asia/Kolkata"; // not the server's zone, not UTC: a time printed on any other clock reads differently
   const rig = await seedRig(page, { orgTz: TZ });
@@ -765,6 +765,9 @@ test("T12 Ready: a second phone claims → the amber notice names ITS model and 
   expect(third1.status).toBe(200);
   third.keepAlive();
   await expect(again.getByTestId("stream-takeover-text")).toContainText("(iPhone 15)", { timeout: 2 * POLL_WAIT_MS });
+  // Task 35 (owner 2026-11-24): reading the code above opened "Show the code again"; another phone taking the slot is a new pairing,
+  // so the same poll that brought the notice shut it by itself (the read model's takeover instant is the pairing's identity).
+  await expect(again.getByTestId("stream-code-disclosure"), "the takeover shut the open fold").not.toHaveAttribute("open", /.*/, { timeout: POLL_WAIT_MS });
 
   // B7 review I-2: Revoke & reissue IS the answer to a takeover — the server stops serving it with the old code, so the
   // notice goes with it (no dismissal involved: this takeover was never dismissed).

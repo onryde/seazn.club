@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
-import { APP_BUILD_SHA, SAMPLES_PER_SESSION_CAP } from "../config";
+import { APP_BUILD_SHA, MAX_DURATION_MINUTES, RELAY_EDGE_BEAT_MIN_GAP_MS, SAMPLES_PER_SESSION_CAP, STREAM_TICK_FASTEST_PERIOD_SECONDS } from "../config";
 import { PG_NUMERIC_RANGE, SAMPLE_NUMERIC_COLUMNS, recordEvent, recordProviderCall, recordSample, recordStorageSnapshot } from "../telemetry";
 import { MIGRATION, STREAM_TABLES } from "./_stream-migration";
 
@@ -80,6 +80,26 @@ describe.skipIf(!HAS_DB)("telemetry — the writers", () => {
     // Seed cap - 1 rows directly (the writer is O(1) per call; 8,000 calls is a slow test for no extra proof).
     await sql`insert into fixture_stream_samples (session_id, source) select ${sid}, 'poll' from generate_series(1, ${SAMPLES_PER_SESSION_CAP - 1})`;
     expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" })).toBe("written");
+    expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" })).toBe("capped");
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sid}`;
+    expect(n).toBe(SAMPLES_PER_SESSION_CAP);
+  });
+
+  // T44 part 2 (the C2 review): the cap used to be 8 000, and a 3 h session with an edge beat at the compositor's least gap (1/s)
+  // writes up to 10 800, so the last ~45 min of its telemetry was lost. The rows below are what such a session writes — read from
+  // the DECLARATIONS (the session's hard cap, the least gap, the fastest tick), not from the cap — and the REAL writer must still
+  // take the next one, as it must take the last beats of the end.
+  it("T44: a session that runs its hard cap with a beat at the least gap and a poll every fastest tick still records its next sample; the cap then cuts only what is past it", async () => {
+    const { sid } = await session();
+    const beats = (MAX_DURATION_MINUTES * 60 * 1000) / RELAY_EDGE_BEAT_MIN_GAP_MS;
+    const polls = (MAX_DURATION_MINUTES * 60) / STREAM_TICK_FASTEST_PERIOD_SECONDS;
+    expect(beats + polls, "premise: the brief's 10 800 beats and the 180 polls").toBe(10_980);
+    await sql`insert into fixture_stream_samples (session_id, source) select ${sid}, 'heartbeat' from generate_series(1, ${beats})`;
+    await sql`insert into fixture_stream_samples (session_id, source) select ${sid}, 'poll' from generate_series(1, ${polls})`;
+    expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" }), "the beat after a full session's worth").toBe("written");
+    expect(await recordSample(sql, { sessionId: sid, source: "notification" }), "and a webhook's").toBe("written");
+    // The cap is still a cap: filled to it, the next is refused, and the table holds exactly the cap.
+    await sql`insert into fixture_stream_samples (session_id, source) select ${sid}, 'poll' from generate_series(1, ${SAMPLES_PER_SESSION_CAP}::int - ${beats + polls + 2}::int)`;
     expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" })).toBe("capped");
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sid}`;
     expect(n).toBe(SAMPLES_PER_SESSION_CAP);

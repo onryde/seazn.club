@@ -1,13 +1,16 @@
 // Owed 108 fix (b), web half — the phone-live EDGE. Pure: the use-case reads the tracker, passes the beat in, and stores what
-// this returns (capture-phone.ts `postBeat`, the only writer; usecases/stream-sessions/heartbeat.ts `heartbeat` serves `edge`).
+// this returns (capture-phone.ts `postBeat`; usecases/stream-sessions/heartbeat.ts `heartbeat` serves `edge`). Task 45 adds ONE more
+// writer of the counter alone: usecases/stream-sessions/live-notification.ts raises it by 1 on Cloudflare's camera RE-connection
+// (`reconnectNudge`), leaving `live` / `beatAt` the phone's.
 //
 // The relay (the Fly compositor) is outbound-only, so web can only tell it something in the reply to its ~5 s heartbeat. When
 // the phone's connection comes back after an outage the relay is waiting out its own back-off; a per-session counter in that
 // reply, bumped once per not-live → live edge, lets it reconnect at once (docs/contracts/relay-job.v1.json heartbeatReply
 // `phoneLiveEdge`). It acts once per INCREASE, so the counter is monotonic and stored; this file is only the rule.
 //
-// The signal is the PHONE'S OWN beat (`state`), never Cloudflare Input A's status: the phone's beat arrives whether or not an
-// organiser page is open, and a Cloudflare read is only taken when a tick runs.
+// The tracker's signal is the PHONE'S OWN beat (`state`), never a POLLED Cloudflare status: the phone's beat arrives whether or
+// not an organiser page is open, and a Cloudflare read is only taken when a tick runs. Cloudflare's PUSHED `connected` (Task 45)
+// is not a read of that kind, and only ever adds an increase.
 import type { CapturePhoneState } from "@/server/api-v1/capture-schemas";
 import { type SessionState, isActive } from "./session";
 

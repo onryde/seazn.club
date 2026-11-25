@@ -18,6 +18,10 @@
 // leaves out included), skipping any number a row of the fixture already holds. With no row at all this is Task 14's numbering
 // exactly. Storing a recording's row under the number it was given moves no other number, so a part keeps its number through
 // discovery whatever discovery skips (an errored recording, an input whose listing failed) or lists first (a later session).
+// READY (Task 39): an `hls` part is the CLOUDFLARE copy, so it is offered only when Cloudflare can play it (`ready`: the Seazn pass saw
+// the recording `ready`, `seazn_locked_videos.ready_at`). A recording still `queued` or `inprogress`, or one that `error`ed, is no part,
+// but it is still an entry: it takes its number in the numbering above like any other, so a part never moves when its neighbour becomes
+// ready, and an errored one leaves a gap. A playable `embed` part is the replay host's copy and never reads `ready`.
 // The 30-day bound (DELETE_RECORDING_AFTER_DAYS from the session's start: Cloudflare's own delete) applies to `hls` parts ONLY. A
 // replay-host copy is not Cloudflare's and is not deleted with it. A part's number is given before the bound leaves it out, so a
 // part keeps its number and a gap is left (Task 14's rule).
@@ -36,6 +40,9 @@ export interface ReplayEntry {
   sessionCreatedAt: Date;
   /** The Seazn pass locked it (`seazn_locked_videos`): its Cloudflare copy may be signed. */
   locked: boolean;
+  /** Task 39: Cloudflare can play it (the pass saw it `ready`, `ready_at` set): the condition of every `hls` part. False for a
+   *  recording still being processed, one that errored, and one that is not locked at all. */
+  ready: boolean;
   /** Its programme input is fully discovered (`replays_discovered_at` set): a recording still without a row then never gets one. */
   inputDiscovered: boolean;
   /** Its `fixture_video_replays` row; null until discovery lists it. */
@@ -98,7 +105,7 @@ export function partNumbers(entries: readonly { stored: number | null }[]): numb
 export function replayParts(entries: readonly ReplayEntry[], now: Date): ReplayPart[] {
   const numbers = partNumbers(entries.map((e) => ({ stored: e.row === null ? null : e.row.partNo })));
   const cutoff = now.getTime() - DELETE_RECORDING_AFTER_DAYS * DAY_MS;
-  const onCloudflare = (e: ReplayEntry) => e.locked && e.sessionCreatedAt.getTime() > cutoff;
+  const onCloudflare = (e: ReplayEntry) => e.locked && e.ready && e.sessionCreatedAt.getTime() > cutoff;
   const parts: ReplayPart[] = [];
   for (const [i, e] of entries.entries()) {
     const ids = { cfVideoId: e.cfVideoId, sessionId: e.sessionId };

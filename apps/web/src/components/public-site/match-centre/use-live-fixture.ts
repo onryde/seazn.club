@@ -173,7 +173,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // `initial` as of mount. A ref, so the seeding effect below reads the
   // mount-time document without listing a prop object in its dependencies —
   // this hook has always seeded ONCE and a changed `initial` has always needed
-  // a `key` change (fixture-stream-panel.tsx does exactly that).
+  // a `key` change (fixture-stream-panel/ does exactly that).
   const initialRef = useRef(initial);
   // I1 (review-unreviewed-range.md, 2026-09-10). `initial` used to be
   // presented at once even under a delay, because only POLLED snapshots went

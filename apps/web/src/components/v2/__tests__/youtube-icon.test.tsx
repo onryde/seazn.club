@@ -221,7 +221,7 @@ describe("the logo is only ever drawn inside a link to YouTube", () => {
   it("the scan reads the whole product, and finds exactly the two registered sites (the channel link, the replay link)", () => {
     expect(FILES.length, "anti-vacuity: the scan read the source tree").toBeGreaterThan(300);
     expect(FILES.some((f) => f.rel === "components/v2/youtube-icon.tsx")).toBe(true);
-    expect(ICON_SITES.map((s) => s.file).sort()).toEqual(["components/v2/fixture-stream-panel.tsx", "components/v2/youtube-icon.tsx"]);
+    expect(ICON_SITES.map((s) => s.file).sort()).toEqual(["components/v2/fixture-stream-panel/phone-tab-body.tsx", "components/v2/youtube-icon.tsx"]);
   });
 
   it("every site is inside an <a> that has an href (no </a> between the opening and the icon), and each names where it leads", () => {
@@ -234,7 +234,7 @@ describe("the logo is only ever drawn inside a link to YouTube", () => {
       const openingTag = between.slice(0, between.search(/>\s/) + 1);
       expect(openingTag, `${s.file}: the anchor has an href`).toMatch(/\bhref=/);
       if (s.file.endsWith("youtube-icon.tsx")) expect(openingTag, "the link goes to the channel's page").toContain("href={youtubeChannelUrl(channelId)}");
-      if (s.file.endsWith("fixture-stream-panel.tsx")) {
+      if (s.file.endsWith("fixture-stream-panel/phone-tab-body.tsx")) {
         expect(openingTag, "the replay link").toContain("href={row.url}");
         // The icon follows the LINK: it is drawn only when the link really goes to YouTube.
         expect(between.slice(-200), "gated by isYoutubeUrl").toContain("isYoutubeUrl(row.url)");

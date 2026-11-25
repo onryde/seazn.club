@@ -22,7 +22,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { LOCALES } from "@/lib/i18n-constants";
 import type { StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
-import { type SeaznReplayActions, SeaznReplaysCard, deleteSeaznReplayFlow, replayDownloadHref, replayLength } from "../seazn-replays-card";
+import { type SeaznReplayActions, SeaznReplaysCard, deleteSeaznReplayFlow, downloadSeaznReplayFlow, replayDownloadCheckHref, replayDownloadHref, replayLength } from "../seazn-replays-card";
 
 type Replay = StreamSessionCurrent["seaznReplays"][number];
 const DICT_DIR = join(__dirname, "../../../dictionaries");
@@ -32,7 +32,7 @@ const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
 const FIXTURE = "11111111-1111-4111-8111-111111111111";
 const r = (partNo: number, state: Replay["state"], lengthSeconds: number | null = null, onMatchPage = true): Replay =>
   ({ id: id(partNo), partNo, state, lengthSeconds, onMatchPage });
-const IDLE: SeaznReplayActions = { deleting: null, failed: null, gone: new Set(), onDelete: () => {} };
+const IDLE: SeaznReplayActions = { deleting: null, failed: null, gone: new Set(), onDelete: () => {}, downloading: null, downloadFailed: null, onDownload: () => {} };
 const html = (replays: Replay[], locale = "en", actions: SeaznReplayActions = IDLE) =>
   renderToStaticMarkup(
     <DictProvider dict={uiDict(locale)} locale={locale as "en"}>
@@ -205,6 +205,99 @@ describe("SeaznReplaysCard", () => {
     ]);
   });
 
+  // Task 33d (T31b review m3): a member whose seat is paused by the plan's member limit (entitlement-freeze.ts `frozenMemberIds`; the
+  // owner is never in it) would get 402 from both routes (auth.ts `requireOrgAuth`, write scope). So the card shows every part and its
+  // state, offers neither action, and says why in ONE line. The English is the controller's sentence, literal, so a reworded key reds.
+  // Fix round 1 (T33d review m1): the line names the state the way the app already does (`streamDest.error.seatFrozen`: "read-only",
+  // "member limit", "the owner"), so an admin who meets both surfaces reads one name for one state.
+  describe("Task 33d: a member whose seat is paused", () => {
+    const PAUSED_LINE = "Your seat is read-only while the club is over its member limit, so replays can't be changed or downloaded. Ask the owner.";
+    // [locale, the house's words for "read-only", for "member limit"] — each must appear in BOTH this line and that locale's
+    // `streamDest.error.seatFrozen`, so the table is checked against the house key, not only against this line.
+    const SEAT_STATE_WORDS: [locale: string, readOnly: string, memberLimit: string][] = [
+      ["en", "read-only", "member limit"],
+      ["nl", "alleen-lezen", "ledenlimiet"],
+      ["fr", "en lecture seule", "limite de membres"],
+      ["es", "de solo lectura", "límite de miembros"],
+    ];
+    const PARTS = [r(1, "playable", 60), r(2, "processing"), r(3, "failed")];
+    const card = (o: { replays?: Replay[]; frame?: "inset" | "page"; memberFrozen?: boolean; locale?: string; actions?: SeaznReplayActions } = {}) =>
+      renderToStaticMarkup(
+        <DictProvider dict={uiDict(o.locale ?? "en")} locale={(o.locale ?? "en") as "en"}>
+          <SeaznReplaysCard fixtureId={FIXTURE} replays={o.replays ?? PARTS} actions={o.actions ?? IDLE} frame={o.frame} memberFrozen={o.memberFrozen} />
+        </DictProvider>,
+      );
+    const PAUSED = /<p data-testid="stream-seazn-replays-paused"[^>]*>(.*?)<\/p>/g;
+    const pausedLines = (h: string) => [...h.matchAll(PAUSED)].map((m) => text(m[1]!));
+
+    it("EMPTY CASE FIRST: paused with no part — none read, or every part deleted here — is no card and no line", () => {
+      expect(card({ replays: [], memberFrozen: true })).toBe("");
+      expect(card({ replays: [r(1, "playable", 60)], memberFrozen: true, actions: { ...IDLE, gone: new Set([id(1)]) } })).toBe("");
+    });
+
+    it("paused: every part and its state stay, NO Download and NO Delete (no actions row at all), and one line saying why — in both frames", () => {
+      let checked = 0;
+      for (const frame of ["inset", "page"] as const) {
+        const shown = card({ frame });
+        const paused = card({ frame, memberFrozen: true });
+        expect(actionsOf(shown).flat().map((a) => a.testid), `${frame}: PREMISE: unpaused, the actions are there`).toEqual([
+          "stream-seazn-replay-download", "stream-seazn-replay-delete", "stream-seazn-replay-delete", "stream-seazn-replay-delete",
+        ]);
+        expect(rows(paused), `${frame}: the same parts in the same states`).toEqual(rows(shown));
+        expect(rows(paused), `${frame}: anti-vacuity`).toHaveLength(3);
+        expect(paused, `${frame}: no actions row`).not.toContain('data-testid="stream-seazn-replay-actions"');
+        expect(paused, `${frame}: no Download`).not.toContain('data-testid="stream-seazn-replay-download"');
+        expect(paused, `${frame}: no Delete`).not.toContain('data-testid="stream-seazn-replay-delete"');
+        expect(paused, `${frame}: no link to the download route`).not.toContain("/download");
+        expect(pausedLines(paused), `${frame}: ONE line, the controller's words`).toEqual([PAUSED_LINE]);
+        expect(pausedLines(shown), `${frame}: no line when the seat is not paused`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("not paused (memberFrozen false: an admin with a seat, and the owner, who is never frozen) is exactly the card it was without the prop", () => {
+      for (const frame of ["inset", "page"] as const) expect(card({ frame, memberFrozen: false }), frame).toBe(card({ frame }));
+      expect(pausedLines(card({ memberFrozen: false }))).toEqual([]);
+    });
+
+    it("a paused member sees no row's delete failure either (there is no Delete to have failed)", () => {
+      const out = card({ memberFrozen: true, actions: { ...IDLE, failed: id(1) } });
+      expect(out).not.toContain('data-testid="stream-seazn-replay-delete-failed"');
+      expect(card({ actions: { ...IDLE, failed: id(1) } }), "PREMISE: unpaused, it shows").toContain('data-testid="stream-seazn-replay-delete-failed"');
+    });
+
+    it("every locale says it in its own words: the key is in each dictionary, translated outside English, and rendered as given", () => {
+      let checked = 0;
+      for (const locale of LOCALES) {
+        const d = uiDict(locale);
+        const want = d["stream.replay.seazn.seatPaused"];
+        expect(want, `${locale}: stream.replay.seazn.seatPaused`).toBeTruthy();
+        if (locale === "en") expect(want).toBe(PAUSED_LINE);
+        else expect(want, `${locale}: translated`).not.toBe(en["stream.replay.seazn.seatPaused"]);
+        expect(pausedLines(card({ locale, memberFrozen: true })), locale).toEqual([want]);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    });
+
+    it("one name for one state: in every locale the line says \"read-only\" and \"member limit\" in the same words as the app's existing seat line (streamDest.error.seatFrozen)", () => {
+      let checked = 0;
+      for (const [locale, readOnly, memberLimit] of SEAT_STATE_WORDS) {
+        const d = uiDict(locale);
+        const house = d["streamDest.error.seatFrozen"];
+        const line = d["stream.replay.seazn.seatPaused"];
+        for (const words of [readOnly, memberLimit]) {
+          expect(house, `${locale}: PREMISE: the house line says "${words}"`).toContain(words);
+          expect(line, `${locale}: the replay line says "${words}" too`).toContain(words);
+          checked++;
+        }
+      }
+      expect(new Set(SEAT_STATE_WORDS.map(([l]) => l)), "every locale is in the table").toEqual(new Set(LOCALES));
+      expect(checked, "anti-vacuity: two phrases per locale").toBe(LOCALES.length * 2);
+    });
+  });
+
   it("replayLength: m:ss under an hour, h:mm:ss from an hour, nothing for a length that is not one", () => {
     expect([replayLength(0), replayLength(59), replayLength(60), replayLength(125), replayLength(3_599), replayLength(3_600), replayLength(36_061)])
       .toEqual(["0:00", "0:59", "1:00", "2:05", "59:59", "1:00:00", "10:01:01"]);
@@ -264,5 +357,105 @@ describe("deleteSeaznReplayFlow", () => {
     await r1.run();
     expect(r1.log.filter((l) => l === "confirm")).toHaveLength(2);
     expect(r1.log.filter((l) => l.startsWith("DELETE"))).toHaveLength(2);
+  });
+});
+
+// Task 48: the Download button must never SAVE an error body (a 409 envelope was saved as `download.json`). The click asks the route
+// `?check=1` first (204, or the refusal: no file opened, no token in the address); the browser is told to save only on the 204. The
+// steps are the hook's (useSeaznReplayActions) without state.
+describe("downloadSeaznReplayFlow", () => {
+  const HREF = replayDownloadHref(FIXTURE, id(1));
+  const answer = (status: number, body: string | null = null) => new Response(body, { status, headers: body === null ? {} : { "content-type": "application/json" } });
+  const rig = (reply: () => Promise<Response>) => {
+    const log: string[] = [];
+    return { log, run: () => downloadSeaznReplayFlow({ href: HREF, ask: async (h) => (log.push(`ASK ${h}`), reply()), save: (h) => { log.push(`SAVE ${h}`); } }) };
+  };
+
+  it("EMPTY CASE FIRST: a 204 is saved — once, from the part's own route WITHOUT the probe's query, after the ask; the probe's address is the route's own with `?check=1` and nothing else", async () => {
+    const r1 = rig(async () => answer(204));
+    expect(await r1.run()).toBe("saved");
+    expect(r1.log).toEqual([`ASK ${HREF}?check=1`, `SAVE ${HREF}`]);
+    expect(replayDownloadCheckHref(HREF)).toBe(`/api/v1/fixtures/${FIXTURE}/replays/${id(1)}/download?check=1`);
+    expect(replayDownloadCheckHref(HREF), "no token, no host in the probe's address").not.toMatch(/token|expires|https?:|bunny|b-cdn/i);
+    expect(HREF, "the save's address has no query").not.toContain("?");
+  });
+
+  it("a 409 is 'not_ready'; every other answer or none is 'failed'; NOTHING is saved from any of them", async () => {
+    const CASES: [string, "not_ready" | "failed", () => Promise<Response>][] = [
+      ["409 JSON envelope (the defect: saved as download.json)", "not_ready", async () => answer(409, JSON.stringify({ ok: false, error: { code: "replay_not_downloadable" } }))],
+      ["404", "failed", async () => answer(404, "{}")],
+      ["402", "failed", async () => answer(402, "{}")],
+      ["403", "failed", async () => answer(403, "{}")],
+      ["500", "failed", async () => answer(500, "{}")],
+      ["503", "failed", async () => answer(503, "{}")],
+      ["200 JSON (not the 204 the probe promises)", "failed", async () => answer(200, "{}")],
+      ["200 with no body", "failed", async () => answer(200)],
+      ["the request threw", "failed", async () => { throw new TypeError("offline"); }],
+    ];
+    let checked = 0;
+    for (const [label, want, reply] of CASES) {
+      const r1 = rig(reply);
+      expect(await r1.run(), label).toBe(want);
+      expect(r1.log.filter((l) => l.startsWith("SAVE")), `${label}: nothing saved`).toEqual([]);
+      expect(r1.log, `${label}: it did ask`).toEqual([`ASK ${HREF}?check=1`]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(CASES.length);
+  });
+
+  it("a second click asks again (no memory of the first answer): not ready, then ready, saves exactly once", async () => {
+    let n = 0;
+    const r1 = rig(async () => (++n === 1 ? answer(409, "{}") : answer(204)));
+    expect([await r1.run(), await r1.run()]).toEqual(["not_ready", "saved"]);
+    expect(r1.log.filter((l) => l.startsWith("SAVE"))).toHaveLength(1);
+  });
+
+  it("the not-ready line (409) and the failed line (anything else) show on the part they are about and no other, each in every locale's own words, and never when idle", () => {
+    const parts = [r(1, "playable", 60), r(2, "playable", 60)];
+    const NOT_READY = `data-testid="stream-seazn-replay-download-not-ready"`;
+    const FAILED = `data-testid="stream-seazn-replay-download-failed"`;
+    const idle = html(parts);
+    expect([idle.includes(NOT_READY), idle.includes(FAILED)], "idle: no line").toEqual([false, false]);
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = uiDict(locale);
+      for (const [kind, mark, other, key] of [["not_ready", NOT_READY, FAILED, "stream.replay.downloadNotReady"], ["failed", FAILED, NOT_READY, "stream.replay.downloadFailed"]] as const) {
+        const out = html(parts, locale, { ...IDLE, downloadFailed: { id: id(2), kind } });
+        expect([...out.matchAll(LI)].map((m) => m[2]!.includes(mark)), `${locale} ${kind}: only part 2`).toEqual([false, true]);
+        expect(out.includes(other), `${locale} ${kind}: not the other line`).toBe(false);
+        expect(d[key], `${locale}: ${key} has words`).toBeTruthy();
+        expect(out, `${locale}: ${key}`).toContain(esc(d[key]!));
+        expect(out).not.toContain(key);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * 2);
+    expect(en["stream.replay.downloadNotReady"], "PREMISE: the two lines differ").not.toBe(en["stream.replay.downloadFailed"]);
+  });
+
+  it("while the probe runs the asked part says 'Preparing…' with a spinner and every Download is aria-disabled and inert; idle shows neither (m5), in every locale", () => {
+    const parts = [r(1, "playable", 60), r(2, "playable", 60)];
+    const idle = actionsOf(html(parts));
+    expect(idle.map((row) => row[0]!.text)).toEqual([`${en["stream.replay.download"]}| Part 1`, `${en["stream.replay.download"]}| Part 2`]);
+    expect(html(parts)).not.toContain("aria-disabled");
+    expect(html(parts)).not.toContain("stream-seazn-replay-download-busy");
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = uiDict(locale);
+      const out = html(parts, locale, { ...IDLE, downloading: id(2) });
+      const [first, second] = [...out.matchAll(LI)].map((m) => m[2]!);
+      expect(second, `${locale}: part 2 is busy`).toContain("stream-seazn-replay-download-busy");
+      expect(second, `${locale}: part 2 says Preparing`).toContain(esc(d["stream.replay.downloadPreparing"]!));
+      expect(first, `${locale}: part 1 shows no spinner`).not.toContain("stream-seazn-replay-download-busy");
+      expect(first, `${locale}: part 1 keeps its words`).toContain(esc(d["stream.replay.download"]!));
+      for (const li of [first!, second!]) {
+        const a = /<a [^>]*stream-seazn-replay-download"[^>]*>/.exec(li)?.[0] ?? "";
+        expect(a, `${locale}: aria-disabled`).toContain('aria-disabled="true"');
+        expect(a, `${locale}: inert`).toContain("pointer-events-none");
+      }
+      expect(second).toContain('aria-busy="true"');
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 });

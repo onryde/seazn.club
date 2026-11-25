@@ -4,8 +4,9 @@
 //
 // Every expected value is the plan's or the recommendation's literal, typed here (TEST-STRATEGY: never derive an expected value
 // from the code under test): 30 min stale fetch, 15 min poll backstop, 60 min after verification, min(2^attempts, 60) minutes of
-// backoff, a 30-day retry window, ±2 s, the 240/360/480/720 rungs. No DB and no network: this file needs neither.
+// backoff, a 30-day retry window, ±2 s, the 240/360/480/720/1080 rungs (1080 added by Task 48; the programme profile's own height is read from relay config). No DB and no network: this file needs neither.
 import { describe, expect, it } from "vitest";
+import { relayOutputProfile } from "@/server/relay/config";
 import {
   type LiveMeasure, REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, liveMeasureGate, nextReplayStep,
   parseReplayCopyTitle, pollOutcome, replayCopyTitle, replayFailure, replayFailureOutcome, requiredRung, verifyReplayCopy,
@@ -241,27 +242,41 @@ describe("I1: with SEAZN_HOSTED_COST on, the Cloudflare delete also waits until 
 
 describe("verifyReplayCopy — 'clean and good' (recommendation 2026-11-21, G-C): playable, ±2 s of the Cloudflare duration, the required rung listed", () => {
   const RUNGS_720 = [240, 360, 480, 720];
+  const RUNGS_1080 = [...RUNGS_720, 1080];
   const ok = { ok: true };
+  // The programme profile the compositor streams at (RELAY_OUTPUT_PROFILE): a recording's height is its profile's, never a typed 720/1080.
+  const PROFILE_720 = relayOutputProfile({ RELAY_OUTPUT_PROFILE: "720p" }).height;
+  const PROFILE_1080 = relayOutputProfile({ RELAY_OUTPUT_PROFILE: "1080p" }).height;
   it("length: a 3600 s recording passes at 3598 and 3602 and fails at 3597 and 3603 (the `length` reason)", () => {
     const r = { cfDurationSeconds: 3600, cfHeight: 1080 };
-    const at = (lengthSeconds: number) => verifyReplayCopy(r, { state: "playable", lengthSeconds, heights: RUNGS_720 });
+    const at = (lengthSeconds: number) => verifyReplayCopy(r, { state: "playable", lengthSeconds, heights: RUNGS_1080 });
     expect([at(3598), at(3600), at(3602)]).toEqual([ok, ok, ok]);
     expect([at(3597), at(3603)]).toEqual([{ ok: false, reason: "length" }, { ok: false, reason: "length" }]);
   });
-  it("rendition: a 1080p source needs 720 ([240,360,480,720] passes, [240,360,480] fails); a 480p source needs 480; the list's order is not read", () => {
+  it("Task 48: the rung is the source PROFILE's own height — a 1080 profile needs a 1080 copy (a 720 ladder fails `rendition`), a 720 profile still verifies at 720 (the regression), and neither passes on a ladder that stops short", () => {
+    expect(PROFILE_1080, "PREMISE: the two profiles differ").toBeGreaterThan(PROFILE_720);
     const at = (cfHeight: number, heights: number[]) => verifyReplayCopy({ cfDurationSeconds: 100, cfHeight }, { state: "playable", lengthSeconds: 100, heights });
-    expect(at(1080, RUNGS_720)).toEqual(ok);
-    expect(at(1080, [720, 240, 480, 360]), "unordered, as the host lists them").toEqual(ok);
+    expect(at(PROFILE_720, RUNGS_720), "a 720 profile replay still verifies").toEqual(ok);
+    expect(at(PROFILE_720, RUNGS_1080), "and a library that also made 1080 changes nothing for it").toEqual(ok);
+    expect(at(PROFILE_720, [240, 360, 480])).toEqual({ ok: false, reason: "rendition" });
+    expect(at(PROFILE_1080, RUNGS_1080)).toEqual(ok);
+    expect(at(PROFILE_1080, [1080, 240]), "the rungs below the top are not required, only the source's own").toEqual(ok);
+    expect(at(PROFILE_1080, RUNGS_720), "a 1080 source with a 720-top copy is not clean").toEqual({ ok: false, reason: "rendition" });
+  });
+  it("rendition: a 1080p source needs 1080 (the ladder is not capped at 720); a 480p source needs 480; the list's order is not read", () => {
+    const at = (cfHeight: number, heights: number[]) => verifyReplayCopy({ cfDurationSeconds: 100, cfHeight }, { state: "playable", lengthSeconds: 100, heights });
+    expect(at(1080, RUNGS_1080)).toEqual(ok);
+    expect(at(1080, [720, 1080, 240, 480, 360]), "unordered, as the host lists them").toEqual(ok);
     expect(at(1080, [240, 360, 480])).toEqual({ ok: false, reason: "rendition" });
     expect(at(480, [240, 360, 480])).toEqual(ok);
     expect(at(720, [240, 360, 480])).toEqual({ ok: false, reason: "rendition" });
     expect(at(500, [240, 360, 480]), "a 500 px source: the largest rung not above it is 480").toEqual(ok);
   });
-  it("the required rung is the largest of 240/360/480/720 not above the source; a source under 240, or none, has none", () => {
-    expect([1080, 720, 719, 480, 360, 240, 239, null].map((h) => requiredRung(h))).toEqual([720, 720, 480, 480, 360, 240, null, null]);
+  it("the required rung is the largest of 240/360/480/720/1080 not above the source; a source under 240, or none, has none", () => {
+    expect([1440, 1080, 1079, 720, 719, 480, 360, 240, 239, null].map((h) => requiredRung(h))).toEqual([1080, 1080, 720, 720, 480, 480, 360, 240, null, null]);
   });
   it("a null on either side fails: no Cloudflare duration, no Cloudflare height, no host length; and a copy not playable fails `state`", () => {
-    const copy = { state: "playable" as const, lengthSeconds: 100, heights: RUNGS_720 };
+    const copy = { state: "playable" as const, lengthSeconds: 100, heights: RUNGS_1080 };
     expect(verifyReplayCopy({ cfDurationSeconds: null, cfHeight: 1080 }, copy)).toEqual({ ok: false, reason: "length" });
     expect(verifyReplayCopy({ cfDurationSeconds: 100, cfHeight: null }, copy)).toEqual({ ok: false, reason: "rendition" });
     expect(verifyReplayCopy({ cfDurationSeconds: 100, cfHeight: 200 }, copy), "a source under 240 px").toEqual({ ok: false, reason: "rendition" });

@@ -38,6 +38,9 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // NOT here, on purpose (ruling R14): the heartbeat records it as sponsor airings and strips it before either beat store,
   // and this list is the floor under that strip (sanitise.test.ts names the exclusion).
   "airingsDropped",
+  // T44 (compositor Owed 110 + 111): the camera as the relay receives it — one enum word (why a generation was given up) and
+  // counts and rates. Sent only with RELAY_INPUT_BEAT=1 (relay/config.ts `relayInputBeat`); stored as sent.
+  "inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns",
   "usedMinutes", "limitMinutes", "reservedMinutes", "headroomMinutes", "deleted", "deferred", "count",
   // effects / http
   "ok", "result", "httpStatus", "latencyMs", "retryAfterSeconds", "requestId", "errorCode", "operation", "provider", "method", "pathTemplate",

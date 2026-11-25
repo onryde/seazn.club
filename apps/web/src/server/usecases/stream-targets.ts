@@ -61,11 +61,46 @@ export class TargetUnreadableError extends HttpError {
 }
 
 /** Seazn-hosted video (V541): the ONE place the Seazn row's visibility and order are decided, for the Streaming list and the
- *  fixture's default pick alike. LIVE on: Seazn first, then the rest oldest-first. LIVE off: the row is left out and the
- *  order is the old one, so an org's default stays its oldest pasted destination. Columns are unqualified on purpose: both
- *  callers read `org_stream_targets` alone in that scope. */
-export const seaznWhere = (on: boolean) => (on ? sql`` : sql`and kind <> 'seazn'`);
+ *  fixture's default pick alike. LIVE on: Seazn first, then the rest oldest-first — and the Seazn row only while the org's switch
+ *  (V559 `offered`, Task 33) is on. LIVE off: the row is left out whatever the switch says (the flag is the master) and the order
+ *  is the old one, so an org's default stays its oldest pasted destination. An org that switched Seazn off reads exactly as LIVE
+ *  off does: its default falls to the next destination, and a SAVED Seazn pick is not in the list, so it resolves to none
+ *  (`resolveStreamTarget`). Columns are unqualified on purpose: both callers read `org_stream_targets` alone in that scope. */
+export const seaznWhere = (on: boolean) => (on ? sql`and (kind <> 'seazn' or offered)` : sql`and kind <> 'seazn'`);
 export const seaznOrder = (on: boolean) => (on ? sql`order by (kind = 'seazn') desc, created_at asc, id asc` : sql`order by created_at asc, id asc`);
+
+/** The same rule as `seaznWhere`, for the two doors that are handed ONE row by id — the pick's write (`writeStreamSettings`) and the
+ *  start (`startBroadcast`): true when the row is the Seazn destination and it may not be picked or started now, because the
+ *  deployment's flag is off or the org switched Seazn off. Both doors answer it with the pick's own 422 seazn_unavailable. An
+ *  external row (`seazn` false) is never closed by it. */
+export const seaznClosed = (row: { seazn: boolean; offered: boolean }, on: boolean = seaznHostedLive()): boolean =>
+  row.seazn && !(on && row.offered);
+
+const seaznRowMissing = () => new HttpError(404, "the Seazn destination was not found");
+
+/** Task 33 (V559): the org's Seazn switch, read off its ACTIVE Seazn row. A missing or archived row (no product path makes either:
+ *  V541's trigger makes one per org, and removing it is refused) is the 404, never a guessed default. The caller has already
+ *  authorised the org (the route's door, or the Streaming page's own). Read whatever SEAZN_HOSTED_LIVE says: the stored choice is the
+ *  org's, and the flag decides only whether anything offers Seazn at all. */
+export async function seaznOfferOf(orgId: string): Promise<{ offered: boolean }> {
+  const [row] = await sql<{ offered: boolean }[]>`
+    select offered from org_stream_targets where org_id = ${orgId} and kind = 'seazn' and archived_at is null`;
+  if (!row) throw seaznRowMissing();
+  return { offered: row.offered };
+}
+
+/** Task 33 (V559): turn the org's Seazn destination on or off. Editors only — the route's door asks `requireOrgAuth(…, "write")`
+ *  (owner / admin) — and another org's id is the 404. One statement, so a second PUT with the same value is the same answer and the
+ *  same row. Off gates only NEW Seazn picks and starts (`seaznWhere`, `seaznClosed`): a live Seazn session keeps running and Stop
+ *  still works, and recordings and replays stay playable, downloadable and deletable — none of those readers reads `offered`. */
+export async function setSeaznOffered(auth: AuthCtx, orgId: string, offered: boolean): Promise<{ offered: boolean }> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  const [row] = await sql<{ offered: boolean }[]>`
+    update org_stream_targets set offered = ${offered}
+     where org_id = ${orgId} and kind = 'seazn' and archived_at is null returning offered`;
+  if (!row) throw seaznRowMissing();
+  return { offered: row.offered };
+}
 
 const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY);
 

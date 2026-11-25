@@ -9,7 +9,12 @@ import { describe, expect, it } from "vitest";
 import { defaultTemplateFor, type OverlayTemplateDef, type TemplateRegistry } from "@/components/overlay/template-registry";
 import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
 import { CreateStreamSession, PutStreamSettings, StreamMode } from "@/server/api-v1/schemas";
-import { OVERLAY_DELAY_MAX_MS, effectiveStreamMode, isPickableTemplate } from "@/lib/stream-settings";
+import { forEachSport } from "@seazn/engine/testkit";
+import { COURT_PHONE_OVERLAY_DELAY_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, overlayDelayDefaultMs } from "@/server/relay/config";
+import { PutOrgStreamDefaults } from "@/server/api-v1/schemas";
+import {
+  OVERLAY_DELAY_MAX_MS, effectiveDelayMs, effectiveStreamMode, effectiveTemplateId, isKnownTemplate, isPickableTemplate,
+} from "@/lib/stream-settings";
 
 describe("effectiveStreamMode — the score is the default; only Camera only or an unavailable compositor turns it off", () => {
   it("every stored value (each StreamMode option and never-chosen null) × composed available or not", () => {
@@ -86,6 +91,106 @@ describe("OVERLAY_DELAY_MAX_MS — the panel's bound is the write schema's bound
     for (const [overlayDelayMs, ok] of rows) {
       expect(create(overlayDelayMs === undefined ? {} : { overlayDelayMs }), String(overlayDelayMs)).toBe(ok);
       expect(PutStreamSettings.safeParse({ overlayDelayMs }).success, `the write agrees: ${String(overlayDelayMs)}`).toBe(overlayDelayMs === undefined ? false : ok);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Task 38: the club's default style and timing. The expectations are the OWNER's chain (ledger 454, 504): the match's own
+// choice, then the club's, then the default; and the court rule — the club's STYLE reaches courts, its TIMING does not.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("effectiveTemplateId — match ?? club ?? the sport's default, for EVERY sport", () => {
+  it("each link of the chain on every engine sport, and the sport default differs from the club's choice (not a constant)", () => {
+    let sports = 0;
+    let cells = 0;
+    forEachSport(({ module: m }) => {
+      const own = defaultTemplateFor(m.key);
+      // A club style that is NOT this sport's own default, so the right answer differs from the fall-through.
+      const other = own === "bar" ? "bug" : "bar";
+      expect(effectiveTemplateId({ match: null, club: null, sportKey: m.key }), `${m.key}: neither set`).toBe(own);
+      expect(effectiveTemplateId({ match: null, club: other, sportKey: m.key }), `${m.key}: the club's`).toBe(other);
+      expect(effectiveTemplateId({ match: own, club: other, sportKey: m.key }), `${m.key}: the match's own wins over the club's`).toBe(own);
+      expect(effectiveTemplateId({ match: other, club: own, sportKey: m.key }), `${m.key}: the match's own, the other way round`).toBe(other);
+      expect(effectiveTemplateId({ match: null, club: "retired-or-unknown", sportKey: m.key }), `${m.key}: an id the registry lost reads as the sport's default`).toBe(own);
+      sports++;
+      cells += 5;
+    });
+    console.log(`club style: sports ${sports}, cells ${cells}`);
+    expect(sports, "anti-vacuity: the engine's sports").toBeGreaterThan(0);
+    expect(cells).toBe(sports * 5);
+  });
+});
+
+describe("effectiveDelayMs — match ?? club ?? default, and a COURT ignores the club's timing (owner, 2026-11-24)", () => {
+  const defaults = { matchDefaultMs: overlayDelayDefaultMs(false), courtDefaultMs: overlayDelayDefaultMs(true) };
+  it("premise: the two defaults differ, and the court's is 0 (a court's own, never derived from the match's)", () => {
+    expect(defaults.matchDefaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect(defaults.courtDefaultMs).toBe(COURT_PHONE_OVERLAY_DELAY_MS);
+    expect(defaults.matchDefaultMs).not.toBe(defaults.courtDefaultMs);
+  });
+  it("the whole table: match-set × club-set × match-or-court — 0 is a real value at every link", () => {
+    const rows: { name: string; match: number | null; club: number | null; court: boolean; want: number }[] = [];
+    for (const court of [false, true]) {
+      const dflt = court ? defaults.courtDefaultMs : defaults.matchDefaultMs;
+      rows.push({ name: "neither set", match: null, club: null, court, want: dflt });
+      rows.push({ name: "the match's own", match: 2500, club: null, court, want: 2500 });
+      rows.push({ name: "the match's own beats the club's", match: 2500, club: 4500, court, want: 2500 });
+      rows.push({ name: "the match's own 0 is real", match: 0, club: 4500, court, want: 0 });
+    }
+    rows.push({ name: "the club's timing reaches a MATCH stream", match: null, club: 4500, court: false, want: 4500 });
+    rows.push({ name: "the club's 0 is real for a match stream (not 'unset')", match: null, club: 0, court: false, want: 0 });
+    rows.push({ name: "the club's timing does NOT reach a COURT stream: it keeps its own default", match: null, club: 4500, court: true, want: defaults.courtDefaultMs });
+    rows.push({ name: "the club's 0 on a court is the court's default, not a club value", match: null, club: 0, court: true, want: defaults.courtDefaultMs });
+    let checked = 0;
+    for (const r of rows) {
+      expect(effectiveDelayMs({ match: r.match, club: r.club, court: r.court, ...defaults }), `${r.name} (court ${r.court})`).toBe(r.want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("isKnownTemplate — the club write's refusal rule, over an injected registry", () => {
+  const stub = (id: string, extra: Partial<OverlayTemplateDef<string>> = {}): OverlayTemplateDef<string> =>
+    ({ id, labelKey: `stream.tab.${id}`, sports: "all", component: () => null, slabPlacement: "bar",
+       sceneCardSafeArea: { x: 0, y: 0, width: 1, height: 1 }, ...extra }) as unknown as OverlayTemplateDef<string>;
+  const registry: TemplateRegistry<string> = {
+    open: stub("open"),
+    old: stub("old", { retired: { replacedBy: "open" } }),
+    shuttle: stub("shuttle", { sports: ["badminton"] }),
+  };
+  it("a live id is known (a sport-restricted one too: the club holds no sport); a retired, an unknown and a prototype member are not", () => {
+    expect(isKnownTemplate("open", registry)).toBe(true);
+    expect(isKnownTemplate("shuttle", registry), "restricted to a sport: still a template the club may set").toBe(true);
+    expect(isKnownTemplate("old", registry), "retired").toBe(false);
+    expect(isKnownTemplate("nope", registry), "unknown").toBe(false);
+    expect(isKnownTemplate("toString", registry), "a prototype member is not a template").toBe(false);
+  });
+  it("the shipped registry: every template the picker offers any sport is known", () => {
+    let checked = 0;
+    for (const sport of OVERLAY_SPORT_KEYS) {
+      expect(isKnownTemplate(defaultTemplateFor(sport)), sport).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(OVERLAY_SPORT_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("PutOrgStreamDefaults — the club write's schema takes V462's bound, and names at least one field", () => {
+  it("0, the max and null parse; one past either end, a fraction and an empty body are refused", () => {
+    const rows: [Record<string, unknown>, boolean][] = [
+      [{ overlayDelayMs: 0 }, true], [{ overlayDelayMs: OVERLAY_DELAY_MAX_MS }, true], [{ overlayDelayMs: null }, true],
+      [{ overlayTemplate: "bar" }, true], [{ overlayTemplate: null }, true], [{ overlayTemplate: null, overlayDelayMs: null }, true],
+      [{ overlayDelayMs: OVERLAY_DELAY_MAX_MS + 1 }, false], [{ overlayDelayMs: -1 }, false], [{ overlayDelayMs: 2500.5 }, false],
+      [{ overlayTemplate: "" }, false], [{}, false], [{ streamMode: "composed" }, false],
+    ];
+    let checked = 0;
+    for (const [body, ok] of rows) {
+      expect(PutOrgStreamDefaults.safeParse(body).success, JSON.stringify(body)).toBe(ok);
       checked++;
     }
     expect(checked).toBe(rows.length);

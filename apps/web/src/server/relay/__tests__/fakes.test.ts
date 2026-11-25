@@ -70,6 +70,42 @@ describe("FakeIngest", () => {
     expect(await fake.listInputVideos(camera.inputId), "the fake's own page holds all three").toHaveLength(3);
   });
 
+  // Seazn Task 36: the held create the provisioning tests settle by hand. Read back here so they can trust it: a held create
+  // makes nothing (no input, no provider call) until it is answered, a failed one never makes anything, `whenHeld` wakes on the
+  // n-th ask and not before, and the order the test answers in is the order the creates settle in.
+  it("Seazn Task 36: holdCreates — a held create makes nothing until answered; a failed one makes nothing; whenHeld wakes on the n-th ask; the test picks the settle order", async () => {
+    const recorder = new FakeRecorder();
+    const fake = new FakeIngest({ recorder });
+    const flush = () => new Promise<void>((res) => setImmediate(res));
+    const settled: string[] = [];
+    const track = <T,>(p: Promise<T>, name: string) => { p.then(() => settled.push(name), () => settled.push(`${name}:failed`)); return p; };
+    // The empty case: nothing asked, so a wait for one is still waiting after a flush.
+    fake.holdCreates();
+    let wokeForTwo = false;
+    void fake.whenHeld(2).then(() => { wokeForTwo = true; });
+    const camera = track(fake.createLiveInput({ sessionId: "s1", slot: 0 }), "camera");
+    await flush();
+    expect([fake.heldCreates.length, settled, wokeForTwo], "one asked, none answered, the wait for two still waiting").toEqual([1, [], false]);
+    const programme = track(fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" }), "programme");
+    await fake.whenHeld(2);
+    await fake.whenHeld(1);   // already met: answers at once
+    expect(wokeForTwo).toBe(true);
+    expect(fake.heldCreates.map((h) => h.spec.role ?? "camera"), "both asked, in order").toEqual(["camera", "programme"]);
+    await flush();
+    expect([settled, recorder.calls], "neither answered: nothing settled, no provider call recorded").toEqual([[], []]);
+    // The test answers the PROGRAMME first: it settles first, and only then is its input made.
+    fake.heldCreates[1]!.answer();
+    const made = await programme;
+    expect(settled).toEqual(["programme"]);
+    expect(fake.isEnabled(made.inputId), "the answered create made its input").toBe(true);
+    const refusal = Object.assign(new Error("provider 500"), { status: 500 });
+    fake.heldCreates[0]!.fail(refusal);
+    await expect(camera).rejects.toBe(refusal);
+    await flush();
+    expect(settled).toEqual(["programme", "camera:failed"]);
+    expect(recorder.calls.map((c) => [c.operation, c.subjectId]), "ONE create recorded — the answered one; the failed one made nothing").toEqual([["createLiveInput", made.inputId]]);
+  });
+
   // Seazn Task 13: the fake's token, its per-video lock, and the seeded listing that stands in for C6 (a listing that answers
   // another input's recording). Each control is read back here so the usecase tests can trust it.
   it("Seazn Task 13: a token reads fake.<uid>.<exp seconds>[.dl]; requireSignedVideo signs a video it holds and answers absent for one it does not; a seeded listing answers another input's video under ITS OWN inputId", async () => {
@@ -374,8 +410,15 @@ describe("FakeIngest", () => {
       videoId: "v-live", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: true,
       durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null,
       signed: false,   // Seazn Task 13: unless a test says otherwise, a recording reads unsigned (C3's measured default)
+      ready: null,     // T39: a live recording is not playable yet: Cloudflare leaves readyToStream out, so the fake says nothing
     });
-    expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null });
+    expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null, ready: true });
+    // T39: `ready` follows the state unless a test says otherwise — true on a `ready` recording, absent (null) on any other, as Cloudflare answers; an explicit value wins.
+    fake.addVideo({ videoId: "v-queued", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, state: "queued" });
+    fake.addVideo({ videoId: "v-err", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, state: "error" });
+    fake.addVideo({ videoId: "v-contra", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, ready: false });
+    const rest = await fake.listVideos({ createdBefore: new Date(1) });
+    expect(rest.slice(2).map((v) => [v.videoId, v.state, v.ready])).toEqual([["v-queued", "queued", null], ["v-err", "error", null], ["v-contra", "ready", false]]);
     // `createdBefore` is STRICT (`<`, not `<=`) — a FAKE CONVENTION, pinned so both
     // sides of the port agree, and nothing more. Lane-A minors, Task 3 review m5:
     // this used to be justified as "not yet old enough for the retention sweep",
@@ -458,6 +501,57 @@ describe("FakeRunner", () => {
     await runner.destroy(first.runnerId);
     const replacement = await runner.create({ ...spec });
     expect(replacement.runnerId).not.toBe(first.runnerId);
+  });
+
+  // Seazn Task 36b: the runner's create held the way the ingest's is (T36), so a test sees the Machine and the inputs in flight at
+  // once. Read back here so the provisioning tests can trust it: a held create makes nothing (no Machine, no listing, no recorded
+  // call) until answered, a failed one makes nothing, `whenHeld` wakes on the n-th ask and not before, the held spec is the one a
+  // test reads the job token from, a failure armed with `failNextCreate` is thrown when the held create is answered, and
+  // `holdCreates(false)` returns every LATER create to answering at once.
+  it("Seazn Task 36b: FakeRunner.holdCreates — a held create makes nothing until answered; a failed one makes nothing; whenHeld wakes on the n-th ask; the held spec is readable; an armed failure is thrown on answer", async () => {
+    const recorder = new FakeRecorder();
+    const runner = new FakeRunner({ recorder });
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "tok-1", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const flush = () => new Promise<void>((res) => setImmediate(res));
+    const settled: string[] = [];
+    const track = <T,>(p: Promise<T>, name: string) => { p.then(() => settled.push(name), () => settled.push(`${name}:failed`)); return p; };
+    // The empty case: nothing asked, so a wait for one is still waiting after a flush.
+    runner.holdCreates();
+    let woke = false;
+    void runner.whenHeld(1).then(() => { woke = true; });
+    await flush();
+    expect([runner.heldCreates.length, woke], "nothing asked, the wait still waiting").toEqual([0, false]);
+    const first = track(runner.create(spec), "first");
+    await runner.whenHeld(1);
+    expect(woke).toBe(true);
+    expect(runner.heldCreates.map((h) => h.spec.jobToken), "the held spec is the one the create was asked with").toEqual(["tok-1"]);
+    await flush();
+    const creates = () => recorder.calls.filter((c) => c.operation === "createMachine");
+    expect([settled, runner.created, await runner.list(), creates()], "asked, not answered: nothing settled, no Machine, no create recorded").toEqual([[], [], [], []]);
+    runner.heldCreates[0]!.answer();
+    const made = await first;
+    expect(made.runnerId).toMatch(/^fake-machine-/);
+    expect([runner.created.length, creates().length, (await runner.list()).map((m) => m.runnerId)]).toEqual([1, 1, [made.runnerId]]);
+    // A failed one makes nothing, and what it rejects with is what the test gave.
+    const refusal = Object.assign(new Error("provider 500"), { status: 500 });
+    const second = track(runner.create({ ...spec, sessionId: "s2" }), "second");
+    await runner.whenHeld(2);
+    runner.heldCreates[1]!.fail(refusal);
+    await expect(second).rejects.toBe(refusal);
+    expect([runner.created.length, (await runner.list()).length], "the failed create made nothing").toEqual([1, 1]);
+    // An armed failure is thrown by the create's own body, so it is thrown when the held create is ANSWERED (not when asked).
+    runner.failNextCreate({ status: 422, retryable: false });
+    const third = track(runner.create({ ...spec, sessionId: "s3" }), "third");
+    await runner.whenHeld(3);
+    await flush();
+    expect(settled, "the armed failure waits for the answer").toEqual(["first", "second:failed"]);
+    runner.heldCreates[2]!.answer();
+    await expect(third).rejects.toBeInstanceOf(RunnerCreateError);
+    // holdCreates(false): every later create answers at once, and nothing more is held.
+    runner.holdCreates(false);
+    const fourth = await runner.create({ ...spec, sessionId: "s4" });
+    expect(fourth.runnerId).toMatch(/^fake-machine-/);
+    expect(runner.heldCreates, "the later create was never held").toHaveLength(3);
   });
 
   it("the stop sequence on the fake: stop records SIGINT + grace, observe reads stopped with exit 0 / requestedStop, then auto-destroyed; a lost Machine reads its exit", async () => {

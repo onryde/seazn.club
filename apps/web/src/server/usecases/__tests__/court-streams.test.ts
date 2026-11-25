@@ -79,26 +79,58 @@ describe.skipIf(!HAS_DB)("court streams (desk)", () => {
     expect(await codeRowOf(shown.qr!.code)).toMatchObject({ fixture_id: null, court_link_id: shown.id, ended_at: null });
   });
 
-  it("refuses a pasted-key destination: 422 court_destination_not_youtube, nothing written", async () => {
+  it("refuses a pasted-key destination: 422 court_destination_unsupported (Task 37 renamed court_destination_not_youtube: a court may now stream to Seazn too), nothing written", async () => {
     const pasted = await rigTarget(day.orgId, "Pasted");
     const f = await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: pasted }, at(0)));
-    expect([f.status, f.code]).toEqual([422, "court_destination_not_youtube"]);
+    expect([f.status, f.code]).toEqual([422, "court_destination_unsupported"]);
     expect(await counts(day.orgId)).toEqual({ links: 0, codes: 0 });
   });
 
-  it("refuses the Seazn destination with the same YouTube-only 422, LIVE on or off, nothing written (V541)", async () => {
+  // Task 37 FLIPS the V541-era pin that read "refuses the Seazn destination with the same YouTube-only 422, LIVE on or off": a court
+  // may stream to the org's Seazn destination while the deployment offers it (SEAZN_HOSTED_LIVE) AND the org has not switched it off
+  // (V559 `offered`). The refusal when it does not is the pick's and the start's own: 422 seazn_unavailable.
+  const seaznId = async () => {
     const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${day.orgId} and kind = 'seazn'`;
-    expect(seazn, "the org has its Seazn row").toBeDefined();
+    expect(seazn, "PREMISE: the org has its Seazn row").toBeDefined();
+    return seazn!.id;
+  };
+  const offer = (on: boolean) => sql`update org_stream_targets set offered = ${on} where org_id = ${day.orgId} and kind = 'seazn'`;
+
+  it("Task 37: links Court 2 to the org's Seazn destination (LIVE on, offered): a QR whose exp is the end of the day, the link's target the Seazn row", async () => {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const id = await seaznId();
+    expect((await sql<{ offered: boolean }[]>`select offered from org_stream_targets where id = ${id}`)[0]!.offered, "PREMISE: offered by default").toBe(true);
+    const shown = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: id }, at(0));
+    expect(shown.target.id).toBe(id);
+    expect(shown.qr).toMatchObject({ v: 2, slot: 0, exp: END_OF_DAY });
+    expect(await counts(day.orgId)).toEqual({ links: 1, codes: 1 });
+    // The same court, day and target re-shows the one QR (as a channel does); another destination is the court's 409.
+    const again = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: id }, at(5));
+    expect([again.id, again.qr]).toEqual([shown.id, shown.qr]);
+    const other = await rigApiTarget(day.orgId, "Other channel");
+    expect((await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: other.targetId }, at(0)))).code).toBe("court_already_streaming");
+    expect(await counts(day.orgId)).toEqual({ links: 1, codes: 1 });
+  });
+
+  it("Task 37: the Seazn destination is refused 422 seazn_unavailable when LIVE is off, and when the org has switched it off — nothing written; the YouTube channel beside it still links (positive pair)", async () => {
+    const id = await seaznId();
     let checked = 0;
-    for (const live of ["true", "false"]) {
+    for (const [live, offered] of [["false", true], ["true", false], ["false", false]] as const) {
       vi.stubEnv("SEAZN_HOSTED_LIVE", live);
-      const f = await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: seazn!.id }, at(0)));
-      expect([f.status, f.code], `LIVE ${live}`).toEqual([422, "court_destination_not_youtube"]);
+      await offer(offered);
+      const f = await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: id }, at(0)));
+      expect([f.status, f.code], `LIVE ${live}, offered ${String(offered)}`).toEqual([422, "seazn_unavailable"]);
+      expect(await counts(day.orgId), `LIVE ${live}, offered ${String(offered)}: nothing written`).toEqual({ links: 0, codes: 0 });
       checked++;
     }
-    vi.unstubAllEnvs();
-    expect(checked).toBe(2);
-    expect(await counts(day.orgId)).toEqual({ links: 0, codes: 0 });
+    expect(checked).toBe(3);
+    // The positive pair: with Seazn closed the channel is not.
+    const linked = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: api.targetId }, at(0));
+    expect(linked.target.id).toBe(api.targetId);
+    // And with both open the same Seazn link is made on another court.
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    await offer(true);
+    expect((await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c1, targetId: id }, at(0))).target.id).toBe(id);
   });
 
   it("with COURT_MIN_APP_VERSION unset or malformed: 503 court_streaming_unconfigured, no link and no code written (O13)", async () => {

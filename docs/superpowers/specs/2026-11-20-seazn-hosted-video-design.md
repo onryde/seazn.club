@@ -110,7 +110,7 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 - Once the fixture has been decided for 15 min (or, if it is never decided, 6 h after the session ended; §5.7), and the Seazn session has ended with Cloudflare's recording ready
   (Cloudflare: within ~60 s of the end), the server asks Bunny to fetch the recording by URL into the org's Bunny
   collection, and stores the Bunny video id against the session.
-- Bunny encodes (resolutions capped at 720p, owner setting); once Bunny reports the video playable (its webhook, with a
+- Bunny encodes (the library is NOT capped at 720p: the owner keeps 1080p on, 2026-11-24; encoding is free, storage and delivery are billed); once Bunny reports the video playable (its webhook, with a
   slow poll as the backstop) and the copy passes the check in §5.7, the match page's Replay plays in Bunny's embed player
   with a signed embed token. Bunny's referrer allow-list (Seazn's hosts) and CDN token authentication guard its files.
 - **Order is fetch, verify, switch the player, then delete the Cloudflare copy 60 min later** (§5.7).
@@ -162,8 +162,9 @@ then two more recommendations:
   the signed Cloudflare recording (the same token path as live). It was: no replay at all until Bunny was playable. When
   the Bunny copy is verified, the player switches to Bunny's embed.
 - **G-C. "Clean and good" (recommendation for the two numbers).** Before the switch, the Bunny copy must be playable AND
-  its length within ±2 s of the Cloudflare recording's duration AND a 720p rendition listed (or the source's height, if
-  lower). It was: Bunny playable alone. A copy that fails goes down the failed path (retry; the Cloudflare copy is kept).
+  its length within ±2 s of the Cloudflare recording's duration AND a rendition at the source's own height listed (720 or 1080,
+  by the programme profile it was streamed at; lower if the source is lower). The download takes the tallest MP4 file the library
+  holds (its MP4 fallback set, which is not the HLS list), and answers 409 `replay_not_downloadable` when it holds none yet (Task 48). It was: Bunny playable alone. A copy that fails goes down the failed path (retry; the Cloudflare copy is kept).
   The webhook runs the same check as the poll.
 - **G-D. Delete timing (owner ruling: within 1–2 h; recommendation: 60 min).** The Cloudflare copy is deleted only once
   `verified_at` + `SEAZN_CF_DELETE_DELAY_MINUTES = 60` has passed, so players already open on it finish and there is a
@@ -194,8 +195,16 @@ then two more recommendations:
 1. Only a closed or deleted org starts the 30-day replay deletion (§5.5).
 2. **Matches first; courts later.** `court_stream_links.target_id` cannot pick Seazn in this version: a court input
    carries many matches, so its replay must be split per fixture — a follow-up.
+   **Amended 2026-11-24 (Task 37, owner: build on code evidence F3):** the premise was wrong. A court is not one input carrying many
+   matches: each court match is its OWN session with its OWN camera and programme inputs (the court phone's start path is
+   `startBroadcast` per match; a handover creates the next session, then ends the previous one). So each match's replay is its own
+   session's programme recording and there is nothing to split. A court link may now name the org's Seazn destination (while
+   `SEAZN_HOSTED_LIVE` is on and the org has not switched Seazn off, else 422 `seazn_unavailable`); a pasted key is still refused, now
+   as 422 `court_destination_unsupported` (was `court_destination_not_youtube`). Two Seazn sessions of one org overlap during a handover
+   (Review Focus 1 already admits that). A court session still auto-stops 30 s after the result (the court rule), before the 15-minute
+   rule could fire.
 3. **Billing unchanged**: a Seazn match draws the same stream credit (£3) with the same admission and balance checks;
    replay storage and all delivery are absorbed by Seazn, uncapped, measured (§5.6).
 4. All Seazn playback signed (§5.2); an unmoved recording held past 3 days (§5.3).
-5. The recommendations in §5.7 (G-B interim playback, G-C's ±2 s and 720p checks, the 60-min delete value, G-E, G-F) are
+5. The recommendations in §5.7 (G-B interim playback, G-C's ±2 s and source-height checks, the 60-min delete value, G-E, G-F) are
    applied unless the owner objects. Only the sequence itself is the owner's ruling.

@@ -37,6 +37,7 @@ import { fixtureSeaznReplays } from "@/server/video/organiser-replays";
 import { FixtureReplaysSection } from "@/components/v2/fixture-replays-section";
 import { log } from "@/server/logger";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
@@ -225,12 +226,30 @@ export default async function FixturePage({
   // Task 31b (T26 review m8): an organiser the Stream panel is NOT mounted for (no plan, or a frozen org) still reaches the fixture's
   // Seazn replays — the list on its own, below the console, with Delete and Download and nothing of the panel's start or stop. A read
   // that fails costs only the list, never the page.
-  const replaysAlone = offersStandaloneReplays({ canEdit, mode: streamMode })
-    ? await fixtureSeaznReplays(auth.orgId, id).catch((err: unknown) => {
-        log.warn({ fixtureId: id, err: String(err) }, "fixture page: the Seazn replays could not be read — the list is not shown");
-        return [];
-      })
-    : [];
+  // Task 33d (T31b review m3): beside it, ONE read of whether this organiser's SEAT is paused by the plan's member limit
+  // (entitlement-freeze.ts `frozenMemberIds`; the owner is never in it). Both actions go through the routes' write scope, which answers
+  // 402 to such a seat (auth.ts `requireOrgAuth`), so the list then offers neither and says why. A lost plan or a billing-frozen
+  // competition is NOT a paused seat: those keep both actions. The panel needs no such read: its list rides the session view, whose read
+  // is write-scoped too, so a paused seat never gets that list at all. A failed read costs nothing: the actions stay, the routes guard.
+  // Fix round 1 (T33d review m2): the same rule as the routes — `requireOrgAuth` refuses a paused seat only for an ADMIN's write
+  // (auth.ts, `scope === "write" && role === "admin"`), so only an admin is read; the owner keeps both actions whatever the set says.
+  const seatUserId = auth.role === "admin" ? auth.userId : null;
+  const [replaysAlone, memberFrozen] = offersStandaloneReplays({ canEdit, mode: streamMode })
+    ? await Promise.all([
+        fixtureSeaznReplays(auth.orgId, id).catch((err: unknown) => {
+          log.warn({ fixtureId: id, err: String(err) }, "fixture page: the Seazn replays could not be read — the list is not shown");
+          return [];
+        }),
+        seatUserId === null
+          ? false
+          : frozenMemberIds(auth.orgId)
+              .then((ids) => ids.has(seatUserId))
+              .catch((err: unknown) => {
+                log.warn({ fixtureId: id, err: String(err) }, "fixture page: the member-seat freeze could not be read — the replay actions stay offered");
+                return false;
+              }),
+      ])
+    : ([[], false] as const);
 
   // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
   // feature flag that used to gate it is gone. `null` only on a resolution failure
@@ -370,7 +389,7 @@ export default async function FixturePage({
           matchFormatLine={formatLine ?? undefined}
           viewerPlan={viewerPlan}
         />
-        {replaysAlone.length > 0 && <FixtureReplaysSection fixtureId={id} replays={replaysAlone} />}
+        {replaysAlone.length > 0 && <FixtureReplaysSection fixtureId={id} replays={replaysAlone} memberFrozen={memberFrozen} />}
       </main>
     </>
   );

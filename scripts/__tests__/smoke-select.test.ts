@@ -46,17 +46,18 @@ const KNOWN = [
 ] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
-  it("UNSET means run everything, and unset is the default: CI's FULL smoke never sets SMOKE_ONLY, so it is unchanged — the two SMOKE_ONLY lines in CI are the R2004 composed step's own and the floor-override step's own, each on its own extra server", () => {
+  it("UNSET means run everything, and unset is the default: CI's FULL smoke never sets SMOKE_ONLY, so it is unchanged — the three SMOKE_ONLY lines in CI are the R2004 composed step's own, the floor-override step's own and the Seazn-hosted step's own (T33g), each on its own extra server", () => {
     expect(selectSmokeSuites(KNOWN, undefined)).toEqual({ mode: "all" });
     const read = (f: string) => readFileSync(join(import.meta.dirname, "..", "..", ".github", "workflows", f), "utf8");
     expect(read("e2e.yml")).not.toContain("SMOKE_ONLY");
     // R2004 (PR #981 review): ci.yml runs captureV2 ALONE against a second server that names a compositor image. Engine-split 5.6
     // (override review I2): it also runs epochFloorOverride ALONE against a third server that lowers the generic floor. Those two
+    // Seazn-hosted video (Phase 4, T33g): it runs seaznHosted ALONE against a fourth server with Seazn LIVE on. Those three
     // steps — and nothing else in the workflow, no job env, not `Run smoke test` — carry SMOKE_ONLY.
     const ci = read("ci.yml");
     const lines = ci.split("\n");
     const at = lines.flatMap((l, i) => (l.includes("SMOKE_ONLY") ? [i] : []));
-    expect(at, "exactly two SMOKE_ONLY lines in ci.yml").toHaveLength(2);
+    expect(at, "exactly three SMOKE_ONLY lines in ci.yml").toHaveLength(3);
     const owner = (line: number) => {
       let i = line;
       while (i > 0 && !/^ {6}- name: /.test(lines[i]!)) i--;
@@ -69,6 +70,10 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     expect(owner(at[1]!), "the second belongs to the floor-override step").toEqual([
       "      - name: Run floor-override smoke (the generic floor lowered, against the third server)",
       "          SMOKE_ONLY: epochFloorOverride",
+    ]);
+    expect(owner(at[2]!), "the third belongs to the Seazn-hosted step").toEqual([
+      "      - name: Run Seazn-hosted smoke (seaznHosted against the LIVE-on server; step 10 must have RUN)",
+      "          SMOKE_ONLY: seaznHosted",
     ]);
     const full = ci.indexOf("      - name: Run smoke test\n");
     expect(full, "premise: the full smoke step").toBeGreaterThan(-1);

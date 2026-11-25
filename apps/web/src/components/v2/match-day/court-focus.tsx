@@ -34,7 +34,7 @@
 //  - a billing-frozen competition (`ctx.frozen`, task F1) offers no Undo call and no Call: the server refuses both (402). It
 //    still SCORES (Match Day PB2, owner 2026-11-02, option A — scoring.ts asks no freeze), so the scorer QR and "Open pad" stay.
 //    It offers no "+ Connect a stream" (PB2, "hide": a new stream 402s); a stream already up still shows, with its settings.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicTime } from "@/lib/format";
@@ -45,7 +45,10 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
 import { closureText, courtScorerAttention, matchLabel, matchMeta, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
-import { canLinkCourt, canWriteCourtStream, switchSpec } from "@/lib/match-day/court-stream";
+import {
+  COURT_SHEET_PAIR_POLL_MAX_MS, COURT_SHEET_PAIR_POLL_MS, canLinkCourt, canWriteCourtStream, courtAwaitsPhone, courtPairSeen, switchSpec,
+} from "@/lib/match-day/court-stream";
+import { closeCodeOnPair, type PairSeen } from "@/lib/stream-pair";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
@@ -90,6 +93,9 @@ export interface MatchDayCtx {
   onTailEnd?: () => void;
 }
 
+/** Two reads of a court's phone name the same pairing (or both none). */
+const samePair = (a: PairSeen, b: PairSeen): boolean => (a === null || b === null ? a === b : a.id === b.id);
+
 /** The match's console page: its pad and its per-match stream panel. */
 export function fixtureHref(ctx: MatchDayCtx, f: MatchDayFixture): string {
   return routes.fixture(ctx.orgSlug, ctx.compSlug, f.division_slug, f.fixture_no);
@@ -101,6 +107,8 @@ export function CourtFocus({
   backLabel,
   onBack,
   onChanged,
+  onRead,
+  onSheetCourt,
   onRefused,
   notice = null,
   onDismissNotice = () => {},
@@ -115,6 +123,13 @@ export function CourtFocus({
   onBack: () => void;
   /** A call or an undo landed: refresh the view now. */
   onChanged: () => void;
+  /** Read the day again, nothing else (unlike `onChanged`, it keeps this court's notice). The court's QR sheet reads through it while
+   *  it waits for the phone (Task 35 Part B); with none handed (a static mount), nothing polls. */
+  onRead?: () => void;
+  /** P1: the court whose QR sheet is open (null when none is), told on every change so the shell can pin the focus on it: the default
+   *  focus is the first court of a list a poll re-orders, and the sheet would vanish with the court it was opened on. With none
+   *  handed (a static mount) nothing is pinned. */
+  onSheetCourt?: (courtId: string | null) => void;
   /** A call or an undo was refused, in the organiser's words: the shell keeps it for this court and refreshes. */
   onRefused: (message: string) => void;
   /** This court's last refusal, kept through refreshes until dismissed or another court is opened. */
@@ -132,6 +147,53 @@ export function CourtFocus({
   // The court stream sheet (link, or its QR again) is the focus's: linking refreshes the board and turns "Stream this court" into the
   // band, so a sheet owned by either would be unmounted mid-QR. Kept for the court it was opened on.
   const [sheet, setSheet] = useState<{ courtId: string; linkId: string | null } | null>(null);
+  // Task 35 Part B (owner 2026-11-24, "...and also in match day court scanning"): the sheet closes by itself, ONCE, when this court's
+  // phone pairs while it is open — the read goes from no phone to a phone, or to another link's phone (`closeCodeOnPair` over
+  // `courtPairSeen`). A re-read of the same phone closes nothing, so "Show court QR" opens it again and it stays. Adjusted while
+  // rendering (React's "storing information from previous renders"), and keyed by the court: a pairing read while ANOTHER court is
+  // focused is never this court's.
+  const pair = courtPairSeen(court.stream_link);
+  const [pairSeen, setPairSeen] = useState<{ courtId: string; pair: PairSeen }>({ courtId: court.court_id, pair });
+  if (pairSeen.courtId !== court.court_id || !samePair(pairSeen.pair, pair)) {
+    setPairSeen({ courtId: court.court_id, pair });
+    if (pairSeen.courtId === court.court_id && sheet?.courtId === court.court_id && closeCodeOnPair(pairSeen.pair, pair)) setSheet(null);
+  }
+  // While the open sheet waits for the court's phone (linked, and its phone unpaired or offline: `courtAwaitsPhone`), the day is
+  // read (`onRead`) every COURT_SHEET_PAIR_POLL_MS so the pairing that closes it shows within one read — the band's own poll is 90 s
+  // on a quiet day — for at most COURT_SHEET_PAIR_POLL_MAX_MS, after which the band's cadence carries on alone (T35 review m4).
+  // Nothing else polls here: no sheet, a phone that answers, a court not linked yet, or no reader handed. A hidden tab reads
+  // nothing (the band's rule). The shell hands `onRead` as a fresh arrow each render, so the poll calls the latest one through a
+  // ref and a re-render does not restart its cadence.
+  const waitingForPhone =
+    onRead !== undefined && sheet?.courtId === court.court_id && canWriteCourtStream(ctx) && courtAwaitsPhone(court.stream_link);
+  const latestRead = useRef(onRead);
+  useEffect(() => {
+    latestRead.current = onRead;
+  });
+  // P1: tell the shell which court's sheet is open, whichever way it opened or closed (a press, the pair-close above, a Close). The
+  // cleanup clears it, so an unmounted focus never leaves a pin behind.
+  const sheetCourtId = sheet?.courtId ?? null;
+  const latestSheetCourt = useRef(onSheetCourt);
+  useEffect(() => {
+    latestSheetCourt.current = onSheetCourt;
+  });
+  useEffect(() => {
+    latestSheetCourt.current?.(sheetCourtId);
+    return () => latestSheetCourt.current?.(null);
+  }, [sheetCourtId]);
+  useEffect(() => {
+    if (!waitingForPhone) return;
+    const opened = Date.now();
+    const id = setInterval(() => {
+      if (Date.now() - opened > COURT_SHEET_PAIR_POLL_MAX_MS) {
+        clearInterval(id);
+        return;
+      }
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      latestRead.current?.();
+    }, COURT_SHEET_PAIR_POLL_MS);
+    return () => clearInterval(id);
+  }, [waitingForPhone]);
   return (
     <section
       data-testid="md-focus"

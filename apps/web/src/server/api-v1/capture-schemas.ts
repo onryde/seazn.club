@@ -199,6 +199,24 @@ export const CaptureRealtime = z.strictObject({
   expiresAt: EpochS,
 });
 export type CaptureRealtime = z.infer<typeof CaptureRealtime>;
+/** Task 46 (owner 2026-11-24, apply-rec; the phone's constraints, ledger 2026-11-24): what the relay and Cloudflare last said
+ *  about the session's video, so the phone can tell "my camera reaches Cloudflare but the programme is down" from "all fine".
+ *  Plain values only, each member optional and omitted (never null) when unknown; never a URL, host, uid, key or token. Each
+ *  vocabulary is the one the server STORES (capture-contract.test.ts pins it to its source): the Machine's beat `output`
+ *  (api-v1/schemas RelayHeartbeat) and `programmePhase` (lib/relay-phase PROGRAMME_PHASES), its fps and bitrate rounded to
+ *  whole numbers, and Cloudflare's live-input event (relay/cf-live-notification) without its `live_input.` prefix. Typed
+ *  here, not imported: this file imports zod and one import-free root only (see the head), and a new stored word is a
+ *  contract bump. Strict: a later member is a contract bump too. */
+const DeliveryIngest = z.enum(["connected", "disconnected", "errored"]);
+export const CaptureDelivery = z.strictObject({
+  relayOutput: z.enum(["connecting", "connected", "backoff"]).optional(),
+  programmePhase: z.enum(["waiting", "live", "frozen", "reconnecting", "final"]).optional(),
+  fps: z.number().int().min(0).optional(),
+  kbps: z.number().int().min(0).optional(),
+  cameraIngest: DeliveryIngest.optional(),
+  programmeIngest: DeliveryIngest.optional(),
+});
+export type CaptureDelivery = z.infer<typeof CaptureDelivery>;
 
 /** R5 (final, capture agreed 2026-10-01): the beat answer is a discriminated union on `state`.
  *  Common fields: required on waiting, go-live, live and over; optional on replaced and taken.
@@ -225,8 +243,12 @@ export const CaptureBeatAnswer = z.discriminatedUnion("state", [
     /** E2: court codes only, waiting only; omitted, never null, when there is no refusal. */
     autoRefusal: CaptureAutoRefusal.optional(),
   }),
-  AnswerCommon.extend({ state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy }),
-  AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid() }),
+  AnswerCommon.extend({
+    state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy,
+    /** Task 46: go-live and live only (the two answers that tell the phone to publish); omitted, never null, when nothing is known. */
+    delivery: CaptureDelivery.optional(),
+  }),
+  AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid(), delivery: CaptureDelivery.optional() }),
   AnswerCommon.extend({ state: z.literal("over"), sid: z.uuid(), endReason: CaptureEndReason }),
   // `.partial()` would admit `realtime` here too; `answer-invalid-replaced-realtime.json` is the guard.
   AnswerCommon.omit({ realtime: true }).partial().extend({ state: z.literal("replaced"), device: AnswerDevice.optional() }),

@@ -18,7 +18,7 @@ const FIXTURE = "0b6f2c1e-7a53-4c55-9d0e-2f1a3b4c5d6e";
 const OTHER_FIXTURE = "9e8d7c6b-5a49-4838-8271-605f4e3d2c1b";
 let KEY = "";
 let OTHER_KEY = "";
-/** The panel's own template (fixture-stream-panel.tsx, `overlayUrl`). */
+/** The panel's own template (fixture-stream-panel/panel.tsx, `overlayUrl`). */
 const obsUrl = (fixtureId: string, key: string) =>
   `https://seazn.club/overlay/fixtures/${fixtureId}?style=broadcast&${OVERLAY_KEY_PARAM}=${encodeURIComponent(key)}`;
 

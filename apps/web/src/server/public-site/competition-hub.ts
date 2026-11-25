@@ -89,6 +89,7 @@ import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
+import { readHubStreamFlags, type HubStream } from "./hub-stream-flags";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { loadRrLateJoins, rowFactsFor } from "./table-row-facts";
@@ -802,6 +803,20 @@ export async function loadCompetitionHub(
   const bansByDivision = new Map<string, HubBan[]>();
   for (const b of allBans) (bansByDivision.get(b.divisionId) ?? bansByDivision.set(b.divisionId, []).get(b.divisionId)!).push(b);
 
+  // Seazn-hosted video T47 (owner 2026-11-24, option A): which cards carry the camera. ONE batched read for every fixture of every
+  // division (hub-stream-flags.ts), after the details it takes the ids from. A failure is no camera, never a hub-down: the icon is a hint
+  // on a card, the same standing as the bans above.
+  const streamByFixture = await readHubStreamFlags(
+    details.flatMap(({ detail }) => (detail ? detail.fixtures.map((x) => ({ id: x.id, status: x.status })) : [])),
+    now,
+  ).catch((err: unknown): Map<string, HubStream> => {
+    log.warn(
+      { competitionId: competition.id, err: err instanceof Error ? err.message : String(err) },
+      "competition-hub: the stream flags read failed; no match card carries a camera",
+    );
+    return new Map();
+  });
+
   const matches: HubMatchT[] = [];
   const tables: TableViewT[] = [];
   const knockouts: KnockoutViewT[] = [];
@@ -939,6 +954,8 @@ export async function loadCompetitionHub(
         ...(f.expunged === true ? { expunged: true } : {}),
         // W5 follow-ups C (review C2): a catch-up round's line, so the hub's round planner never reads it as the season's frontier.
         ...(isCatchUpRoundExtKey(f.ext_key) ? { catchUp: true } : {}),
+        // T47: the card's camera, the enum only. Absent for a match with neither a live stream nor a replay.
+        ...(streamByFixture.has(f.id) ? { stream: streamByFixture.get(f.id) } : {}),
         winnerIndex:
           winner === null
             ? null

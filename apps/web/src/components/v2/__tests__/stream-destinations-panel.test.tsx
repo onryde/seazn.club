@@ -908,74 +908,120 @@ describe("StreamDestinationsPanel — the add path, driven", () => {
   });
 });
 
-// ─── Task 16: the fixed Seazn row ────────────────────────────────────────────────────────────────────────────────────────────
-describe("the Seazn row is fixed (Task 16)", () => {
+// ─── Task 33b: the Seazn Hosted card above the org's own channels (it replaces Task 16's fixed Seazn row) ─────────────────────
+describe("the Seazn Hosted card and the org's own channels (Task 33b)", () => {
   const seazn = (): StreamTarget => target({ id: "t-seazn", kind: "seazn", label: "Seazn", keyHint: null });
-  const rowOf = (html: string, id: string): string => {
-    const found = new RegExp(`<li data-testid="stream-dest-row" data-target-id="${id}"[\\s\\S]*?</li>`).exec(html);
-    if (!found) throw new Error(`no row ${id} in the markup — every probe on it would pass vacuously`);
-    return found[0];
-  };
-  const ACTION_IDS = ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu", "stream-dest-menu-rename", "stream-dest-menu-replace", "stream-dest-menu-remove"];
-
-  it("an organiser sees the Seazn row with its mark, name and sub — and none of Rename, Replace key, Remove or the phone menu; the pasted key beside it keeps all of them", () => {
-    const html = panelHtml({ canEdit: true, targets: [seazn(), target()] });
-    const row = rowOf(html, "t-seazn");
-    expect(row).toMatch(/data-platform-mark="seazn"/);
-    expect(row).toContain(">Seazn<");
-    expect(row).toMatch(/data-testid="stream-dest-subline"[^>]*>Plays on this match&#x27;s page</);
-    // Phase 1 visual D2: the helper wraps at 320 in es/nl instead of being cut — no truncate, no line clamp, in a min-w-0 column.
-    const sub = /<div class="([^"]*)"><p[^>]*>Seazn<\/p><p data-testid="stream-dest-subline" class="([^"]*)"/.exec(row);
-    expect(sub, "the Seazn row's name and helper, in their column").not.toBeNull();
-    expect(sub![2]!.split(" ")).not.toContain("truncate");
-    expect(sub![2]!.split(" ").some((c) => c.startsWith("line-clamp")), "no line clamp").toBe(false);
-    expect(sub![1]!.split(" "), "the column keeps min-w-0").toContain("min-w-0");
-    // The control: a pasted key's subline on the same page keeps its one-line truncation.
-    expect(/data-target-id="t1"[\s\S]*?data-testid="stream-dest-subline" class="([^"]*)"/.exec(html)![1]!.split(" ")).toContain("truncate");
-    expect(row).not.toMatch(/stream key|key ends/i);
-    let checked = 0;
-    for (const id of ACTION_IDS) {
-      expect(row, id).not.toContain(`data-testid="${id}"`);
-      checked++;
-    }
-    expect(row).not.toMatch(/<button/);
-    expect(checked).toBe(ACTION_IDS.length);
-    // The control: the same page's pasted-key row does carry them (the absence above is the Seazn row's, not the page's).
-    const keyRow = rowOf(html, "t1");
-    for (const id of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) expect(keyRow, id).toContain(`data-testid="${id}"`);
-    // It sits first in the list the server gave (Seazn first), and the page does not reorder it.
-    expect(html.indexOf('data-target-id="t-seazn"')).toBeLessThan(html.indexOf('data-target-id="t1"'));
+  const channel = (): StreamTarget => target({
+    id: "t-ch", label: "Club channel", keyHint: null,
+    youtube: { connectionId: "c-1", channelId: "UC1", channelTitle: "Club channel", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 } as StreamTarget["youtube"],
   });
-
-  it("with a connected channel, Seazn and a pasted key: Seazn sits first, in its own list, and is not under the 'Stream keys' heading (I1)", () => {
-    const channel = target({
-      id: "t-ch", label: "Club channel", keyHint: null,
-      youtube: { connectionId: "c-1", channelId: "UC1", channelTitle: "Club channel", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 } as StreamTarget["youtube"],
-    });
-    const html = panelHtml({ canEdit: true, targets: [seazn(), channel, target()] });
-    const heading = html.indexOf(`>${m("streaming.keys.heading")}<`);
-    expect(heading, "premise: the keys heading is on the page (a channel and a key are listed)").toBeGreaterThan(-1);
-    const sz = html.indexOf('data-target-id="t-seazn"');
-    expect(sz, "premise: the Seazn row is on the page").toBeGreaterThan(-1);
-    expect(sz, "Seazn is above the keys heading").toBeLessThan(heading);
-    expect(html.indexOf('data-testid="youtube-channel-list"'), "and above the channels").toBeGreaterThan(sz);
-    expect(html.indexOf('data-target-id="t1"'), "the pasted key is below the heading").toBeGreaterThan(heading);
-  });
-
-  it("an org with only the Seazn row lists it (the empty card does not claim 'No destinations yet')", () => {
-    const html = panelHtml({ canEdit: true, targets: [seazn()] });
-    expect(rowOf(html, "t-seazn")).toContain("Seazn");
-    expect(html).not.toContain('data-testid="stream-dest-empty"');
-  });
-
-  it("the nl render shows the Dutch strings", () => {
-    const nl = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "nl", "ui.json"), "utf8")) as Dict;
-    const html = renderToStaticMarkup(
-      <DictProvider dict={nl} locale="nl">
-        <StreamDestinationsPanel orgId="o" canEdit targets={[seazn()]} locale="nl" initialAddOpen={false} />
+  const html = (o: { targets: StreamTarget[]; canEdit?: boolean; seazn?: { offered: boolean } | null }, dict: Dict = messages as unknown as Dict, locale: "en" | "nl" = "en"): string =>
+    renderToStaticMarkup(
+      <DictProvider dict={dict} locale={locale}>
+        <StreamDestinationsPanel orgId="o" canEdit={o.canEdit ?? true} targets={o.targets} locale={locale} seazn={o.seazn ?? null} />
       </DictProvider>,
     );
-    expect(rowOf(html, "t-seazn")).toContain("Wordt afgespeeld op de pagina van deze wedstrijd");
+  const at = (h: string, needle: string): number => {
+    const i = h.indexOf(needle);
+    if (i < 0) throw new Error(`${needle} is not on the page — an order probe on it would pass vacuously`);
+    return i;
+  };
+  const CARD = 'data-testid="seazn-card"';
+  const DIVIDER = 'data-testid="stream-own-divider"';
+  const OWN_NONE = 'data-testid="stream-own-empty"';
+
+  it("the Seazn destination is NO row of the list — with the card or without, editor or viewer: the card is its one place; the pasted key beside it keeps every action (4 checked)", () => {
+    let checked = 0;
+    for (const card of [null, { offered: true }]) {
+      for (const canEdit of [true, false]) {
+        const h = html({ targets: [seazn(), target()], canEdit, seazn: card });
+        const what = `card ${card ? "on" : "none"}, ${canEdit ? "editor" : "viewer"}`;
+        expect(h, what).not.toContain('data-target-id="t-seazn"');
+        expect(h, what).not.toContain('data-fixed="seazn"');
+        expect(h, what).not.toContain('data-testid="seazn-destination-list"');
+        expect(h, `${what}: one row, the pasted key's`).toMatch(/^(?:(?!data-testid="stream-dest-row")[\s\S])*data-testid="stream-dest-row" data-target-id="t1"(?:(?!data-testid="stream-dest-row")[\s\S])*$/);
+        if (canEdit) for (const id of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) expect(h, `${what}: ${id}`).toContain(`data-testid="${id}"`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("ON, an editor: the card, then the 'Your own channels' divider and its line, then Connect YouTube / Add streaming key, then the lists — in that order", () => {
+    const h = html({ targets: [seazn(), channel(), target()], seazn: { offered: true } });
+    const order = [CARD, DIVIDER, `>${m("streaming.own.heading")}<`, `>${esc(m("streaming.own.sub"))}<`, 'data-testid="youtube-connect"', 'data-testid="stream-dest-add"', 'data-testid="youtube-channel-list"', `>${m("streaming.keys.heading")}<`, 'data-target-id="t1"'];
+    const positions = order.map((n) => at(h, n));
+    expect(positions, "each after the one before").toEqual([...positions].sort((a, b) => a - b));
+    expect(positions.length).toBe(order.length);
+    expect(h).toMatch(/role="switch"[^>]*aria-checked="true"/);
+  });
+
+  it("OFF: the card is drawn from the switch the page read, NOT from the list — the list the server sends while off has no Seazn row, and the card is still there with its switch off (T33 review gap)", () => {
+    const h = html({ targets: [target()], seazn: { offered: false } });
+    expect(h).toContain(CARD);
+    expect(h).toContain('data-state="off"');
+    expect(h).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    expect(h).toContain('data-testid="seazn-card-off"');
+    // …and with NO destination of the org's own at all: the switch must still be reachable to turn Seazn back on.
+    const bare = html({ targets: [], seazn: { offered: false } });
+    expect(bare).toMatch(/role="switch"[^>]*aria-checked="false"/);
+  });
+
+  it("with the card and NO channel of the org's own: an editor gets the divider and the two ways in, never the 'No destinations yet' card (Seazn IS a destination); a viewer gets the 'none yet' line", () => {
+    for (const targets of [[], [seazn()]]) {
+      const editor = html({ targets, seazn: { offered: true } });
+      expect(editor).not.toContain('data-testid="stream-dest-empty"');
+      expect(at(editor, DIVIDER)).toBeLessThan(at(editor, 'data-testid="youtube-connect"'));
+      expect(editor).toContain('data-testid="stream-dest-add"');
+      expect(editor, "the editor's ways in say it; no 'none yet' line").not.toContain(OWN_NONE);
+      const viewer = html({ targets, canEdit: false, seazn: { offered: true } });
+      expect(viewer).not.toContain('data-testid="stream-dest-empty"');
+      expect(viewer).toContain(DIVIDER);
+      expect(viewer).toMatch(new RegExp(`${OWN_NONE}[^>]*>${esc(m("streaming.own.empty"))}<`));
+      expect(viewer).not.toContain('data-testid="youtube-connect"');
+      expect(viewer).not.toContain('data-testid="stream-dest-add"');
+      expect(viewer, "the viewer's card is read-only").not.toContain('role="switch"');
+      expect(viewer).toContain(CARD);
+    }
+  });
+
+  it("an org with channels of its own: no 'none yet' line, for a viewer either", () => {
+    expect(html({ targets: [target()], canEdit: false, seazn: { offered: true } })).not.toContain(OWN_NONE);
+  });
+
+  it("the divider's line tells an EDITOR how to add a channel; a viewer, with no button to follow it, gets the heading without it — with and without channels of the org's own (4 checked)", () => {
+    const SUB = `>${esc(m("streaming.own.sub"))}<`;
+    let checked = 0;
+    for (const targets of [[], [target()]]) {
+      for (const canEdit of [true, false]) {
+        const h = html({ targets, canEdit, seazn: { offered: true } });
+        const what = `${targets.length} of its own, ${canEdit ? "editor" : "viewer"}`;
+        expect(h, `${what}: the heading is there`).toContain(`>${m("streaming.own.heading")}<`);
+        expect(h.includes(SUB), `${what}: the instruction line only for an editor`).toBe(canEdit);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("NO card (SEAZN_HOSTED_LIVE off): no divider, and the page is what it was — the empty state for an org with nothing, the list otherwise", () => {
+    const empty = html({ targets: [], seazn: null });
+    expect(empty).not.toContain(CARD);
+    expect(empty).not.toContain(DIVIDER);
+    expect(empty).toContain('data-testid="stream-dest-empty"');
+    const listed = html({ targets: [target()], seazn: null });
+    expect(listed).not.toContain(DIVIDER);
+    expect(listed).toContain('data-target-id="t1"');
+    // The prop left out is the same as null: the page's restricted mode and every old caller.
+    expect(panelHtml({ targets: [] })).not.toContain(CARD);
+  });
+
+  it("the nl render shows the Dutch divider", () => {
+    const nl = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "nl", "ui.json"), "utf8")) as Dict;
+    const h = html({ targets: [target()], seazn: { offered: true } }, nl, "nl");
+    expect(h).toContain(`>${nl["streaming.own.heading"]}<`);
+    expect(h).toContain(`>${esc(nl["streaming.own.sub"] as string)}<`);
+    expect(nl["streaming.own.heading"]).not.toBe(m("streaming.own.heading"));
   });
 
   it("the server's refusal of a change to the row reads as the dictionary's sentence, for every op; the client's literal is the server's", async () => {

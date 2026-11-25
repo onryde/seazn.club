@@ -51,7 +51,7 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all TWENTY-FIVE tables (V410's eight, V430's four, V437's two, V479's four, V525's one, V541's two, V542's three, V552's one), with zero policies", async () => {
+  it("RLS is enabled AND forced on all TWENTY-SIX tables (V410's eight, V430's four, V437's two, V479's four, V525's one, V541's two, V542's three, V552's one, V558's one), with zero policies", async () => {
     // The list is read from the migration files themselves (`create table (\w+)` over the
     // stream fold), so a table added later is guarded the day it lands, not the day someone
     // remembers this test. STREAM_TABLES comes from _stream-migration.ts, which
@@ -63,7 +63,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       where n.nspname = current_schema()
         and c.relname = any(${STREAM_TABLES})
       order by c.relname`;
-    expect(STREAM_TABLES.length).toBe(8 + 4 + 2 + 4 + 1 + 2 + 3 + 1);
+    expect(STREAM_TABLES.length).toBe(8 + 4 + 2 + 4 + 1 + 2 + 3 + 1 + 1);
     expect(rows.map((r) => r.relname)).toEqual([...STREAM_TABLES].sort());
     for (const r of rows) {
       expect(r.rls, r.relname).toBe(true);
@@ -111,6 +111,32 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       expect(row!.d, String(good)).toBe(good);
       checked++;
     }
+    expect(checked, "anti-vacuity: both refusals and all three accepted values ran").toBe(5);
+  });
+
+  // Task 38 (V558): the club's defaults are bounded by the DB, not only by a form: the match's own bound (V462), one row per org,
+  // and the row goes with its org.
+  it("V558: org_stream_defaults refuses -1 and 30001 at the CHECK; 0, 30000 and null land; a second row for one org is refused; the row goes with its org", async () => {
+    let checked = 0;
+    for (const bad of [-1, 30001]) {
+      const r = await rig();
+      await expect(sql`insert into org_stream_defaults (org_id, overlay_delay_ms) values (${r.orgId}, ${bad})`, String(bad))
+        .rejects.toMatchObject({ code: "23514", constraint_name: "org_stream_defaults_overlay_delay_ms_check" });
+      checked++;
+    }
+    for (const good of [0, 30000, null]) {
+      const r = await rig();
+      await sql`insert into org_stream_defaults (org_id, overlay_delay_ms) values (${r.orgId}, ${good})`;
+      const [row] = await sql<{ d: number | null; t: string | null; rev: string }[]>`
+        select overlay_delay_ms as d, overlay_template as t, revision::text as rev from org_stream_defaults where org_id = ${r.orgId}`;
+      expect(row, String(good)).toEqual({ d: good, t: null, rev: "1" });
+      checked++;
+    }
+    const r = await rig();
+    await sql`insert into org_stream_defaults (org_id, overlay_template) values (${r.orgId}, 'bar')`;
+    await expect(sql`insert into org_stream_defaults (org_id) values (${r.orgId})`).rejects.toMatchObject({ code: "23505" });
+    await sql`delete from organizations where id = ${r.orgId}`;
+    expect((await sql`select 1 from org_stream_defaults where org_id = ${r.orgId}`).length, "the row cascades with its org").toBe(0);
     expect(checked, "anti-vacuity: both refusals and all three accepted values ran").toBe(5);
   });
 
