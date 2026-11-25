@@ -860,7 +860,7 @@
   "seaznVideo.part": "Deel {n}",
   "seaznVideo.startingLive": "De livevideo begint hier zo meteen",
   "seaznVideo.startingReplay": "De herhaling staat hier over een paar minuten klaar",
-  "seaznVideo.delay": "De video loopt ongeveer {min}–{max} seconden achter op de live-actie.",
+  "seaznVideo.delay": "De video loopt ongeveer {seconds} seconden achter op de live-actie.",
   "paging.search.label": "Zoek een team",
   "paging.search.clear": "Wissen",
   "paging.search.none": "Geen team met de naam ‘{query}’",

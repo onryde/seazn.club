@@ -161,7 +161,7 @@ describe("the island: live", () => {
 // one quiet line says by how much. It is keyed on the VIDEO being live (the answer's `live`), never on the match's status: no line for a
 // replay, for the held box before the start, or after the stream ends. Words revised 2026-11-24 (T33c review m6, recommendation
 // applied): "court" is wrong for a pitch or a board, so the line says "the live action", in every sport and every locale.
-const OWNER_DELAY_LINE = "Video runs about 15–20 seconds behind the live action."; // the owner's words, verbatim
+const OWNER_DELAY_LINE = "Video runs about 25 seconds behind the live action."; // the owner's words, verbatim (2026-11-25, "about 25 seconds")
 /** A playing-surface word in any of the four locales: the line must not name one (a pitch, a court, a board). */
 const SURFACE_WORD = /\b(court|pitch|board|field|pista|cancha|campo|terrain|plateau|veld|baan|bord)\b/i;
 /** The markup's text, its entities decoded (French "l'action" is serialised `l&#x27;action`). */
@@ -170,7 +170,7 @@ const unescapeHtml = (s: string): string =>
 /** The VISIBLE delay line's text, one entry per line drawn (the held row, `seazn-video-delay-reserved`, is not one). */
 const delayLines = (out: string): string[] => [...out.matchAll(/<p data-testid="seazn-video-delay"[^>]*>(.*?)<\/p>/g)].map((m) => unescapeHtml(m[1]!));
 const delayFor = (template: string): string =>
-  template.replace("{min}", String(SEAZN_LIVE_DELAY_SECONDS.min)).replace("{max}", String(SEAZN_LIVE_DELAY_SECONDS.max));
+  template.replace("{seconds}", String(SEAZN_LIVE_DELAY_SECONDS));
 
 // Task 33f (owner 'Ok', 2026-11-24): the held box's one quiet line said "The video will appear here shortly" for two different waits.
 // It now says which video is coming. The owner's words, verbatim, typed here and never read back from the labels under test.
@@ -189,7 +189,7 @@ describe("owner 11-23: the delay line, under the LIVE player only", () => {
   });
 
   it("live: ONE line, under the player and inside the live region, in the owner's words, its numbers from the one constant", () => {
-    expect(SEAZN_LIVE_DELAY_SECONDS, "the owner's numbers").toEqual({ min: 15, max: 20 });
+    expect(SEAZN_LIVE_DELAY_SECONDS, "the owner's number, 2026-11-25: ONE figure, not a range").toBe(25);
     const out = html(answer({ live: signed("live") }));
     expect(delayLines(out)).toEqual([OWNER_DELAY_LINE]);
     const region = /<section data-testid="seazn-video"[^>]*>(.*)<\/section>/.exec(out)![1]!;
@@ -231,13 +231,14 @@ describe("owner 11-23: the delay line, under the LIVE player only", () => {
     expect(checked).toBe(2);
   });
 
-  it("every locale says its own line, with the numbers filled in (never the English, never a key, never a bare {min})", () => {
+  it("every locale says its own line, with the numbers filled in (never the English, never a key, never a bare {seconds})", () => {
     const dicts = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl } as const;
     let checked = 0;
     for (const [loc, dict] of Object.entries(dicts)) {
       const template = (dict as Record<string, string>)["seaznVideo.delay"];
       expect(template, `${loc}: premise, the key exists`).toEqual(expect.any(String));
-      expect(template, `${loc}: the template keeps both numbers`).toMatch(/\{min\}[^]*\{max\}/);
+      expect(template, `${loc}: the template keeps the one figure`).toContain("{seconds}");
+      expect(template, `${loc}: and no longer a range`).not.toMatch(/\{min\}|\{max\}/);
       const lines = delayLines(html(answer({ live: signed("live") }), seaznVideoLabels(dict as Record<string, unknown>)));
       expect(lines, loc).toEqual([delayFor(template!)]);
       expect(lines[0], loc).not.toMatch(/\{|seaznVideo\./);
