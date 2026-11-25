@@ -30,12 +30,15 @@ export async function openInAppSuite(): Promise<void> {
     );
     const policy = header("content-security-policy") || header("content-security-policy-report-only");
     const nonce = /'nonce-([^']+)'/.exec(policy)?.[1];
+    // The logo and the condensed face are inline `data:` URIs, which ask for nothing; any other src or url() is a request.
+    const loaded = [...body.matchAll(/(?:\ssrc\s*=|\burl\()\s*["']?([^"'\s>)]*)/gi)].map((m) => m[1]);
     check(
-      `open in app: /app/${kind} has one script under the served nonce, no src, and the Play link`,
+      `open in app: /app/${kind} has one script under the served nonce, loads only data: URIs, and the Play link`,
       nonce !== undefined &&
         body.split("<script").length === 2 &&
         body.includes(`<script nonce="${nonce}">`) &&
-        !/\ssrc=/.test(body) &&
+        loaded.length > 0 &&
+        loaded.every((target) => target.startsWith("data:")) &&
         body.includes(`href="${PLAY}"`),
     );
     check(

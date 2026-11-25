@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { expectNoHorizontalScroll } from "./helpers";
 
 // Open in app (spec 2026-11-25 §5.3): the bare fallback pages under /app, as a built server serves them. Seen only when
@@ -19,6 +20,16 @@ function watchErrors(page: Page): string[] {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
   return errors;
+}
+
+/** Every directive the page's CSP refuses, report-only included, from the first byte of each later document. */
+async function watchViolations(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __violations: string[] };
+    w.__violations = [];
+    document.addEventListener("securitypolicyviolation", (e) => w.__violations.push(e.violatedDirective));
+  });
+  return () => page.evaluate(() => (window as unknown as { __violations: string[] }).__violations);
 }
 
 test("served headers and fragment handling", async ({ page, context, baseURL }) => {
@@ -115,12 +126,7 @@ test("no fragment and a garbled one: the same page, no error", async ({ page }) 
 });
 
 test("the nonce'd script and the inline style run under the served CSP with no violation", async ({ page }) => {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __violations: string[] };
-    w.__violations = [];
-    document.addEventListener("securitypolicyviolation", (e) => w.__violations.push(e.violatedDirective));
-  });
-  const violations = () => page.evaluate(() => (window as unknown as { __violations: string[] }).__violations);
+  const violations = await watchViolations(page);
   const errors = watchErrors(page);
   let checked = 0;
   for (const kind of KINDS) {
@@ -161,6 +167,132 @@ test("each page at 320, 768 and 1280: no horizontal scroll, a thumb-sized Play b
     }
   }
   expect(checked).toBe(9);
+});
+
+/** The fonts Chromium actually drew `selector`'s text with, from the DevTools protocol: `document.fonts` says a face
+ *  loaded, not that this text used it, and a glyph the face lacks is drawn by some other font. */
+async function drawnWith(page: Page, selector: string): Promise<{ isCustomFont: boolean; glyphCount: number }[]> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument");
+  const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+  const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+  await cdp.detach();
+  return fonts;
+}
+
+test("the inlined logo and condensed face render under the served CSP, every locale's accents included — counted", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const violations = await watchViolations(page);
+  const errors = watchErrors(page);
+  const logo = readFileSync("public/brand/seazn-logo-night-tight.png");
+  let checked = 0;
+  let accented = 0;
+  for (const locale of ["en", "es", "fr", "nl"]) {
+    await context.addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+    for (const kind of KINDS) {
+      const at = `${kind}/${locale}`;
+      await page.goto(`/app/${kind}`);
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      const image = page.getByRole("img", { name: "Seazn Club" });
+      expect(
+        await image.evaluate((e: HTMLImageElement) => [e.complete, e.naturalWidth, e.naturalHeight, e.height]),
+        at,
+      ).toEqual([true, logo.readUInt32BE(16), logo.readUInt32BE(20), 30]);
+      for (const selector of ["h1", '[data-testid="app-fallback-play"]']) {
+        const text = await page.locator(selector).innerText();
+        const fonts = await drawnWith(page, selector);
+        expect(fonts.length, `${at} ${selector}`).toBeGreaterThan(0);
+        expect(fonts.filter((f) => !f.isCustomFont), `${at} ${selector}: "${text}"`).toEqual([]);
+        accented += [...text].filter((c) => c.charCodeAt(0) > 127).length;
+      }
+      // Positive control: the same probe tells a system font apart.
+      expect((await drawnWith(page, ".retry")).map((f) => f.isCustomFont), at).toContain(false);
+      expect(await violations(), at).toEqual([]);
+      checked += 1;
+    }
+  }
+  expect(checked).toBe(12);
+  expect(accented).toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
+test.describe("the approved look", () => {
+  test.use({ viewport: { width: 320, height: 700 } });
+
+  /** The house theme's own declaration of a colour, as a computed style spells it. */
+  const houseColour = (name: string) => {
+    const hex = readFileSync("src/app/globals.css", "utf8").match(new RegExp(`${name}:\\s*#([0-9a-f]{6});`, "i"))![1]!;
+    return `rgb(${[0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+  };
+
+  test("night page, logo, one dashed lime box, and the way back below it — counted", async ({ page }) => {
+    const [night, lime, cream] = ["--mk-night", "--mk-lime", "--mk-cream"].map(houseColour) as [string, string, string];
+    // With something behind it, so the scoring page shows its way back.
+    await page.goto("/");
+    await page.goto("/app/score");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const box = page.locator(".box");
+    const heading = page.getByRole("heading", { level: 1 });
+    const play = page.getByTestId("app-fallback-play");
+    const retry = page.locator(".retry");
+    const back = page.getByTestId("score-in-browser");
+    const logo = page.getByRole("img", { name: "Seazn Club" });
+
+    const styles: [string, Locator, Record<string, string>][] = [
+      ["body", page.locator("body"), { "background-color": night }],
+      ["box", box, {
+        "border-top-style": "dashed",
+        "border-top-color": lime,
+        "border-top-left-radius": "12px",
+        "padding-top": "20px",
+        "padding-left": "16px",
+      }],
+      ["heading", heading, { color: cream, "text-transform": "uppercase", "font-size": "25px", "line-height": "27.5px" }],
+      ["play", play, {
+        "background-color": lime,
+        color: night,
+        "font-size": "16px",
+        "font-weight": "700",
+        "text-transform": "uppercase",
+      }],
+      ["retry", retry, { color: "rgb(201, 191, 238)", "font-size": "13px" }],
+      ["back", back, { color: cream, "font-size": "13.5px", "text-decoration-line": "underline" }],
+    ];
+    let checked = 0;
+    for (const [name, locator, expected] of styles) {
+      for (const [property, value] of Object.entries(expected)) {
+        await expect(locator, `${name} ${property}`).toHaveCSS(property, value);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(20);
+    // As DECLARED: the computed width is snapped to the screen's pixels (headless Chromium answers 1px).
+    expect(
+      await page.evaluate(() =>
+        [...document.styleSheets]
+          .flatMap((sheet) => [...sheet.cssRules])
+          .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule && rule.selectorText === ".box")
+          .map((rule) => rule.style.borderTopWidth),
+      ),
+    ).toEqual(["1.5px"]);
+
+    const rect = async (l: Locator) => (await l.boundingBox())!;
+    const [b, h, p, r, w, l] = await Promise.all([box, heading, play, retry, back, logo].map(rect));
+    expect(l!.height).toBe(30);
+    expect(l!.y + l!.height).toBeLessThanOrEqual(b!.y);
+    expect(p!.height).toBe(44);
+    for (const inside of [h!, p!, r!]) {
+      expect(inside.y).toBeGreaterThan(b!.y);
+      expect(inside.y + inside.height).toBeLessThan(b!.y + b!.height);
+    }
+    expect(w!.y).toBeGreaterThanOrEqual(b!.y + b!.height);
+    expect(w!.height).toBeGreaterThanOrEqual(44);
+  });
 });
 
 test("the visitor's picked language is the page's, through the real proxy — counted", async ({ page, context, baseURL }) => {

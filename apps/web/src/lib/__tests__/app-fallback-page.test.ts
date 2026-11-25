@@ -3,6 +3,7 @@
 // document, runs one nonce'd script that drops the fragment without reading it, and sets no cookie. The sweep is over
 // the three pages, not over sports: no sport reaches them. The browser half (served headers, requests, CSP, the cascade)
 // is e2e/open-in-app.spec.ts's.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { buildCustomRoute } from "next/dist/server/lib/router-utils/filesystem";
@@ -39,6 +40,17 @@ const render = async (kind: Kind, headers: Record<string, string> = {}) => {
   const res = await appFallbackResponse(kind, request(kind, headers));
   return { res, html: await res.text() };
 };
+/** Everything in `html` that would make the browser ask for something besides the document. A `data:` URI asks for
+ *  nothing, so it is the one thing a `url(` or a loading attribute may hold. */
+function outsideReferences(html: string): string[] {
+  const targets = [
+    ...html.matchAll(/\burl\(\s*["']?([^"')]*)/gi),
+    ...html.matchAll(/\s(?:src|poster|data|background|action|formaction|xlink:href)\s*=\s*["']?([^"'\s>]*)/gi),
+  ].map((m) => m[1]!);
+  const loaders = html.match(/@import|image-set\(|\ssrcset\s*=|<(?:iframe|object|embed|video|audio|source)\b|http-equiv/gi);
+  return [...targets.filter((target) => !target.startsWith("data:")), ...(loaders ?? [])];
+}
+
 const scriptsOf = (html: string) => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
 
 describe("copy", () => {
@@ -55,6 +67,90 @@ describe("copy", () => {
       }
     }
     expect(checked).toBe(12);
+  });
+});
+
+describe("the outside-reference scan itself", () => {
+  it("catches every way this page could fetch something, and lets data: through — counted", () => {
+    const fetching = [
+      "<style>a{background:url(https://x.test/a.png)}</style>",
+      '<style>@font-face{src:url("/f.woff2")}</style>',
+      "<style>a{background:url( 'b.png' )}</style>",
+      '<img src="/brand/logo.png">',
+      '<img alt="" src=//x.test/a.png>',
+      '<img src="data:," srcset="/a.png 2x">',
+      '<style>@import "a.css";</style>',
+      '<style>a{background:image-set("a.png" 1x)}</style>',
+      '<iframe></iframe>',
+      '<object data="/a"></object>',
+      '<meta http-equiv="refresh" content="0;url=/a">',
+    ];
+    let checked = 0;
+    for (const html of fetching) {
+      expect(outsideReferences(html), html).not.toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(11);
+    expect(outsideReferences('<img src="data:image/png;base64,AA//"><style>a{src:url(data:font/woff2;base64,AA)}</style>')).toEqual([]);
+    expect(outsideReferences('<style>a{src:url("data:font/woff2;base64,AA")}</style><b data-testid="x">')).toEqual([]);
+  });
+});
+
+/** Width and height from a PNG's IHDR chunk. */
+const pngSize = (png: Buffer) => ({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) });
+
+describe("the approved look's two inlined assets", () => {
+  it("the logo is the brand file's own bytes as a data: URI, 30px high at its own aspect — counted", async () => {
+    const file = readFileSync("public/brand/seazn-logo-night-tight.png");
+    const { width, height } = pngSize(file);
+    let checked = 0;
+    for (const kind of KINDS) {
+      for (const locale of LOCALES) {
+        const at = `${kind}/${locale}`;
+        const { html } = await render(kind, { "x-seazn-locale": locale });
+        const images = html.match(/<img\b[^>]*>/g) ?? [];
+        expect(images, at).toHaveLength(1);
+        const src = images[0]!.match(/\ssrc="data:image\/png;base64,([A-Za-z0-9+/=]+)"/)?.[1];
+        expect(src, at).toBeTruthy();
+        expect(Buffer.from(src!, "base64").equals(file), at).toBe(true);
+        expect(images[0], at).toContain('alt="Seazn Club"');
+        expect(images[0], at).toContain(`width="${Math.round((30 * width) / height)}" height="30"`);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(12);
+  });
+
+  it("the condensed face is inlined woff2, one face per weight the heading and Play button ask for — counted", async () => {
+    const { html } = await render("score");
+    const faces = [...html.matchAll(/@font-face\{([^}]*)\}/g)].map((m) => m[1]!);
+    const weights: string[] = [];
+    const payloads = new Set<string>();
+    let family = "";
+    for (const face of faces) {
+      family = face.match(/font-family:"([^"]+)"/)![1]!;
+      weights.push(face.match(/font-weight:(\d+)/)![1]!);
+      const data = face.match(/src:url\(data:font\/woff2;base64,([A-Za-z0-9+/=]+)\) format\("woff2"\)/)![1]!;
+      const font = Buffer.from(data, "base64");
+      expect(font.subarray(0, 4).toString("latin1")).toBe("wOF2");
+      // The header's own total length: a truncated paste is not a font.
+      expect(font.readUInt32BE(8)).toBe(font.length);
+      payloads.add(data);
+    }
+    expect(faces).toHaveLength(2);
+    expect(payloads.size).toBe(2);
+    let checked = 0;
+    for (const selector of ["h1", ".play"]) {
+      // The rules that style `selector` alone or in a list, joined.
+      const rules = [...html.matchAll(/(?<=\}|<style>)([^{}@]+)\{([^}]*)\}/g)]
+        .filter((m) => m[1]!.split(",").includes(selector))
+        .map((m) => m[2]!)
+        .join(";");
+      expect(rules, selector).toContain(`font-family:"${family}","Arial Narrow",sans-serif`);
+      expect(weights, selector).toContain(rules.match(/font-weight:(\d+)/)?.[1]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -80,8 +176,10 @@ describe("the page, every kind in every locale", () => {
         expect(html, at).toContain(DICTS[locale]!["openApp.fallback.retry"]);
         expect(html, at).toContain(`href="${PLAY}"`);
 
-        // Nothing is fetched but the document: no src at all, no CSS url(), and the only link elements are inline.
-        expect(html, at).not.toMatch(/\ssrc=|url\(|@import|<img|<iframe/);
+        // Nothing is fetched but the document: every url() and loading attribute holds a data: URI, the only absolute
+        // URL anywhere is the Play listing, and the only hrefs are that and the empty icon.
+        expect(outsideReferences(html), at).toEqual([]);
+        expect(html.match(/https?:/gi), at).toEqual(["https:"]);
         const hrefs = [...html.matchAll(/\shref="([^"]*)"/g)].map((m) => m[1]!);
         expect(hrefs.sort(), at).toEqual(["data:,", PLAY]);
 
