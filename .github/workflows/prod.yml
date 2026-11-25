@@ -222,6 +222,19 @@ jobs:
           CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CF_PURGE_TOKEN: ${{ secrets.CLOUDFLARE_CACHE_PURGE_TOKEN }}
 
+      # Tells IndexNow (Bing and the engines that share its list) which pages to fetch again: every URL of the new
+      # release's sitemap, after the purge so a crawler that comes at once gets the new pages. Search engines are not
+      # part of the release, so its failure is ignored and it cannot hold the job (its own short timeout; each request
+      # gives up sooner still), and with no condition of its own it runs only when the deploy succeeded. The script
+      # submits only for exactly this origin and only on this workflow's tag push, so no other run can send anything.
+      # Pinned by scripts/__tests__/indexnow-submit.test.ts.
+      - name: Submit the sitemap to IndexNow
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node --experimental-strip-types scripts/indexnow-submit.ts
+        env:
+          INDEXNOW_ORIGIN: https://seazn.club
+
       - name: Report machine count
         if: always()
         run: flyctl status --app "${{ steps.flycfg.outputs.app }}" || true
