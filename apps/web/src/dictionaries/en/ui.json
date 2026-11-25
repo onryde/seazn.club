@@ -7664,7 +7664,7 @@
   "stream.takeover.dismiss": "Dismiss",
   "stream.phone.pollFar": "The phone checks in every minute until 30 minutes before the match",
   "stream.phone.matchOver": "This match is over. Its stream code has ended.",
-  "stream.code.scan": "Scan with the Seazn Capture app",
+  "stream.code.scan": "Scan with the Seazn Club Mobile App",
   "stream.code.paired": "Paired",
   "stream.code.showAgain": "Show the code again",
   "stream.courtStreamed": "Streamed by {court}'s phone",

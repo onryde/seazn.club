@@ -7664,7 +7664,7 @@
   "stream.takeover.dismiss": "Descartar",
   "stream.phone.pollFar": "El teléfono se conecta cada minuto hasta 30 minutos antes del partido",
   "stream.phone.matchOver": "Este partido ha terminado. Su código de emisión ha caducado.",
-  "stream.code.scan": "Escanea con la app Seazn Capture",
+  "stream.code.scan": "Escanea con Seazn Club Mobile App",
   "stream.code.paired": "Emparejado",
   "stream.code.showAgain": "Mostrar el código otra vez",
   "stream.courtStreamed": "Lo emite el teléfono de {court}",

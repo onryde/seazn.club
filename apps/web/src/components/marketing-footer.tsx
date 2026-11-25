@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CookieSettingsButton } from "@/components/cookie-settings-button";
 import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
+import { PlayBadge } from "@/components/marketing/play-badge";
 import { PoweredByStripe } from "@/components/powered-by-stripe";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
@@ -83,6 +84,13 @@ export async function MarketingFooter({ lang = "en" }: { lang?: string }) {
               </ul>
             </div>
           ))}
+        </div>
+        {/* The Android app, centred above the bottom bar at every width, with Google's trademark line under its badge. */}
+        <div className="mt-6 flex flex-col items-center text-center">
+          {/* Called, not mounted: the footer's tests render `await MarketingFooter()` to static markup, which cannot
+              resolve a second async component inside it. */}
+          {await PlayBadge({ lang, size: "sm" })}
+          <p className="text-balance text-[11px] leading-4 text-[#8d7fc0]">{t(d, "app.playBadge.trademark")}</p>
         </div>
         <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-[#2b1d5c] pt-6 text-xs text-[#8d7fc0] sm:flex-row">
           <span>{t(d, "footer.rights", { year: new Date().getFullYear() })}</span>

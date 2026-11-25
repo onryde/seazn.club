@@ -243,6 +243,8 @@
   "footer.cookieSettings": "Paramètres des cookies",
   "footer.rights": "© {year} Seazn Club. Tous droits réservés.",
   "footer.tagline": "TOUS LES SPORTS · EN DIRECT EN QUELQUES MINUTES",
+  "app.playBadge.alt": "Disponible sur Google Play",
+  "app.playBadge.trademark": "Seazn Club Mobile App pour Android. Google Play et le logo Google Play sont des marques de Google LLC.",
   "discovery.inPlay": "En jeu",
   "discovery.badge.live": "Direct",
   "discovery.badge.featured": "À la une",

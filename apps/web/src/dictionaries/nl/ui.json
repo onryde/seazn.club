@@ -7664,7 +7664,7 @@
   "stream.takeover.dismiss": "Sluiten",
   "stream.phone.pollFar": "De telefoon meldt zich elke minuut tot 30 minuten voor de wedstrijd",
   "stream.phone.matchOver": "Deze wedstrijd is voorbij. De streamcode is verlopen.",
-  "stream.code.scan": "Scan met de Seazn Capture-app",
+  "stream.code.scan": "Scan met de Seazn Club Mobile App",
   "stream.code.paired": "Gekoppeld",
   "stream.code.showAgain": "Toon de code opnieuw",
   "stream.courtStreamed": "Gestreamd door de telefoon van {court}",

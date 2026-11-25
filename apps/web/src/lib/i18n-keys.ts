@@ -186,6 +186,8 @@ export type DictionaryKey =
   | "apiKeys.scope.score.line"
   | "apiKeys.scopes.legend"
   | "app.name"
+  | "app.playBadge.alt"
+  | "app.playBadge.trademark"
   | "arbiter.boardNo"
   | "arbiter.colour.black"
   | "arbiter.colour.white"
