@@ -16,10 +16,15 @@ import { recordLiveNotification } from "@/server/usecases/stream-sessions";
 //    the body or the secret.
 //  - An authentic body that is not a live-input notification (the destination's "Save and Test" message, a format drift): 200
 //    `{ ignored: true }`, and a warn naming the FIELD that failed (never a value).
-//  - An input no session here owns: 200, acked and ignored at debug. stg and prod share one Cloudflare account and its
-//    notification policy, so each environment receives the other's events, routinely.
+//  - An input no session here owns: 200, acked and ignored. stg and prod share one Cloudflare account and its notification
+//    policy, so each environment receives the other's events, routinely. Logged at INFO (Task 45 review m2: at debug a dropped
+//    event was invisible in prod) with the event and the uid's first UID_PREFIX characters only, never the full uid.
 //  - A throw out of the use case is 500 (a Cloudflare delivery that is not 2xx shows on the destination as its last failure).
 //    Everything else is 200.
+
+/** Task 45 review m2: how much of a foreign input's uid the ignored line keeps — enough to match it against Cloudflare's own
+ *  record, never the whole id. */
+const UID_PREFIX = 8;
 
 const errClass = (err: unknown) => (err instanceof Error ? err.name : typeof err);
 
@@ -47,7 +52,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   try {
     const r = await recordLiveNotification(n, new Date());
     if (r.outcome === "unknown_input") {
-      log.debug({ inputUid: n.inputUid, event: n.event }, "cloudflare-live-webhook: an input this deployment does not own — ignored");
+      log.info({ inputUidPrefix: n.inputUid.slice(0, UID_PREFIX), event: n.event }, "cloudflare-live-webhook: an input this deployment does not own — ignored");
     } else {
       // One line per handled event: the input, the event, the session and the outcome only, never a header, the body or the secret.
       // Task 45: `edge` when the event raised the session's phone-live edge counter (a camera re-connection nudging the relay).

@@ -154,17 +154,25 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/cloudflare-stream-live (Task 27b)",
     noSecretLogged();
   });
 
-  it("an input this deployment does not own (the other environment's, on the shared account) is acked 200 and ignored: nothing written, no info line, never a 500", async () => {
+  it("an input this deployment does not own (the other environment's, on the shared account) is acked 200 and ignored: nothing written, never a 500, and ONE info line each (Task 45 review m2: visible in prod) carrying the event and the uid's first 8 characters, never the whole uid", async () => {
     const uid = `cf-${randomUUID().replace(/-/g, "")}`;
+    const events = ["live_input.connected", "live_input.disconnected", "live_input.errored"];
     let checked = 0;
-    for (const event of ["live_input.connected", "live_input.disconnected", "live_input.errored"]) {
+    for (const event of events) {
       const res = await post(bodyOf(uid, event));
       expect([event, res.status, await res.json()]).toEqual([event, 200, { received: true, outcome: "unknown_input" }]);
       checked++;
     }
     expect(checked).toBe(3);
     expect(await writtenFor(uid)).toBe(0);
-    expect(logMock.info).not.toHaveBeenCalled();
+    // The prefix length is the review's ruling (8), typed here, never read from the route.
+    expect(logMock.info.mock.calls.map(([f, msg]) => [f, msg])).toEqual(events.map((event) => [
+      { inputUidPrefix: uid.slice(0, 8), event }, "cloudflare-live-webhook: an input this deployment does not own — ignored",
+    ]));
+    expect(logMock.debug, "not at debug, where prod never shows it").not.toHaveBeenCalled();
+    const everyLine = JSON.stringify([logMock.info, logMock.warn, logMock.error, logMock.debug].flatMap((m) => m.mock.calls));
+    expect(everyLine.includes(uid), "the full uid is never logged").toBe(false);
+    expect(everyLine.includes(uid.slice(0, 8)), "PREMISE: the scan reads the lines that carry the prefix").toBe(true);
     noSecretLogged();
   });
 
