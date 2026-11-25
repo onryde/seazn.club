@@ -18,14 +18,15 @@
 // The court path (T37's per-match sessions) is pinned in capture-court.test.ts's "Task 43" block.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): neither the stop nor the start reads a sport.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureRefusalError, captureRefusal } from "@/server/api-v1/capture-http";
 import { CaptureBeat, CaptureRefusal, CaptureStartOk } from "@/server/api-v1/capture-schemas";
+import { OWN_ENDING_DRAIN_SECONDS, OWN_ENDING_RETRY_AFTER_MAX_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
-import { postBeat, postStart } from "../capture-phone";
+import { ownEndingRetryAfter, postBeat, postStart } from "../capture-phone";
 import { saveStreamSettings } from "../stream-codes";
 import { createSession, heartbeat } from "../stream-sessions";
 import { captureRig, phoneId } from "./_capture-rig";
@@ -104,15 +105,20 @@ const eventCount = async (sid: string) =>
 
 let refusalsChecked = 0;
 /** The refusal's RAW wire body, parsed by the contract's union: `<status>:<code>` plus the body. */
-async function refused(p: Promise<unknown>): Promise<{ wire: string; body: Record<string, unknown> }> {
+async function refused(p: Promise<unknown>): Promise<{ wire: string; body: Record<string, unknown>; retryAfter: string | null }> {
   const err = await p.then(() => null, (e: unknown) => e);
   expect(err, "the start was refused with a capture refusal").toBeInstanceOf(CaptureRefusalError);
-  const res = captureRefusal(err as CaptureRefusalError);
+  const res = captureRefusal(err as CaptureRefusalError);   // the mapping captureRoute answers with
   const body = (await res.json()) as Record<string, unknown>;
   expect(CaptureRefusal.parse(body)).toEqual(body);
+  expect(res.headers.get("cache-control"), "every capture answer stays private, no-store").toBe("private, no-store");
   refusalsChecked++;
-  return { wire: `${res.status}:${String(body.code)}`, body };
+  return { wire: `${res.status}:${String(body.code)}`, body, retryAfter: res.headers.get("retry-after") };
 }
+
+/** The drain the phone team is told to expect (from the rulebook: the Machine's stop grace, owner ruling D15) and their ceiling. */
+const DRAIN_S = 20;
+const CEILING_S = 20;
 
 /** Backends blocked on a row lock in a statement matching `pattern` (an ILIKE). */
 async function lockWaiters(pattern: string): Promise<number> {
@@ -133,6 +139,40 @@ async function untilWaiting(pattern: string, n: number): Promise<void> {
 }
 const SESSION_LOCK = "%from fixture_stream_sessions%for update%";
 
+describe("Task 43 — Retry-After on the 503 for the phone's own ending session (pure, the phone team's rule)", () => {
+  const T = new Date("2026-11-24T09:42:40.656Z");          // d908c90c's ending_at
+  const at = (s: number) => new Date(T.getTime() + s * 1000);
+  it("the constants are the rulebook's: the drain is the stop grace (D15: 20 s), the phone's ceiling is 20 s", () => {
+    expect(RUNNER_STOP_GRACE_SECONDS).toBe(DRAIN_S);
+    expect(OWN_ENDING_DRAIN_SECONDS, "the drain expectation IS the stop grace").toBe(RUNNER_STOP_GRACE_SECONDS);
+    expect(OWN_ENDING_RETRY_AFTER_MAX_SECONDS).toBe(CEILING_S);
+  });
+  it.each([
+    ["just began ending (0 s)", 0, 20],
+    ["d908c90c's first start (3.194 s in)", 3.194, 17],   // 16.806 s left, rounded UP
+    ["d908c90c's second start (9.34 s in)", 9.34, 11],
+    ["one fractional second left (19.5 s in)", 19.5, 1],
+    ["FLOOR: the drain exactly spent (20 s in)", 20, 1],
+    ["FLOOR: long overdue (300 s in)", 300, 1],
+    ["CEILING: ending_at ahead of the clock (skew, -5 s)", -5, 20],
+    ["CEILING: far ahead (-3600 s)", -3600, 20],
+  ] as const)("%s (%s s in) → Retry-After %i", (_name, elapsed, want) => {
+    expect(ownEndingRetryAfter(T, at(elapsed))).toBe(want);
+  });
+  it("no ending_at (the write lost, F22): the whole drain, capped — never more than the ceiling", () => {
+    expect(ownEndingRetryAfter(null, at(0))).toBe(Math.min(DRAIN_S, CEILING_S));
+  });
+  it("always an integer in [1, 20] — a sweep over -60 s … 60 s in 0.1 s steps", () => {
+    let checked = 0;
+    for (let tenths = -600; tenths <= 600; tenths++) {
+      const v = ownEndingRetryAfter(T, at(tenths / 10));
+      expect(Number.isInteger(v) && v >= 1 && v <= CEILING_S, `${tenths / 10} s → ${v}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(1201);
+  });
+});
+
 describe.skipIf(!HAS_DB)("Task 43 — the phone's held stop, then its own start (fixture code)", () => {
   it("d908c90c: hold → the held stop → S ending at once; a start while the relay drains is 503 unavailable, NEVER already_live; once the Machine is gone the start completes S and goes ahead (200, a new sid)", async () => {
     const s = await composedLive();
@@ -144,15 +184,20 @@ describe.skipIf(!HAS_DB)("Task 43 — the phone's held stop, then its own start 
 
     // 09:42:43.85: the first start, the relay still draining.
     s.draining();
+    const observe = vi.spyOn(s.r.runner, "observe");
     s.r.tick(3 * SEC);
     const first = await refused(s.start());
     expect(first.wire, "not already_live: S is the session this phone stopped").toBe("503:unavailable");
     expect(first.body).not.toHaveProperty("sid");
+    expect(observe, "its own ending session's Machine was observed once").toHaveBeenCalledTimes(1);
+    expect(first.retryAfter, "Retry-After: the drain left, 3 s into it").toBe(String(DRAIN_S - 3));
     expect(await openOf(s.r.fixtureId), "nothing new was opened; S still drains").toEqual([{ id: s.S, state: "ending" }]);
 
     // 09:42:49.99: the second start, still draining — the same answer, still no second session.
     s.r.tick(6 * SEC);
-    expect((await refused(s.start())).wire).toBe("503:unavailable");
+    const second = await refused(s.start());
+    expect(second.wire).toBe("503:unavailable");
+    expect(second.retryAfter, "9 s into the drain").toBe(String(DRAIN_S - 9));
 
     // The Machine exits and is gone: the next start observes it, completes S, and starts.
     s.gone();
@@ -196,8 +241,13 @@ describe.skipIf(!HAS_DB)("Task 43 — the phone's held stop, then its own start 
 
   it("S's own phone, S still LIVE (it never stopped it): already_live naming S, startedBy organiser — the lost-200 retry rule is unchanged", async () => {
     const s = await composedLive();
+    // The fake would report the Machine GONE if asked: a start that observed a live session would move it. It must not ask.
+    s.gone();
+    const observe = vi.spyOn(s.r.runner, "observe");
     const got = await refused(s.start());
-    expect(got).toEqual({ wire: "409:already_live", body: { code: "already_live", message: expect.any(String), sid: s.S, startedBy: "organiser" } });
+    expect(got).toEqual({ wire: "409:already_live", body: { code: "already_live", message: expect.any(String), sid: s.S, startedBy: "organiser" }, retryAfter: null });
+    expect(observe, "a LIVE session is never observed by a start, even its own").not.toHaveBeenCalled();
+    expect((await row(s.S)).state).toBe("live");
   });
 
   it("a start from a phone that does NOT hold S: already_live naming S while S is live AND while S is ending (another's stop never opens the slot to it)", async () => {
@@ -208,10 +258,14 @@ describe.skipIf(!HAS_DB)("Task 43 — the phone's held stop, then its own start 
     expect(live.body).toMatchObject({ code: "already_live", sid: s.S });
     // The organiser's Stop ends S; while it drains, this phone still meets already_live.
     await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = ${s.r.now()} where id = ${s.S}`;
-    s.draining();
+    // The fake reports the Machine GONE: observing it would complete S. Another's session must not be observed at all.
+    s.gone();
+    const observe = vi.spyOn(s.r.runner, "observe");
     const ending = await refused(s.start());
     expect(ending.body, "not S's owner: the guard is not widened").toMatchObject({ code: "already_live", sid: s.S });
-    expect((await row(s.S)).state, "and it never observed (or completed) another's session").toBe("ending");
+    expect(ending.retryAfter, "already_live carries no Retry-After").toBeNull();
+    expect(observe, "another's ending session is never observed by this start").not.toHaveBeenCalled();
+    expect((await row(s.S)).state, "and so never completed behind its owner's back").toBe("ending");
   });
 
   describe("RACE: the held stop and the start, through S's row lock", () => {

@@ -187,6 +187,13 @@ export const STALE_HEARTBEAT_SECONDS = 90;
 export const RUNNER_STOP_GRACE_SECONDS = 20;
 /** How long after the grace we wait to OBSERVE auto_destroy before forcing it. */
 export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
+/** Seazn-hosted Task 43 (stg session d908c90c, 2026-11-24: `ending` 09:42:40.656 → `completed` 09:42:56.009, 15.4 s, the Machine
+ *  observed `stopping` three times): how long a phone's OWN stopped session is expected to stay `ending` — the Machine's stop grace,
+ *  the drain it is given before Fly's SIGKILL. The phone start's 503 `unavailable` for that session carries `Retry-After` = this
+ *  minus the seconds since the session began ending (`ending_at`), floored at 1 and capped at OWN_ENDING_RETRY_AFTER_MAX_SECONDS. */
+export const OWN_ENDING_DRAIN_SECONDS = RUNNER_STOP_GRACE_SECONDS;
+/** The phone team's ceiling (2026-11-25): the phone re-asks ONCE when `Retry-After` ≤ 20 s, so the start never answers more. */
+export const OWN_ENDING_RETRY_AFTER_MAX_SECONDS = 20;
 /** Design §6.4: ONE retry — two attempts, ever. Invariant 3's bound derives from this. */
 export const RUNNER_MAX_ATTEMPTS = 2;
 /** Compositor ADR 0004 (owner, 2026-10-14) and ADR 0007 host-contract item 5: the host restarts a crashed compositor IN

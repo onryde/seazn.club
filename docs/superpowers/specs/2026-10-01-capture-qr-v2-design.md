@@ -566,8 +566,11 @@ The body is `{phone}`. The answers are T12–T15 and §6.7.2.
 - `409 {code: "no_destination", message}`
 - `402 {code: "no_credit", message}`
 - `403 {code: "not_entitled", message}`
-- `503 {code: "unavailable", message}` (storage exhausted, ingest unavailable, relay disabled). Capture reads it as "Couldn't
-  start the stream — try again".
+- `503 {code: "unavailable", message}` (storage exhausted, ingest unavailable, relay disabled, or your own session is still
+  ending — the relay is draining after this phone's stop; Task 43, 2026-11-24). Capture reads it as "Couldn't start the
+  stream — try again". For the still-ending cause only, the answer carries `Retry-After`: whole seconds of the drain left
+  (the stop grace, 20 s, minus the time since the session began ending), at least 1 and never above 20. A start after that
+  finds the session over and goes ahead.
 - `401 {code: "code_ended", message}`, `422`, `429` with `Retry-After`
 
 **Not idempotent by design.** A retry after a lost `200` meets `409 already_live` naming the same sid. The phone

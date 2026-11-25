@@ -260,7 +260,7 @@ const contracts: Contract[] = [
       },
       refusal: {
         twin: CaptureRefusal,
-        description: "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 already_live (with sid and startedBy), 409 replaced, 409 no_destination, 409 no_match (a court code with no streamed match in play), 402 no_credit, 403 not_entitled, 503 unavailable, 401 code_ended; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.4, §6.7.2).",
+        description: "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 already_live (with sid and startedBy), 409 replaced, 409 no_destination, 409 no_match (a court code with no streamed match in play), 402 no_credit, 403 not_entitled, 503 unavailable (with Retry-After when it is the phone's own session still ending, 1–20 s), 401 code_ended; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.4, §6.7.2).",
         props: REFUSAL,
       },
     },

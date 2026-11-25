@@ -902,11 +902,18 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     });
   });
 
-  // Seazn-hosted Task 43 (stg d908c90c): the court phone's held stop, then its own start. The fixture path, a composed session and
-  // the race are pinned in capture-start-own-stop.test.ts; here the COURT start (T37's per-match sessions) answers the same way.
-  // The rig's court sessions are passthrough on an API-backed channel, whose stop completes at once — so a session still draining
-  // (a composed one's relay, d908c90c's 15 s) is stood in by the row, moved to `ending` by hand: only the start's READ is judged.
+  // Seazn-hosted Task 43 (stg d908c90c): the court phone's held stop, then its own start. The fixture path, the race and the
+  // Retry-After clamp are pinned in capture-start-own-stop.test.ts; here the COURT start (T37's per-match sessions) answers the same
+  // way, on a COMPOSED court session (RELAY_IMAGE set: the score is the default, so the court's start is composed) whose stop leaves
+  // it `ending` while its relay drains — the d908c90c window — and whose completion comes from the start's own observation.
   describe("Task 43: the court phone's held stop, then its own start", () => {
+    const savedImage = process.env.RELAY_IMAGE;
+    beforeEach(() => { process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:capture-court-t43"; });
+    afterEach(() => { if (savedImage === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = savedImage; });
+
+    const runner = () => deps.drivers.runner as FakeRunner;
+    const machineOf = async (sid: string) =>
+      (await sql<{ machine_id: string | null; mode: string }[]>`select machine_id, mode from fixture_stream_sessions where id = ${sid}`)[0]!;
     const inPlay = async (phone: string) => {
       await streamed(A, AT_14);
       await setStatus(A, "in_play");
@@ -916,37 +923,38 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     const toEnding = (sid: string) =>
       sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'operator_stopped', ending_at = ${clock()} where id = ${sid}`;
 
-    it("the held stop ends S at once; the hold then restarts the court's match — 200, a NEW sid, never already_live naming S", async () => {
+    it("d908c90c on a court: the held stop leaves S ending while its relay drains; the start is 503 + Retry-After, never already_live; once the Machine is gone the start completes S and restarts the match (200, a new sid)", async () => {
       const phone = phoneId("t43-court");
       const S = await inPlay(phone);
+      const m = await machineOf(S);
+      expect(m, "PREMISE: a composed court session holding a Machine").toMatchObject({ mode: "composed", machine_id: expect.any(String) });
       now += 260_000;                                                // the outage: the phone is silent, then its held stop arrives
       expect(await beat(phone, { stopped: S })).toMatchObject({ state: "over", sid: S });
-      expect((await sessionRow(S)).state, "the stop is the authority: S is no longer live").toMatch(/^(ending|completed)$/);
+      expect((await sessionRow(S)).state, "the stop is the authority: S is ending at once").toBe("ending");
+
+      runner().setObserved(m.machine_id!, "stopping");               // the relay still draining
       now += 3_000;
-      const again = await operatorStart(phone);
+      const drained = await postStart(qr.code, qr.tok, { phone }, deps, clock()).catch((e: unknown) => e);
+      expect(drained, "this phone's own ending session: try again, not already_live").toBeInstanceOf(CaptureRefusalError);
+      expect(drained).toMatchObject({ status: 503, code: "unavailable", headers: { "Retry-After": "17" } });   // 20 s drain - 3 s
+      expect((await sessionRow(S)).state).toBe("ending");
+
+      runner().setObserved(m.machine_id!, "destroyed", { exitCode: 0, oomKilled: false, requestedStop: true });
+      now += 6_000;
+      const again = await operatorStart(phone);                      // observed through the real reconcile: S completes, then the hold
       expect(again, "a new session").not.toBe(S);
+      expect(await sessionRow(S), "S completed by the start's own observation, its reason kept").toMatchObject({ state: "completed", end_reason: "operator_stopped" });
       expect(await sessionRow(again)).toMatchObject({ fixture_id: A, start_cause: "operator", court_link_id: linkId });
     });
 
-    it("S still ending (its relay draining) and held by this phone: 503 unavailable, never already_live; once it is over, the start goes ahead", async () => {
-      const phone = phoneId("t43-drain");
-      const S = await inPlay(phone);
-      // This phone's stop, standing for a composed S's ~15 s drain (a passthrough S's own stop completes at once — test above).
-      await toEnding(S);
-      expect(await refusal(operatorStart(phone))).toBe("503:unavailable");
-      expect((await sessionRow(S)).state, "nothing completed it behind the phone's back").toBe("ending");
-      await sql`update fixture_stream_sessions set state = 'completed', ended_at = ${clock()} where id = ${S}`;
-      const next = await operatorStart(phone);
-      expect(next).not.toBe(S);
-    });
-
-    it("S ending but held by NO pairing (not this phone's): already_live naming S — the guard is not widened on a court either", async () => {
+    it("S ending but held by NO pairing (not this phone's): already_live naming S, no Retry-After — the guard is not widened on a court either", async () => {
       const phone = phoneId("t43-other");
       const S = await inPlay(phone);
       await sql`update fixture_stream_sessions set pairing_id = null where id = ${S}`;
       await toEnding(S);
       const got = await postStart(qr.code, qr.tok, { phone }, deps, clock()).catch((e: unknown) => e);
       expect(got).toMatchObject({ status: 409, code: "already_live", extras: { sid: S } });
+      expect((got as CaptureRefusalError).headers).toBeUndefined();
     });
   });
 

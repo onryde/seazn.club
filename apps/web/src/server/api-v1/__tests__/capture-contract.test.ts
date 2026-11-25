@@ -59,7 +59,7 @@ const SHA256: Record<string, string> = {
   // Task 46 (owner 2026-11-24): + the answer's optional `delivery`, additive, on go-live and live only (review m1); its prose says
   // any session with a stored fact (review ruling, widened from Seazn-hosted only), unrelated to the request's `delivery` (m3). Re-pinned on the rebase.
   "capture-beat.v1.json": "2696d9d899c3870b86b50d1e90c6e760c26cb61e902ce092a79754c25400afdb",
-  "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
+  "capture-start.v1.json": "daf6383be934c600c6dbd439e8596f9af01f3d655578fa8b0b771d695672ad64",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.

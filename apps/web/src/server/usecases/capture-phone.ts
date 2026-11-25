@@ -30,7 +30,7 @@ import type { z } from "zod";
 import { log } from "@/server/logger";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import {
-  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
+  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OWN_ENDING_DRAIN_SECONDS, OWN_ENDING_RETRY_AFTER_MAX_SECONDS,
   PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
   relayDriverMode, srtEnabled, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
@@ -335,14 +335,18 @@ export type BeatAnswer = z.infer<typeof CaptureBeatAnswer>;
 export type Exec = Tx | typeof sql;
 
 /** The fixture's open session (one per fixture, V421) as the beat reads it. */
-export type OpenRow = { id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null };
+export type OpenRow = {
+  id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null;
+  /** When ending BEGAN (null unless `ending`): Task 43's `Retry-After` on the phone start is timed from it. */
+  ending_at: Date | null;
+};
 export type PairingRow = { id: string; code_id: string; phone: string; last_beat_at: Date; answered_poll_seconds: number };
 /** The session's phone-live tracker as stored (V476), read under the row lock with the state it is judged against. */
 type TrackerRow = { state: SessionState; phone_live_edge: number | null; phone_live: boolean | null; phone_live_beat_at: Date | null };
 
 export async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | null> {
   const [row] = await exec<OpenRow[]>`
-    select id, state, first_ingest_at, start_cause, pairing_id from fixture_stream_sessions
+    select id, state, first_ingest_at, start_cause, pairing_id, ending_at from fixture_stream_sessions
      where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}
      order by created_at desc, id desc limit 1`;
   return row ?? null;
@@ -839,7 +843,16 @@ export const alreadyLive = (open: { id: string; start_cause: CaptureStartedBy })
 const noDestination = (why: string): CaptureRefusalError => new CaptureRefusalError(409, "no_destination", why);
 
 /** The session a phone start meets, as the start judges it (Task 43). */
-export type MetSession = { id: string; state: SessionState; start_cause: CaptureStartedBy; pairing_id: string | null };
+export type MetSession = { id: string; state: SessionState; start_cause: CaptureStartedBy; pairing_id: string | null; ending_at: Date | null };
+
+/** Task 43 (phone team, 2026-11-25): the `Retry-After` seconds on the phone start's 503 for its own ending session — the drain
+ *  LEFT, OWN_ENDING_DRAIN_SECONDS minus the seconds since `endingAt`, rounded up, floored at 1 and never above
+ *  OWN_ENDING_RETRY_AFTER_MAX_SECONDS (the phone re-asks once at most that far ahead). An ending session with no `ending_at`
+ *  (a write lost, F22) cannot be estimated: the whole drain, capped. */
+export function ownEndingRetryAfter(endingAt: Date | null, now: Date): number {
+  const left = endingAt === null ? OWN_ENDING_DRAIN_SECONDS : OWN_ENDING_DRAIN_SECONDS - (now.getTime() - new Date(endingAt).getTime()) / 1000;
+  return Math.min(OWN_ENDING_RETRY_AFTER_MAX_SECONDS, Math.max(1, Math.ceil(left)));
+}
 
 /**
  * Task 43 (stg session d908c90c, 2026-11-24): what a phone start answers about a session it meets. A session no longer active is
@@ -849,10 +862,11 @@ export type MetSession = { id: string; state: SessionState; start_cause: Capture
  * "try again". Anything else — live, starting, or ending but held by another pairing or none — is `already_live` naming it,
  * exactly as before (T13: the lost-200 retry, and no other phone's start ever opens a slot this one does not hold).
  */
-export function startOverSession(met: MetSession | null, callerPairingId: string): "proceed" | CaptureRefusalError {
+export function startOverSession(met: MetSession | null, callerPairingId: string, now: Date): "proceed" | CaptureRefusalError {
   if (met === null || !isActive(met.state)) return "proceed";
   if (met.state === "ending" && met.pairing_id === callerPairingId) {
-    return new CaptureRefusalError(503, "unavailable", "the session this phone stopped is still ending; try again");
+    return new CaptureRefusalError(503, "unavailable", "the session this phone stopped is still ending; try again", undefined,
+      { "Retry-After": String(ownEndingRetryAfter(met.ending_at, now)) });
   }
   return alreadyLive(met);
 }
@@ -875,8 +889,8 @@ export async function judgeOpenSession(open: OpenRow, callerPairingId: string, o
     }
   }
   const met = (await sql.begin((tx) => tx<MetSession[]>`
-    select id, state, start_cause, pairing_id from fixture_stream_sessions where id = ${open.id} for update`)) as MetSession[];
-  const verdict = startOverSession(met[0] ?? null, callerPairingId);
+    select id, state, start_cause, pairing_id, ending_at from fixture_stream_sessions where id = ${open.id} for update`)) as MetSession[];
+  const verdict = startOverSession(met[0] ?? null, callerPairingId, deps.now());
   if (verdict !== "proceed") throw verdict;
 }
 
@@ -938,7 +952,9 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
  *  - T12: a phone that is not §5.5's C → 409 replaced (first, so it is never told a sid). C is `holderOf`, the SAME
  *    holder a beat decides by: while a session is open, the phone holding it, wherever its code (C-2 — after a
  *    reissue the session's phone is still current on the new code); else the current pairing on this code;
- *  - T13: a session already running → 409 already_live {sid, startedBy} (F-A5: before the destination);
+ *  - T13: a session already running → 409 already_live {sid, startedBy} (F-A5: before the destination) — except this phone's OWN
+ *    session still ending (its relay draining, Task 43): observed once, so a drained one completes and the start goes ahead,
+ *    else 503 unavailable with `Retry-After` (`judgeOpenSession`);
  *  - the destination (§6.7.3): `fixtureStreamTarget`'s — the saved choice, or with none saved the oldest; a choice cleared
  *    or archived, or no live destination at all, is none → 409 no_destination (the panel shows the same, B8 review I-1);
  *  - startBroadcast; its refusals through §6.7.2's table (`phoneStartRefusal`) — a session that opened between this
@@ -970,9 +986,9 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
     if (mapped === null) throw err;
     if (mapped instanceof CaptureRefusalError) throw mapped;
     const [named] = mapped.alreadyLive === null ? [] : await sql<MetSession[]>`
-      select id, state, start_cause, pairing_id from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
+      select id, state, start_cause, pairing_id, ending_at from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
     // Task 43: judged as the early read is — this phone's own ending session is its "try again", never already_live.
-    const verdict = startOverSession(named ?? await openSessionOf(sql, resolved.fixtureId), current.id);
+    const verdict = startOverSession(named ?? await openSessionOf(sql, resolved.fixtureId), current.id, deps.now());
     if (verdict !== "proceed") throw verdict;
     // The running session ended between admission and this read: nothing to name — the phone's "try again".
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");

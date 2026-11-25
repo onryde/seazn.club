@@ -23,6 +23,8 @@ export class CaptureRefusalError extends Error {
     message: string,
     /** Only `already_live` carries extras on the wire (`{sid, startedBy}`, contract R5). */
     readonly extras?: Record<string, unknown>,
+    /** Response headers, never body: Task 43's `Retry-After` on the phone start's 503 for its own ending session. */
+    readonly headers?: Record<string, string>,
   ) {
     super(message);
     this.name = "CaptureRefusalError";
@@ -50,7 +52,7 @@ export function captureRefusal(e: CaptureRefusalError): Response {
   if (e.extras !== undefined && e.code !== "already_live") {
     throw new RangeError(`captureRefusal: only already_live carries extras on the wire, not ${e.code}`);
   }
-  return captureJson(e.status, { code: e.code, message: e.message, ...(e.code === "already_live" ? e.extras : {}) });
+  return captureJson(e.status, { code: e.code, message: e.message, ...(e.code === "already_live" ? e.extras : {}) }, e.headers);
 }
 
 /**

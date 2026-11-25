@@ -84,7 +84,7 @@ export function courtClaimRefusal(appVersion: string): CaptureRefusalError | nul
 /** The court's current session: its link's newest ACTIVE session, whichever match (`courtFocus`'s `current`). */
 async function courtOpenSession(exec: Exec, linkId: string): Promise<OpenRow | null> {
   const [row] = await exec<OpenRow[]>`
-    select id, state, first_ingest_at, start_cause, pairing_id from fixture_stream_sessions
+    select id, state, first_ingest_at, start_cause, pairing_id, ending_at from fixture_stream_sessions
      where court_link_id = ${linkId} and state in ${sql([...ACTIVE_STATES])}
      order by created_at desc, id desc limit 1`;
   return row ?? null;
@@ -275,7 +275,8 @@ export async function postCourtBeat(court: ResolvedCourtCode, body: Beat, deps: 
 /**
  * `POST /capture/codes/{code}/start` on a court code: the current phone starts the court's in-play streamed match, never a
  * match not yet started (§5.4). In order: the holder check (409 `replaced`); a court session already open → 409
- * `already_live` naming it; the link's day not open now → 409 `no_match`; no match to start → 409 `no_match`; else `startBroadcast` on the LINK's target with the court
+ * `already_live` naming it — unless it is this phone's OWN session still ending (Task 43, `judgeOpenSession`: a drained one
+ * completes and the start goes ahead, else 503 `unavailable` with `Retry-After`); the link's day not open now → 409 `no_match`; no match to start → 409 `no_match`; else `startBroadcast` on the LINK's target with the court
  * link guard, then every other session of the link ends (`endOtherCourtSessions`). Refusals map as a fixture code's start.
  */
 export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStartBody, deps: SessionDeps): Promise<CaptureStartOk> {
@@ -310,8 +311,8 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
     if (mapped === null) throw err;
     if (mapped instanceof CaptureRefusalError) throw mapped;
     const [named] = mapped.alreadyLive === null ? [] : await sql<MetSession[]>`
-      select id, state, start_cause, pairing_id from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
-    const verdict = startOverSession(named ?? await courtOpenSession(sql, court.link.id), current.id);
+      select id, state, start_cause, pairing_id, ending_at from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
+    const verdict = startOverSession(named ?? await courtOpenSession(sql, court.link.id), current.id, deps.now());
     if (verdict !== "proceed") throw verdict;
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
   }
