@@ -14,7 +14,7 @@
 
 - Links: `<origin>/app/stream#<unpadded base64url of UTF-8 captureQrV2Text>`, `/app/score#dl_…`, `/app/day#md_…`; origin is `siteOrigin()`; the credential appears only after `#`.
 - Staging assetlinks: `com.seazn.capture.dev`, `FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C`. Public debug keystore: **never on production**.
-- Production assetlinks: `com.seazn.capture` + Play app-signing SHA-256 (owed by owner); `[]` until then. Other origins: `[]`.
+- Production assetlinks: `com.seazn.capture` + the three Play app-signing SHA-256s of spec §5.2 (supplied 2026-11-25). Other origins: `[]`.
 - Nothing else is ever added under `/app/*` (the phone filter owns it).
 - Buttons: Android user agent **and** below `md`; plain `<a href>`, no `next/link`, no `target="_blank"` on Open in app, no fetch-then-redirect, `rel="noreferrer"`; wrapper has `ph-no-capture`; no new server call.
 - Strings in en/es/fr/nl; regenerate i18n keys.
@@ -79,7 +79,7 @@ it("route answers 200 json with assetLinksFor(siteOrigin())", ...);
 `DEBUG_SHA` is the fingerprint in Global Constraints, typed in the test.
 
 - [ ] **Step 2:** `cd apps/web && npx vitest run src/lib/__tests__/open-in-app.test.ts src/lib/__tests__/assetlinks.test.ts` → FAIL.
-- [ ] **Step 3:** Implement. Encode with `TextEncoder` + `btoa` (runs in the browser; no `Buffer`). Production entry is built only when `PLAY_SIGNING_SHA256` (a constant in `assetlinks.ts`, `null` for now) is set. Route is dynamic.
+- [ ] **Step 3:** Implement. Encode with `TextEncoder` + `btoa` (runs in the browser; no `Buffer`). Production entry is built only when `PLAY_SIGNING_SHA256S` (a readonly list in `assetlinks.ts`) is not empty. Route is dynamic.
 - [ ] **Step 4:** Tests PASS. **Step 5:** Commit `feat(open-in-app): link builder and assetlinks.json`.
 
 ### Task 2: Fallback pages, then the staging spike (GATE)
@@ -228,6 +228,6 @@ E2E (Android UA, 390): on the fixture stream panel and the court sheet, decode t
 
 ### Task 6: Production release (owner-gated, in this order)
 
-- [ ] Owner supplies the Play app-signing SHA-256. Set `PLAY_SIGNING_SHA256`; add a test that production lists exactly `com.seazn.capture` with it, and keeps both negatives. Deploy; verify with `curl`.
+- [ ] Owner supplied the Play app-signing SHA-256s (2026-11-25): `PLAY_SIGNING_SHA256S` is set, and a test holds production to exactly `com.seazn.capture` with the three, keeping both negatives. Still owed: deploy; verify with `curl`.
 - [ ] Phone release with the intent filter is **on Play** (confirmed by the owner).
 - [ ] Add `NEXT_PUBLIC_OPEN_IN_APP = "1"` to `fly.toml`. Deploy. Real tap on production.
