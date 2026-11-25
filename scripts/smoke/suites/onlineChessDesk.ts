@@ -162,8 +162,8 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   const entrants = (from: number, n: number) =>
     Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: `Cap ${from + i} ${tag}` }));
   // The premise: the ladder the probe picks from is the server's (the leaf), and 256 and 16 are its ends.
-  const smallest = ONLINE_SIZES[0]!;
-  const nextUp = ONLINE_SIZES[1]!;
+  const smallest = ONLINE_SIZES[0];
+  const nextUp = ONLINE_SIZES[1];
   check(`online entrant cap: the size ladder runs ${smallest} .. ${CAP} (got ${ONLINE_SIZES.join(", ")})`, smallest === 16 && nextUp === 32 && ONLINE_SIZES[ONLINE_SIZES.length - 1] === CAP);
   const made = { online: await divisionIn(`Cap online ${tag}`, true, CAP), otb: await divisionIn(`Cap otb ${tag}`, false) };
   const online = v1data<{ id: string }>(made.online);
@@ -196,7 +196,7 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   const atSize = await v1(owner, `/api/v1/divisions/${sized.id}/entrants`, "POST", entrants(1, smallest));
   check(`online entrant cap: ${smallest} entrants fit a size-${smallest} division, 201 (got ${atSize.status} ${atSize.json.error?.code ?? ""})`, atSize.status === 201);
   const pastSize = await v1(owner, `/api/v1/divisions/${sized.id}/entrants`, "POST", entrants(smallest + 1, 1));
-  const refusal = pastSize.json.error as { code?: string; size?: unknown; nextSize?: unknown } | undefined;
+  const refusal: { code?: string; size?: unknown; nextSize?: unknown } | undefined = pastSize.json.error;
   check(
     `online entrant cap: the ${smallest + 1}th is a 422 ${ONLINE_PACKAGE_CODES.sizeFull} with size ${smallest} and nextSize ${nextUp} (got ${pastSize.status} ${refusal?.code ?? ""} size ${String(refusal?.size)} nextSize ${String(refusal?.nextSize)})`,
     pastSize.status === 422 && refusal?.code === ONLINE_PACKAGE_CODES.sizeFull && refusal.size === smallest && refusal.nextSize === nextUp,
