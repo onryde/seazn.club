@@ -10,10 +10,11 @@ export const DIVISIONS_DIR = "apps/web/src/server/usecases/divisions";
  *  (a module deleted, moved or misnamed), not a refactor. Splitting further only raises the count; removing a module lowers the floor on purpose. */
 export const MIN_MODULES = 7;
 
-/** The module files of the divisions folder, `index.ts` included, sorted. THROWS below `MIN_MODULES`. */
+/** The module files of the divisions folder, `index.ts` included, sorted. THROWS below `MIN_MODULES`. A `*.test.ts` beside them
+ *  is not a module: it would count toward the floor and put test text into the product source the door tests read. */
 export function divisionsModules(repo: string): string[] {
   const dir = resolve(repo, DIVISIONS_DIR);
-  const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
+  const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).sort();
   if (files.length < MIN_MODULES) throw new Error(`divisions-source: ${dir} holds ${files.length} modules, fewer than the ${MIN_MODULES} the scan needs`);
   return files;
 }

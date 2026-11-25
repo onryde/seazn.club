@@ -21,6 +21,27 @@ describe("divisions-source: the folder reader's floor", () => {
     }
   });
 
+  it("a test file beside the modules is not a module: it neither clears the floor nor joins the scanned source", () => {
+    const repo = mkdtempSync(join(tmpdir(), "divisions-source-"));
+    try {
+      const dir = join(repo, DIVISIONS_DIR);
+      mkdirSync(dir, { recursive: true });
+      // One module short of the floor, plus a test file: still a lost scan, so it THROWS.
+      const modules = Array.from({ length: MIN_MODULES - 1 }, (_, i) => `m${i}.ts`);
+      for (const m of modules) writeFileSync(join(dir, m), `export const ${m.slice(0, -3)} = 1;\n`);
+      writeFileSync(join(dir, "patch.test.ts"), "// TEST-ONLY TEXT\n");
+      expect(() => divisionsModules(repo)).toThrow(new RegExp(`holds ${MIN_MODULES - 1} modules, fewer than the ${MIN_MODULES}`));
+      // At the floor the test file is still left out: of the module list and of the source the door tests read.
+      writeFileSync(join(dir, "index.ts"), "export {};\n");
+      const files = divisionsModules(repo);
+      expect(files, "the modules the scan read").toEqual([...modules, "index.ts"].sort());
+      expect(files.length, "anti-vacuity: the floor's own count was read").toBe(MIN_MODULES);
+      expect(divisionsSource(repo)).not.toContain("TEST-ONLY TEXT");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("reads the real folder: at least MIN_MODULES modules, index.ts among them, all of it in the source", () => {
     const files = divisionsModules(REPO);
     expect(files.length).toBeGreaterThanOrEqual(MIN_MODULES);
