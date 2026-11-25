@@ -114,6 +114,34 @@ Run also with no fragment and `#%%%` on `/app/stream`: 200, same title, no conso
 - [ ] **Step 5:** Commit `feat(open-in-app): bare fallback pages under /app`.
 - [ ] **Step 6: SPIKE GATE (needs the owner and the phone session).** With the owner's go-ahead, get Tasks 1–2 onto staging. Test link: send the owner a one-line HTML anchor to paste on any signed-in staging page via devtools, `<a href="https://stg.seazn.club/app/score#dl_` + 43×`a` + `">test</a>` (this replaces the spec's committed test link, so nothing temporary ships). Phone session installs a dev build; a real tap in Chrome and Samsung Internet must open the app. Also confirm `curl -sI https://stg.seazn.club/.well-known/assetlinks.json` is 200 with no redirect, and the served `/app/score` HTML has no injected script. **If the tap stays in the browser: stop, report; the link host has to change and the spec goes back to both sides.**
 
+## Approved look (owner, 2026-11-25) — binds Task 2b, Task 4 and Task 5
+
+Reference: `~/seazn-artifacts/open-in-app-buttons/th-*.png` (shot at 2x). House theme, compact, with the logo.
+
+- **Button block** (inside the existing light console panel): night (`--mk-night`) block, radius 10, padding 6;
+  inside it a `1.5px dashed var(--mk-lime)` box, radius 7, padding 8, gap 6. Top: the Seazn logo
+  (`public/brand/seazn-logo-night-tight.png`, 18px high, centred, alt "Seazn Club"). Then **Open in app**: lime
+  fill, night text, `mk-display` bold 15px uppercase, tracking .06em, at least 44px tall. Scoring adds **Score in
+  browser** below it: 1px `#4a378c` border, cream 13px semibold, at least 44px. Stream hints sit inside the box,
+  11.5px, `#c9bfee`; the missing-destination and missing-credit hints in `#ffc66b`.
+- **Order:** the block comes **above** the QR, followed by a new line "or scan with another phone"
+  (`openApp.orScan`, four locales), shown only when the block is shown. Without the block (not Android, `md` and up,
+  flag off) the panel is exactly as today: no line, no reorder.
+- **QR:** unchanged `SeaznQrImage` (it already carries the logo).
+
+### Task 2b: Restyle the fallback pages (not gated)
+
+**Files:** Modify: `apps/web/src/lib/app-fallback-page.ts`; its unit test and `e2e/open-in-app.spec.ts`.
+
+Night background; logo (30px high) inlined as a `data:` URI so the page still requests nothing but the document;
+one `1.5px dashed` lime box, radius 12, padding 20/16, holding the heading (cream, uppercase, 25px/1.1,
+condensed), a lime 44px Play button (night text, condensed bold 16px uppercase) and the retry line (13px
+`#c9bfee`); "Score in browser instead" below, cream 13.5px underlined. The condensed face is the marketing
+display font **inlined as a `data:` `@font-face`** (latin subset, covering en/es/fr/nl accents) so no font request
+is made; fall back to `"Arial Narrow", sans-serif`. Check the served CSP allows `font-src data:` (it does today).
+Copy, script, headers and behaviour do not change. Tests: existing ones stay green; add that the HTML contains the
+logo `data:` URI and no `url(` pointing anywhere but `data:`. Screenshots at 320 for all three kinds and `fr`.
+
 ### Task 3: Telemetry guard
 
 **Files:** Modify: `apps/web/src/lib/scrub-score-url.ts`; Test: `apps/web/src/lib/__tests__/scrub-app-link.test.ts`
