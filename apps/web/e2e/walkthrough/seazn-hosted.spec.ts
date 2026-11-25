@@ -695,12 +695,17 @@ test("Task 26: the organiser's panel lists both parts with Download and Delete; 
 // Task 48 (review I1): the Download BUTTON in a browser — what it saves, and what it never does
 // ===========================================================================
 // The button asks the route `?check=1` first (204, or the refusal) and tells the browser to save only on the 204. Two halves, one page:
-//  - READY: this server's replay host holds no copy of a seeded part (Task 26), so the route is answered here by the browser's own
-//    stand-in — the probe 204, the file an `attachment` mp4 — and the assert is the BUTTON's: a Playwright `download` event with an
-//    mp4 filename, after exactly one probe (no token in its address) and one file request. The route's own answers are the route
-//    test's (real adapter, zero CDN calls on a check).
+//  - READY: this server's replay host holds no copy of a seeded part (Task 26), so the PROBE is answered here by the browser's own
+//    stand-in (a fetch, which `page.route` does see): 204. The assert is the BUTTON's: a Playwright `download` event, after exactly one
+//    probe (no token in its address), whose address is the part's download route and nothing else. The SAVE itself is `<a download>`
+//    (the product's `saveFromBrowser`), and Chromium makes that request in the browser process, past `page.route`, past the context's
+//    routes and past every `request` event (CI run 45537372073: the stand-in file was never served, the real route's 409 JSON was
+//    saved as `download.json`; reproduced with a bare page, routed 0 times, no request event). So neither the saved file's NAME nor a
+//    count of file requests can be read in a browser here; the name (`attachment; filename="seazn-<home>-v-<away>-part-<n>.mp4"`)
+//    is the route test's, against the real route and the replay fake (download/__tests__/route.test.ts), and "no file asked for" is
+//    carried by "no download event" below, which a save cannot dodge.
 //  - NOT READY: the REAL route (no stand-in): the host holds no copy, so it answers 409. The localised not-ready line shows, on that
-//    part, and NO download event follows and no file request is made — the defect was a `download.json` on the organiser's disk.
+//    part, and NO download event follows — the defect was a `download.json` on the organiser's disk.
 // Not gated on LIVE (as Tasks 25, 26, 31b).
 test("Task 48: Download saves an mp4 only once the route says it would start; a 409 shows the not-ready line and saves nothing", async ({ page }) => {
   test.setTimeout(REPLAY_SEED_MS + 3 * NAV_MS + 3 * CALL_MS);
@@ -720,22 +725,18 @@ test("Task 48: Download saves an mp4 only once the route says it would start; a 
 
     // NOT READY first (the real route): the empty case of "a save happened" is that none did.
     const saved: string[] = [];
-    const files: string[] = [];
     page.on("download", (d) => { saved.push(d.suggestedFilename()); });
-    page.on("request", (r) => { if (new URL(r.url()).pathname === route && !new URL(r.url()).search) files.push(r.method()); });
     await button.click();
     await expect(notReady, "the 409 reads in the part's own row, in the dictionary's words").toBeVisible({ timeout: CALL_MS });
     await expect(notReady).toHaveText(ui("stream.replay.downloadNotReady"));
     await expect(button, "idle again: the probe's busy state is over").not.toHaveAttribute("aria-busy", "true");
     await expect(button).toBeVisible();
     await page.waitForTimeout(1_000);
-    expect(saved, "no download event after a 409").toEqual([]);
-    expect(files, "the file itself was never asked for").toEqual([]);
+    expect(saved, "no download event after a 409: nothing was saved, and so the file was never asked for").toEqual([]);
 
-    // READY: the browser's stand-in answers the route. One probe (no token, no expiry in its address), then one file.
+    // READY: the browser's stand-in answers the PROBE (the save is past its reach, see above). One probe (no token, no expiry in its
+    // address), then the save: a download event whose address is the route's own, and no query.
     const probes: string[] = [];
-    const MP4 = Buffer.from("not a real mp4, a browser-side stand-in");
-    files.length = 0;   // (the request listener above counts the file requests, stand-in or real)
     await page.route(`**${route}**`, async (r) => {
       const u = new URL(r.request().url());
       if (u.searchParams.get("check") === "1") {
@@ -743,15 +744,13 @@ test("Task 48: Download saves an mp4 only once the route says it would start; a 
         await r.fulfill({ status: 204, headers: { "cache-control": "private, no-store" } });
         return;
       }
-      await r.fulfill({
-        status: 200, body: MP4,
-        headers: { "content-type": "video/mp4", "content-disposition": 'attachment; filename="seazn-seazn-home-v-seazn-away-part-1.mp4"', "cache-control": "private, no-store" },
-      });
+      await r.continue();
     });
     const [download] = await Promise.all([page.waitForEvent("download", { timeout: CALL_MS }), button.click()]);
-    expect(download.suggestedFilename(), "an mp4, named for the match and the part").toMatch(/^seazn-.+-part-1\.mp4$/);
-    expect(probes, "exactly one probe, and its address is `?check=1` and nothing else").toEqual(["?check=1"]);
-    expect(files, "exactly one file request, after the probe").toEqual(["GET"]);
+    const saveUrl = new URL(download.url());
+    expect(saveUrl.pathname, "the save is the part's own download route").toBe(route);
+    expect(saveUrl.search, "and carries no query: no token, no expiry, not the probe").toBe("");
+    expect(probes, "exactly one probe, and its address is `?check=1` and nothing else, before the save").toEqual(["?check=1"]);
     await expect(notReady, "a part that now saves clears the old line").toHaveCount(0);
 
     // The failed line: a probe that is neither 204 nor 409 reads as a plain failure, saves nothing, and is its own words.
