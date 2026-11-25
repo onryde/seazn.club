@@ -1050,6 +1050,55 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15
     expect(await divisionPolicy(without)).toBeNull();
   });
 
+  it("AT the target, an answer the setting does not say is written back: no money moves, applied false; asked again it writes nothing (fix round 3)", async () => {
+    // Division settings may turn a paid camera off (free, P19). The paid size at the answer the PACKAGE holds owes 0 - the row is at the target -
+    // but it is still the organiser's answer: the door writes it to the setting, on the locks it already holds. The mirror (a setting on over a
+    // package paid without the camera) is not reachable through the settings door - it refuses an unpaid camera (§7.6) - so it is staged by SQL:
+    // the door writes either direction the same way.
+    let checked = 0;
+    for (const answer of [true, false]) {
+      const r = await rig({ size: 32, pack: 10, monthly: 0 });
+      await confirm(r, 32, { cameras: answer });
+      const settingSays: Policy = answer ? "off" : "required";
+      if (answer) await patchDivision(r.auth, r.divisionId, { camera_policy: settingSays });
+      else await sql`update divisions set camera_policy = ${settingSays} where id = ${r.divisionId}`;
+      const label = `paid camera ${answer}, setting ${settingSays}`;
+      expect([(await packageRow(r.packageId)).cameras_paid, await divisionPolicy(r)], `${label}: premise`).toEqual([answer, settingSays]);
+      const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId), audits: (await cameraAudits(r)).length };
+      const { shown, result } = await confirm(r, 32, { cameras: answer });
+      expect([shown.owed, shown.refusal], `${label}: the quote owes nothing`).toEqual([0, null]);
+      expect(result.applied, `${label}: no money moved`).toBe(false);
+      const to: Policy = answer ? "required" : "off";
+      expect(result.cameraPolicy, label).toEqual({ from: settingSays, to });
+      expect(await divisionPolicy(r), label).toBe(to);
+      expect((await cameraAudits(r)).length, `${label}: one audit row`).toBe(before.audits + 1);
+      expect(await orgLedgerCount(r.orgId), `${label}: no ledger row`).toBe(before.ledger);
+      expect(await packageRow(r.packageId), `${label}: the package as it was`).toEqual(before.row);
+      // The same confirm again (a second tab): the setting already says it - nothing written, no audit.
+      const again = await confirm(r, 32, { cameras: answer });
+      expect([again.result.applied, again.result.cameraPolicy], `${label}: again`).toEqual([false, null]);
+      expect((await cameraAudits(r)).length, `${label}: again, no audit`).toBe(before.audits + 1);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("AT the target on a FROZEN package the answer is not written - the camera is fixed from round 1, like the size (fix round 3)", async () => {
+    const r = await rig({ size: 32, pack: 10, monthly: 0 });
+    await confirm(r, 32, { cameras: true });
+    await patchDivision(r.auth, r.divisionId, { camera_policy: "off" });
+    await sql`update division_online_packages set frozen_at = now() where id = ${r.packageId}`;
+    const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId), audits: (await cameraAudits(r)).length };
+    const shown = await quote(r, 32, true);
+    expect([shown.refusal, shown.owed], "premise: the frozen quote at the target").toEqual(["frozen", 0]);
+    const result = await payOnlinePackage(r.auth, r.divisionId, { size: 32, cameras: true, expectedOwed: shown.owed });
+    expect([result.applied, result.cameraPolicy]).toEqual([false, null]);
+    expect(await divisionPolicy(r), "the setting is untouched").toBe("off");
+    expect((await cameraAudits(r)).length).toBe(before.audits);
+    expect(await orgLedgerCount(r.orgId)).toBe(before.ledger);
+    expect(await packageRow(r.packageId)).toEqual(before.row);
+  });
+
   it("a size AND a camera change in one receipt are ONE payment: one ledger row, the net of both - up with Yes, down with No, and a net of nothing", async () => {
     let checked = 0;
     {

@@ -372,13 +372,20 @@ describe("after a payment that wrote the camera setting, the page says where it 
     expect(noteOf(h), "the setting already said it: nothing to say").toBeUndefined();
   });
 
-  it("nothing is said when the door did not apply the payment, and a lowered capacity is said beside a written setting", async () => {
+  it("a setting written AT the target (no money moved: applied false) is said too; nothing written says nothing; a lowered capacity is said beside a written setting", async () => {
+    // Fix round 3: the paid size at the paid answer, over a setting that says the other, moves no credits (`applied: false`) but the door writes
+    // the answer back to the setting - the organiser is told where it now stands, exactly as after a payment.
     pay.mockResolvedValueOnce({ applied: false, capacityLoweredTo: null, cameraPolicySetTo: "required" });
     const h = mount({ stored: PAID });
     (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
     await receiptProps(h).onConfirm({ size: 32, expectedOwed: 0, cameras: true });
     await flush();
-    expect(noteOf(h), "applied: false").toBeUndefined();
+    expect(String(propsOf(noteOf(h)!).children), "applied: false, the setting written").toBe(SET("required"));
+    pay.mockResolvedValueOnce({ applied: false, capacityLoweredTo: null, cameraPolicySetTo: null });
+    (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
+    await receiptProps(h).onConfirm({ size: 32, expectedOwed: 0, cameras: true });
+    await flush();
+    expect(noteOf(h), "applied: false, nothing written (a second tab)").toBeUndefined();
     pay.mockResolvedValueOnce({ applied: true, capacityLoweredTo: 16, cameraPolicySetTo: "off" });
     (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
     await receiptProps(h).onConfirm({ size: 16, expectedOwed: -1, cameras: false, expectedForfeited: 0 });

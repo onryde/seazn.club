@@ -79,7 +79,7 @@ Until a round of the division opens, you can change the size from the amber line
 - Choosing **Yes** for the **Fair-play camera** on a package paid without it charges the difference. Choosing **No** on a package paid with it returns the difference, the same way as moving down, and the receipt shows what is **Not returned**.
 - A change of size and of camera in the same receipt is one payment of the difference between the two.
 - Turning the camera off in the division's settings instead returns nothing, and turning it back on there costs nothing more.
-- The receipt always opens at the division's camera setting. If you turned the camera off in the division's settings after paying for it, the receipt opens at **No**, and paying it returns the camera's difference. To keep the camera instead, turn it back on in the division's settings.
+- The receipt always opens at the division's camera setting. If you turned the camera off in the division's settings after paying for it, the receipt opens at **No**, and paying it returns the camera's difference. To keep the camera instead, choose **Yes** and press **Turn camera on**: nothing is charged, and the setting goes back to **Required**.
 
 Once any round of the division has opened, the size and the camera are fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after round 1 stays free.
 

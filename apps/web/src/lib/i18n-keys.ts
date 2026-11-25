@@ -4955,6 +4955,7 @@ export type DictionaryKey =
   | "onlineChess.receipt.confirm.camerasOff.none"
   | "onlineChess.receipt.confirm.camerasOff.one"
   | "onlineChess.receipt.confirm.camerasOff.other"
+  | "onlineChess.receipt.confirm.camerasOn"
   | "onlineChess.receipt.confirm.change"
   | "onlineChess.receipt.confirm.checking"
   | "onlineChess.receipt.confirm.choose"

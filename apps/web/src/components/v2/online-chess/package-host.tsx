@@ -115,10 +115,11 @@ export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
     async (body: PayBody): Promise<void> => {
       const result = await payPackage(divisionId, body);
       // Said AFTER the payment (the receipt has closed by now), on the page: a capacity the size lowered, and the division's camera setting when the
-      // camera answer moved it (Task 15: the receipt writes the setting, so the organiser is told where it now stands).
+      // camera answer moved it (Task 15: the receipt writes the setting, so the organiser is told where it now stands) - with money or without it
+      // (fix round 3: the paid answer written back over a setting that said the other moves no credits, `applied: false`, and is said all the same).
       const said = [
         result.capacityLoweredTo === null ? null : msg("onlineChess.capacityLowered", { size: result.capacityLoweredTo }),
-        result.applied && result.cameraPolicySetTo !== null
+        result.cameraPolicySetTo !== null
           ? msg("onlineChess.receipt.cameras.set", { policy: msg(CAMERA_POLICY_LABEL[result.cameraPolicySetTo]) })
           : null,
       ].filter((line): line is string => line !== null);

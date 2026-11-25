@@ -90,6 +90,8 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
       // Every mode opens at the division's SETTING, a change included (fix I2): a change opened at what was paid re-charged a camera turned
       // off in Division settings, and re-wrote Required, on a confirm that only meant to resize. A change still quotes against what was paid (R6).
       cameras: props.cameras ?? facts.cameras,
+      // The setting itself, so a change at the paid size knows an answer the setting does not say is still a change (fix round 3).
+      setting: facts.cameras,
     }),
   );
   /** A ref, so a second tap landing on one render's handler - before the first has re-rendered `submitting` - is refused too. */
@@ -160,6 +162,8 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         }
         return confirm.back > 0 ? plural("onlineChess.receipt.confirm.moveDown", confirm.back, { count: confirm.back }) : msg("onlineChess.receipt.confirm.moveDown.none");
       case "change":
+        // 0 owed at the paid size is the paid answer written back over a setting that says the other (fix round 3): its own words.
+        if (cameraOnly && quote !== null) return quote.cameras ? msg("onlineChess.receipt.confirm.camerasOn") : msg("onlineChess.receipt.confirm.camerasOff.none");
         return msg("onlineChess.receipt.confirm.change");
       case "none":
         return confirm.why === "loading" && want !== null && !readFailed ? msg("onlineChess.receipt.confirm.checking") : msg("onlineChess.receipt.confirm.choose");
@@ -247,7 +251,8 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
       <div className="space-y-3" data-testid="online-receipt" data-mode={mode} data-size={want === null ? "none" : String(want.size)} data-confirm={confirm.kind} data-view="receipt">
         <CameraChoice
           on={state.cameras}
-          turnsOn={state.cameras && !facts.cameras}
+          // Only while the Yes can be confirmed (fix round 3 m1): a note over a "Choose a size" button promised a write that no press makes.
+          turnsOn={state.cameras && !facts.cameras && want !== null}
           disabled={submitting || cameraFixed}
           onPick={(on) => dispatch({ type: "cameras", on })}
         />
@@ -383,7 +388,7 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
  *  native radios of one name, each WRAPPED by its segment (visually hidden, still focusable: a click on the segment picks it, arrow keys walk the pair).
  *  Phone: the legend above, the two segments full width; from `sm`: the legend left, the segments right, on one line. `turnsOn`: the answer is Yes over a
  *  setting that is off, so paying writes Required (P19) - said below the pair, before the confirm (fix m4), and named by the fieldset; a division already
- *  on keeps the setting it has (it may be Optional), so nothing is said for it. */
+ *  on keeps the setting it has (it may be Optional), so nothing is said for it. The caller passes it only while the Yes is confirmable (fix round 3). */
 function CameraChoice(p: { on: boolean; turnsOn: boolean; disabled: boolean; onPick: (on: boolean) => void }): ReactNode {
   const msg = useMsg();
   // A fixed id: the receipt is one dialog, mounted once per page.

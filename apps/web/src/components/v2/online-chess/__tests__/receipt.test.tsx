@@ -325,12 +325,51 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
     expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: yesOwed, cameras: true });
   });
 
-  it("paid WITH the camera, setting Off, the chip's change (no size): Yes at the paid size is no change - 'Choose a size', nothing to pay (R6)", async () => {
-    const m = make({ mode: "change", size: null, facts: { ...CH_WITH, cameras: false }, readQuote: readAt(PAID_WITH) });
-    answer(m, true);
-    await flush();
-    expect(confirmLabel(m)).toBe("Choose a size");
-    expect(m.has("online-receipt-row-total")).toBe(false);
+  it("the answer the package was PAID at, over a setting that says the other: 0 to pay, and the confirm writes the setting back in its own words (fix round 3)", async () => {
+    // Paid WITH the camera, then Off in Division settings: Yes at the paid size moves no credits but is still the organiser's answer - before this
+    // round the receipt read "Choose a size" under a Yes note and wrote nothing. The mirror: paid WITHOUT, then on in settings, and No.
+    let checked = 0;
+    for (const paid of [PAID_WITH, PAID]) {
+      const yes = paid.camerasPaid;
+      const read = readAt(paid);
+      const m = make({ mode: "change", size: null, facts: { paid, storedSize: 64, cameras: !yes }, readQuote: read });
+      const label = `paid camera ${yes}, setting ${!yes}, answer ${yes ? "Yes" : "No"}`;
+      answer(m, yes);
+      expect(read, label).toHaveBeenLastCalledWith({ size: 64, cameras: yes });
+      await flush();
+      expect(packagePrice(64, yes) - packagePrice(64, paid.camerasPaid), `${label}: premise, the price leaf owes nothing`).toBe(0);
+      expect(confirmLabel(m), label).toBe(EN[yes ? "onlineChess.receipt.confirm.camerasOn" : "onlineChess.receipt.confirm.camerasOff.none"]);
+      expect(title(m), label).toBe(EN[yes ? "onlineChess.receipt.title.cameras" : "onlineChess.receipt.title.camerasOff"]);
+      // The Yes that writes Required says what it means for players; the No says nothing.
+      expect(m.has("online-receipt-cameras-note"), label).toBe(yes);
+      await m.press("online-receipt-confirm");
+      expect(m.onConfirm, label).toHaveBeenCalledWith({ size: 64, expectedOwed: 0, cameras: yes });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    expect(EN["onlineChess.receipt.confirm.camerasOn"], "premise: the copy exists").toBeTruthy();
+  });
+
+  it("the Yes note is shown only when the Yes can be confirmed (fix round 3 m1): no size chosen yet says nothing, the size picked says it", async () => {
+    const NOTE = "online-receipt-cameras-note";
+    let checked = 0;
+    for (const mode of ["pay", "payAndOpen"] as const) {
+      const m = make({ mode, size: null, facts: { cameras: false } });
+      answer(m, true);
+      await flush();
+      expect(confirmLabel(m), `${mode}: premise, nothing to confirm`).toBe(EN["onlineChess.receipt.confirm.choose"]);
+      expect(m.has(NOTE), `${mode}: no size, no note`).toBe(false);
+      expect(propsOf(m.by("online-receipt-cameras")!)["aria-describedby"], mode).toBeUndefined();
+      checked += 1;
+      if (mode === "payAndOpen") {
+        m.pick(32);
+        await flush();
+        expect(confirmLabel(m), "premise: now confirmable").toBe(`Pay ${packagePrice(32, true)} credits and open round 1`);
+        expect(m.has(NOTE), "a size picked: the Yes is confirmable, so it says what it means").toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(3);
   });
 
   it("before the confirm, a Yes that turns the camera ON says what it means for players (fix m4); a division already on, or No, says nothing", () => {

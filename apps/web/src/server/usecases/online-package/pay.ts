@@ -8,8 +8,11 @@ import "server-only";
 //    package row `for update`. On the privileged `sql.begin`, as every ledger writer runs (§7.3's table: "Pay, upgrade: its own
 //    usecase on the privileged sql.begin. Never inside withTenant"): no grant is widened and no epilogue is added.
 //  * EXACTLY ONCE, by STATE under those locks plus the client's `expectedOwed` (no idempotency key, by design):
-//      1. the row is already at the target (paid, at this size, with this camera state) → nothing is written, `applied: false`.
-//         The second of two tabs confirming the same receipt lands here, whatever total it confirmed.
+//      1. the row is already at the target (paid, at this size, with this camera state) → no money moves, `applied: false`.
+//         The second of two tabs confirming the same receipt lands here, whatever total it confirmed. A camera answer the division's
+//         setting does not say is still written (fix round 3: a camera paid for and then turned off in Division settings, answered
+//         Yes, goes back to Required) - on the locks already held, the division row last as on every payment - unless the quote is
+//         refused (a round has opened: the camera is fixed, like the size).
 //      2. the fresh quote is refused, or its owed is not the `expectedOwed` the organiser confirmed, or (a move down) its forfeit
 //         is not the `expectedForfeited` they confirmed → 409 ONLINE_QUOTE_CHANGED carrying the fresh quote, nothing written; the
 //         receipt redraws. A refusal is a changed quote here: the route is session-only and the receipt offers a confirm only on
@@ -156,9 +159,11 @@ export async function payOnlinePackageInTx(
     tx, { orgId: a.orgId, divisionId: a.divisionId, size: a.size, cameras: a.cameras, rate: money.rate }, facts,
   );
 
-  // 1. Already at the target: nothing to do, whatever was confirmed.
+  // 1. Already at the target: no money to move, whatever was confirmed. The answer is still the organiser's: written when the setting
+  //    does not say it, while the quote stands (fix round 3). The locks are the ones a payment takes, in its order: nothing new.
   if (row.paidAt !== null && row.size === a.size && row.camerasPaid === quote.cameras) {
-    return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy: null };
+    const cameraPolicy = quote.refusal === null ? await writeCameraAnswer(tx, a, row.id) : null;
+    return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy };
   }
   if (quote.owed > 0) money.beforeCharge?.();
   // 2. The quote the organiser confirmed is not the quote the server holds now.
@@ -208,21 +213,31 @@ export async function payOnlinePackageInTx(
   const after = (await livePackage(tx, a.divisionId))!;
   await assertBooks(tx, after);
   // The camera answer, written to the division's own setting in this transaction (Task 15), then asked back of the division.
-  const cameraPolicy = a.cameras === undefined
-    ? null
-    : await writeDivisionCameraChoice(tx, { divisionId: a.divisionId, orgId: a.orgId, actorId: a.userId, cameras: a.cameras });
-  if (a.cameras !== undefined && (await derivedCameras(tx, a.divisionId)) !== a.cameras) {
-    throw new HttpError(
-      500,
-      `Online Chess package ${row.id}: the division does not say the Fair-play camera answer (${a.cameras ? "on" : "off"}) after writing it; nothing was paid`,
-      "online_package_camera_not_written",
-    );
-  }
+  const cameraPolicy = await writeCameraAnswer(tx, a, row.id);
 
   const capacityLoweredTo = await clampCapacity(tx, a.divisionId, a.size);
   // The settle step (§7.5) on EVERY move down, the route's and Task 9's pay-and-open alike: the default is the real one.
   if (quote.owed < 0) await (deps.settle ?? settleReversals)(tx, a.orgId);
   return { applied: true, quote, package: after, capacityLoweredTo, cameraPolicy };
+}
+
+/** The camera answer written to the division's own setting (`writeDivisionCameraChoice`: the division save's gate and audit, the division row
+ *  locked last), then asked back of the division: a mismatch is a named 500 that rolls the whole payment back. No answer writes nothing. */
+async function writeCameraAnswer(
+  tx: Tx,
+  a: { orgId: string; divisionId: string; userId: string | null; cameras?: boolean },
+  packageId: string,
+): Promise<PayResult["cameraPolicy"]> {
+  if (a.cameras === undefined) return null;
+  const written = await writeDivisionCameraChoice(tx, { divisionId: a.divisionId, orgId: a.orgId, actorId: a.userId, cameras: a.cameras });
+  if ((await derivedCameras(tx, a.divisionId)) !== a.cameras) {
+    throw new HttpError(
+      500,
+      `Online Chess package ${packageId}: the division does not say the Fair-play camera answer (${a.cameras ? "on" : "off"}) after writing it; nothing was paid`,
+      "online_package_camera_not_written",
+    );
+  }
+  return written;
 }
 
 /** The first stage kind of the division that online play does not allow (P16), or null. The pay door's format gate on a charge, and

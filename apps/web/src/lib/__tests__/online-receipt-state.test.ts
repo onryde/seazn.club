@@ -331,6 +331,34 @@ describe("R6: the Fair-play camera answer, on every receipt", () => {
     expect(shownQuote(backNo)).toBe(shownQuote(paidNo));
   });
 
+  it("change: the paid size at the paid answer is still a change when the SETTING says otherwise - it writes the setting back, 0 owed (fix round 3)", () => {
+    // Division settings may move the camera off a paid camera (free, P19), or on over one paid without it. The receipt opens at the setting; the
+    // organiser's answer that matches what was PAID, at the paid size, costs nothing but is still an answer the setting does not say: the pay door
+    // writes it back. Only the paid size at the answer the package AND the setting both say is no change at all.
+    let wanted = 0;
+    let none = 0;
+    for (const camerasPaid of [false, true]) {
+      for (const setting of [false, true]) {
+        for (const yes of [false, true]) {
+          const paid = { size: 64, camerasPaid } as const;
+          const s = run(initialReceipt({ mode: "change", size: null, quote: null, paid, cameras: setting, setting }), { type: "cameras", on: yes });
+          const label = `paid camera ${camerasPaid}, setting ${setting}, answer ${yes}`;
+          if (yes === camerasPaid && yes === setting) {
+            expect(wantedOf(s), `${label}: nothing changes`).toBeNull();
+            none += 1;
+          } else {
+            expect(wantedOf(s), label).toEqual({ size: 64, cameras: yes });
+            const r = run(s, answer(64, yes, paid));
+            expect(pressBody(r)?.expectedOwed, `${label}: the price leaf's difference`).toBe(packagePrice(64, yes) - holds(paid));
+            wanted += 1;
+          }
+        }
+      }
+    }
+    // The two at-target answers that differ from the setting are the round-3 cases (Yes over a paid camera turned off; No over one paid without, turned on).
+    expect([wanted, none], "anti-vacuity").toEqual([6, 2]);
+  });
+
   it("change: a size AND a camera change are ONE choice - one read, one body, the net of both", () => {
     let checked = 0;
     const cases: { paid: Paid; size: OnlineSize; cameras: boolean }[] = [

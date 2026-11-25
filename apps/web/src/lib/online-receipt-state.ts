@@ -36,6 +36,9 @@ export interface ReceiptState {
   size: OnlineSize | null;
   /** The Fair-play camera answer on the receipt (R6). */
   cameras: boolean;
+  /** Whether the division's camera SETTING says the camera is on, as the receipt opened over it. On a `change` receipt an answer at the paid size
+   *  that matches what was paid but not the setting is still a change: it costs nothing and the pay door writes it back (fix round 3). */
+  setting: boolean;
   /** The last quote that arrived, and the choice it was read for. */
   quote: ReceiptQuote | null;
   quoteFor: ReceiptChoice | null;
@@ -58,6 +61,8 @@ export function initialReceipt(a: {
   paid?: { size: OnlineSize; camerasPaid: boolean } | null;
   /** The camera answer the receipt opens on (R6): the division's camera setting (every mode), or a checkout return's. */
   cameras: boolean;
+  /** The division's camera setting (`facts.cameras`); when not given, the answer the receipt opens on - which is the setting, bar a checkout return. */
+  setting?: boolean;
 }): ReceiptState {
   const paid = a.mode === "change" ? (a.paid ?? null) : null;
   const s: ReceiptState = {
@@ -66,6 +71,7 @@ export function initialReceipt(a: {
     paidCameras: paid?.camerasPaid ?? null,
     size: a.size,
     cameras: a.cameras,
+    setting: a.setting ?? a.cameras,
     quote: a.quote,
     quoteFor: null,
     readFailedFor: null,
@@ -92,11 +98,13 @@ export type ReceiptAction =
 const same = (a: ReceiptChoice | null, b: ReceiptChoice | null) => a !== null && b !== null && a.size === b.size && a.cameras === b.cameras;
 
 /** The choice the receipt wants a quote for, or null when there is none: no size chosen (`pay`, `payAndOpen`), or - on a `change` receipt - the
- *  paid size at the paid camera state, which changes nothing (R6). A `change` receipt with no size chosen asks about the PAID size. */
+ *  paid size at the paid camera state when the division's setting says it too, which changes nothing (R6). The paid size at the paid answer over a
+ *  setting that says the other is a change of 0: the answer is written back to the setting (fix round 3). A `change` receipt with no size chosen
+ *  asks about the PAID size. */
 export function wantedOf(s: ReceiptState): ReceiptChoice | null {
   const size = s.size ?? (s.mode === "change" ? s.paidSize : null);
   if (size === null) return null;
-  if (s.mode === "change" && size === s.paidSize && s.cameras === s.paidCameras) return null;
+  if (s.mode === "change" && size === s.paidSize && s.cameras === s.paidCameras && s.cameras === s.setting) return null;
   return { size, cameras: s.cameras };
 }
 

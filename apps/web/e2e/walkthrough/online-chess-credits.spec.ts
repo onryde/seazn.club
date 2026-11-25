@@ -472,8 +472,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.off"]! }));
   });
 
-  test("E: the first receipt answered Yes pays WITH the Fair-play camera, and the division's camera setting reads Required; turned Off in settings, the next receipt opens at No (fix I2)", async ({ page }) => {
-    test.setTimeout(budget(18));
+  test("E: the first receipt answered Yes pays WITH the Fair-play camera, and the division's camera setting reads Required; turned Off in settings, the next receipt opens at No (fix I2), and Yes there writes Required back for nothing (fix round 3)", async ({ page }) => {
+    test.setTimeout(budget(20));
     const r = await unpaidDivision(page, "occamyes");
     await page.setViewportSize({ width: 1280, height: 900 });
     const small = ONLINE_SIZES[0]!;
@@ -500,8 +500,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
 
     // Fix I2: the camera turned OFF in Division settings (the settings door: free, nothing returned, P19). The next receipt opens at the SETTING -
-    // No - and quotes against what was paid: the camera price back. Yes at the paid size is no change. (A change opened at what was paid made a
-    // resize re-charge the camera and write Required again.)
+    // No - and quotes against what was paid: the camera price back. Yes at the paid size owes nothing and writes Required back (fix round 3). (A
+    // change opened at what was paid made a resize re-charge the camera and write Required again.)
     const patched = await apiJson(page.request, `/api/v1/divisions/${r.divisionId}`, "PATCH", { camera_policy: "off" });
     expect(patched.status, `camera off: ${JSON.stringify(patched.error)}`).toBeLessThan(300);
     expect([(await packageRow(r.divisionId)).cameras_paid, await divisionCameraPolicy(r.divisionId)], "premise: paid with the camera, the setting Off").toEqual([true, "off"]);
@@ -516,10 +516,17 @@ test.describe("Online Chess credits: the organiser pays", () => {
       backTotal === 0 ? uiEn["onlineChess.receipt.confirm.camerasOff.none"]! : fill(backTotal === 1 ? "onlineChess.receipt.confirm.camerasOff.one" : "onlineChess.receipt.confirm.camerasOff.other", { count: backTotal }),
     );
     await answerCamera(page, true);
-    await expect(confirm(page), "Yes at the paid size over a paid camera: nothing to pay (R6)").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
-    await page.getByTestId("online-receipt-cancel").click();
-    await expect(receipt(page)).toHaveCount(0);
-    expect(await balanceOf(page, r.divisionId), "looking moved nothing").toBe(start - withCamera);
+    // Fix round 3: Yes at the paid size over a paid camera owes nothing, but it is still the answer - "Turn camera on" writes Required back, and
+    // the Yes note (shown only when the Yes can be confirmed) says what it means for players.
+    await expect(confirm(page), "Yes at the paid size over a paid camera: the setting written back, nothing to pay").toHaveText(uiEn["onlineChess.receipt.confirm.camerasOn"]!);
+    await expect(yesNote(page)).toHaveText(uiEn["onlineChess.receipt.cameras.yesNote"]!);
+    await confirm(page).click();
+    await expect(receipt(page)).toHaveCount(0, { timeout: 30_000 });
+    expect(pays.at(-1), "the pay body: the paid size, 0, the Yes").toEqual({ size: small, expectedOwed: 0, cameras: true });
+    expect(await divisionCameraPolicy(r.divisionId), "the setting is Required again").toBe("required");
+    expect((await packageRow(r.divisionId)).cameras_paid, "the package still holds the camera").toBe(true);
+    expect(await balanceOf(page, r.divisionId), "no credits moved").toBe(start - withCamera);
+    await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
   });
 
   test("D: the competition page flags the unpaid online division for its organiser, links to the Fixtures tab, and stops when it is paid", async ({ page }) => {

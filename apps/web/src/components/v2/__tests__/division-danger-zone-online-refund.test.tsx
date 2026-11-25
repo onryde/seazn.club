@@ -215,6 +215,10 @@ describe("the way out the copy names is the screen's own words, in every locale"
       expect(frozen, `${locale} danger.onlineFrozen`).toBeTypeOf("string");
       expect(frozen, `${locale} danger.onlineFrozen names "${labels[2]}"`).toContain(labels[2]);
       expect(frozen).not.toContain("{count}");
+      // P8 freezes the package at ANY round's first online open (round 1 scored by hand, round 2 opened online, included): the line names an
+      // Online Chess round, never a round number (fix round 3 m2: "Round 1 has opened" was false for that case).
+      expect(frozen, `${locale} danger.onlineFrozen names no round number`).not.toMatch(/\d/);
+      expect(frozen.toLowerCase(), `${locale} danger.onlineFrozen says a round opened`).toContain(({ en: "round", es: "ronda", fr: "ronde", nl: "ronde" } as Record<string, string>)[locale]!);
       checked += 1;
     }
     expect(checked, "4 locales x (2 keys + the frozen line)").toBe(12);

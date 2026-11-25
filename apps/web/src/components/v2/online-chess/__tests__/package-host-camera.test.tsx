@@ -99,7 +99,7 @@ describe("the camera answer at the already-paid size, from the paid chip's Chang
     expect(checked).toBe(2);
   });
 
-  it("paid WITH the camera, then Off in Division settings: the chip's receipt opens at the SETTING (No) and reads the camera refund at the paid size (fix I2)", async () => {
+  it("paid WITH the camera, then Off in Division settings: the chip's receipt opens at the SETTING (No) and reads the camera refund at the paid size (fix I2); Yes there writes Required back for nothing (fix round 3)", async () => {
     current = 64;
     currentCameras = true;
     const r = fromTheChip(64, true, false);
@@ -108,8 +108,17 @@ describe("the camera answer at the already-paid size, from the paid chip's Chang
     await flush();
     expect(r.label()).toBe(offText(packagePrice(64, true) - packagePrice(64, false)));
     r.answer(true);
+    expect(read, "Yes at the paid size is still read: the setting says Off").toHaveBeenLastCalledWith("div-1", { size: 64, cameras: true });
     await flush();
-    expect(r.label(), "Yes at the paid size over a paid camera: no change (R6)").toBe(EN["onlineChess.receipt.confirm.choose"]);
+    // Fix round 3: Yes at the paid size over a paid camera owes nothing, but it is the answer - the confirm writes Required back, and the host says so.
+    expect(r.label(), "Yes at the paid size over a paid camera turned off: the setting written back").toBe(EN["onlineChess.receipt.confirm.camerasOn"]);
+    pay.mockResolvedValueOnce({ applied: false, capacityLoweredTo: null, cameraPolicySetTo: "required" });
+    await r.confirm();
+    expect(pay).toHaveBeenCalledWith("div-1", { size: 64, expectedOwed: 0, cameras: true });
+    const notice = r.host.tree().find((e) => propsOf(e)["data-testid"] === "online-package-notice");
+    expect(String(propsOf(notice!).children), "the page says where the setting now stands").toBe(
+      EN["onlineChess.receipt.cameras.set"]!.replace("{policy}", EN["divset.camera.required"]!),
+    );
   });
 
   it("Yes over a package paid without it: the quote is read for the PAID size with the camera, the total is the camera difference, the door gets cameras: true", async () => {
