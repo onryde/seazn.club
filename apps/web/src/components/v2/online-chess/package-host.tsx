@@ -8,7 +8,8 @@
 //   - Pay on the amber line                            -> `pay` the stored size;
 //   - Change size on the chip                           -> `change`, no size chosen (the list);
 //   - a pick on a PAID row's select (`pick`)             -> `change`, on that size;
-//   - the checkout return (`?oc=pay`, `request`)         -> `pay` on the stored size (a first payment) or `change` on the size the address named.
+//   - the checkout return (`?oc=pay`, `request`)         -> `pay` on the stored size (a first payment) or `change` on the size the address named
+//     (and nothing, once the package is paid at the size it names: the reload after paying).
 // The checkout return is keyed on its arrival (`request.key`, the Stripe session): it opens ONCE per arrival, however the page was reached - a full
 // load, or a client navigation that hands this host a new request - and a `router.refresh()` of the same arrival does not reopen what the organiser
 // closed. A request that goes away (a navigation to the plain page) forgets the arrival, so the next `?oc=pay` opens again.
@@ -52,10 +53,14 @@ export interface OnlinePackageHostProps {
 type Open = { mode: ReceiptMode; size: OnlineSize | null; n: number };
 
 /** The receipt a checkout return asks for: a first payment reopens on the stored size, an upgrade on the size the address named. Nothing to open
- *  for a package that does not exist or is frozen. */
+ *  for a package that does not exist or is frozen - nor for a PAID package the address has nothing left to say to: `?oc=pay&size=N` stays in the
+ *  address after the buyer pays, so a reload (or the next visit by that address) meets a package paid at the size it names (an upgrade done), or names
+ *  none (a first payment done). A `change` receipt there would owe nothing. A request that names a DIFFERENT size is a genuine move and opens. */
 function openForReturn(stored: OnlinePackageHostProps["stored"], request: OnlineReceiptRequest, n: number): Open | null {
   if (stored === null || stored.frozen) return null;
-  return stored.paid === null ? { mode: "pay", size: request.size ?? stored.size, n } : { mode: "change", size: request.size, n };
+  if (stored.paid === null) return { mode: "pay", size: request.size ?? stored.size, n };
+  if (request.size === null || request.size === stored.paid.size) return null;
+  return { mode: "change", size: request.size, n };
 }
 
 export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {

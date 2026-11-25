@@ -167,7 +167,50 @@ describe("the checkout return (?oc=pay): opens once per arrival, however the pag
 
   it("a PAID package's return (an upgrade) opens a CHANGE receipt on the size the address named", () => {
     expect(receiptProps(mount({ stored: PAID, request: { size: 128, key: "cs_a" } }))).toMatchObject({ mode: "change", size: 128 });
-    expect(receiptProps(mount({ stored: PAID, request: { size: null, key: "cs_a" } }))).toMatchObject({ mode: "change", size: null });
+    expect(receiptProps(mount({ stored: PAID, request: { size: 16, key: "cs_a" } })), "a size below the paid one is still a move the buyer named").toMatchObject({ mode: "change", size: 16 });
+  });
+
+  // Fix round 1 (m4): `?oc=pay&size=N` stays in the address after the buyer pays, so a RELOAD hands the host the same request over a package that is now
+  // paid at that size - a `change` receipt that owes nothing. An arrival whose business is done (the paid size IS the size it names, or it names none:
+  // a first payment, already made) opens nothing; a request that names a DIFFERENT size is a genuine move and still opens (ruling 5).
+  it("a PAID package whose paid size IS the size the address names, or that names none, opens nothing: the reload after paying (m4)", () => {
+    expect(receipt(mount({ stored: PAID, request: { size: 32, key: "cs_a" } })), "named size = paid size").toBeUndefined();
+    expect(receipt(mount({ stored: PAID, request: { size: null, key: "cs_a" } })), "no size named: the first payment is already made").toBeUndefined();
+  });
+
+  it("sweep: for every paid size S, the arrival opens a change receipt exactly for the sizes that are not S, and for no size when it names none", () => {
+    let opened = 0;
+    let skipped = 0;
+    for (const paid of ONLINE_SIZES) {
+      const stored = { size: paid, paid: { size: paid, camerasPaid: false }, frozen: false };
+      for (const named of ONLINE_SIZES) {
+        const r = receipt(mount({ stored, request: { size: named, key: "cs_a" } }));
+        if (named === paid) {
+          expect(r, `paid ${paid}, named ${named}`).toBeUndefined();
+          skipped += 1;
+        } else {
+          expect(r, `paid ${paid}, named ${named}`).toBeDefined();
+          expect(receiptProps(mount({ stored, request: { size: named, key: "cs_a" } })), `paid ${paid}, named ${named}`).toMatchObject({ mode: "change", size: named });
+          opened += 1;
+        }
+      }
+      expect(receipt(mount({ stored, request: { size: null, key: "cs_a" } })), `paid ${paid}, none named`).toBeUndefined();
+    }
+    expect(skipped, "one skipped cell per size").toBe(ONLINE_SIZES.length);
+    expect(opened, "every other cell opened").toBe(ONLINE_SIZES.length * (ONLINE_SIZES.length - 1));
+  });
+
+  it("the whole sequence: pay on the return, then RELOAD the same address - the paid package opens no receipt; a genuine NEW arrival after that still does (ruling 5)", async () => {
+    const first = mount({ request: { size: null, key: "cs_a" } });
+    expect(receiptProps(first)).toMatchObject({ mode: "pay", size: 64 });
+    await receiptProps(first).onConfirm({ size: 64, expectedOwed: 8 });
+    expect(pay).toHaveBeenCalledTimes(1);
+    const paid = { size: 64 as OnlineSize, paid: { size: 64 as OnlineSize, camerasPaid: false }, frozen: false };
+    const reload = mount({ stored: paid, request: { size: null, key: "cs_a" } }); // a browser reload: a fresh mount, the same address
+    expect(receipt(reload), "the reload after paying").toBeUndefined();
+    reload.rerender({ ...PROPS, stored: paid, request: null });
+    reload.rerender({ ...PROPS, stored: paid, request: { size: 128, key: "cs_b" } }); // another payment's return, naming a size the package is not at
+    expect(receiptProps(reload)).toMatchObject({ mode: "change", size: 128 });
   });
 
   it("a frozen or missing package has nothing to pay: the arrival opens nothing", () => {
@@ -224,7 +267,7 @@ describe("what a confirm does", () => {
 
   it("a move that lowered the registration capacity is said on the page, in the organiser's words; a move that did not says nothing", async () => {
     pay.mockResolvedValueOnce({ applied: true, capacityLoweredTo: 32 });
-    const h = mount({ stored: PAID, request: { size: 32, key: "cs_a" } });
+    const h = mount({ stored: PAID, request: { size: 64, key: "cs_a" } }); // an upgrade's return (a request naming the paid size opens nothing: m4)
     await receiptProps(h).onConfirm({ size: 32, expectedOwed: -1, expectedForfeited: 0 });
     await flush();
     const note = h.tree().find((e) => propsOf(e)["data-testid"] === "online-package-notice");
