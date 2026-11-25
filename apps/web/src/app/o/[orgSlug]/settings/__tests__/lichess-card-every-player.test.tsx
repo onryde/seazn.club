@@ -100,6 +100,11 @@ const ORG = {
   timezone: "Europe/London",
 };
 
+const STREAMING_FEATURES: ReadonlySet<string> = new Set(["streaming.overlay", "streaming.relay"]);
+/** Anti-vacuity for "the flag is never asked": the rail's credits read really ran as far as the streaming offer, the one question
+ *  that would otherwise fall back to the flag - so its silence is the page's doing, not a rail that never rendered. */
+const railAskedStreaming = () => hasFeature.mock.calls.some(([orgId, key]) => orgId === ORG.id && key === "streaming.overlay");
+
 async function render(tab: string, lichess?: string): Promise<string> {
   const element = await SettingsPage({
     params: Promise.resolve({ orgSlug: ORG.slug }),
@@ -148,7 +153,11 @@ beforeEach(() => {
   });
   getUserOrgs.mockResolvedValue([ORG]);
   resolveLocale.mockResolvedValue("en");
-  hasFeature.mockResolvedValue(false);
+  // The catalogue's answer for streaming: every plan has `streaming.overlay` and `streaming.relay`. The Settings rail on every tab projects
+  // the credits balance (settings-nav.tsx navContext → projectedStreamCreditsTotal), and only a club that does NOT stream falls back to
+  // asking the Online Chess flag (the credits are one pool, Online Chess spec 2026-11-23 §7.6) - a club this pro org is not. Every other
+  // feature stays off.
+  hasFeature.mockImplementation(async (_orgId: string, key: string) => STREAMING_FEATURES.has(key));
   hasFeatureOnAnyPass.mockResolvedValue(false);
   preferredCurrency.mockResolvedValue("gbp");
   linkedAs(null);
@@ -170,6 +179,7 @@ describe("Settings → Account: the Lichess card is shown to every signed-in pla
     let checked = 0;
     for (const w of WORLDS) {
       w.arm();
+      hasFeature.mockClear(); // calls only (the catalogue answer stays): each world's rail witness is its own render's
       const html = await render("account");
       // Anti-vacuity: the account tab really rendered, so the card's presence is the rule's doing.
       expect(html, w.label).toContain("owner@example.com");
@@ -178,6 +188,7 @@ describe("Settings → Account: the Lichess card is shown to every signed-in pla
         'data-props="configured,linkedUsername,needsReconsent"',
       );
       expect(html, `${w.label}: the card is handed no club to start at`).not.toContain("orgSlug");
+      expect(railAskedStreaming(), `${w.label}: the rail's credits read reached the streaming offer`).toBe(true);
       expect(isServerFeatureEnabled, `${w.label}: online chess is none of this page's business`).not.toHaveBeenCalled();
       checked++;
     }
@@ -213,6 +224,7 @@ describe("Settings → Account: the Lichess card is shown to every signed-in pla
     const html = await render("organization");
     expect(html).toContain(ORG.name);
     expect(html).not.toContain('data-testid="lichess-card"');
+    expect(railAskedStreaming(), "the rail's credits read reached the streaming offer").toBe(true);
     expect(isServerFeatureEnabled).not.toHaveBeenCalled();
   });
 });
