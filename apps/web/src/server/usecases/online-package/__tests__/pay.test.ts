@@ -35,6 +35,12 @@
 //   P13 the value guard dropped                                  -> "a package whose counters disagree with its price"
 //   P14 the ledger guard dropped                                 -> "a package whose counters disagree with its ledger"
 //   P15 a refusal in the fresh quote ignored (paid anyway)       -> "409 when the rounds were raised", "move down refused ..."
+//   T15a the camera answer not written to the division setting   -> "the Fair-play camera answer": "writes the setting", the sweep
+//   (the setting written on the payment's own transaction: "a failure after the setting write rolls BOTH back" reads it ON that transaction
+//    as its premise, then asserts the rollback; a write on another connection is not run as a mutant - it would block on the row lock)
+//   T15c the camera-not-written post-check removed                -> "a division that does not take the answer is a named 500"
+//   T15d cameraChoiceTarget writes even when the setting says it  -> "the answer the setting already says writes nothing"
+//   T15e Yes writes `optional` instead of `required`              -> the sweep (`to`)
 //   (lock order and the locks themselves: pay-concurrency.test.ts)
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -64,6 +70,7 @@ import {
 } from "@/server/usecases/online-package";
 import { patchDivision } from "@/server/usecases/divisions";
 import { seedBoardgameSport } from "@/server/usecases/__tests__/_external-play-seed";
+import { CAMERA_POLICY_CHANGED } from "@/server/external-play/camera-policy";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -213,12 +220,12 @@ async function rig(o: { plan?: Plan; size?: OnlineSize; pack?: number; monthly?:
 }
 
 /** The receipt's quote, as the browser reads it (the GET door's usecase). */
-const quote = (r: Rig, size: OnlineSize, addCameras?: boolean): Promise<PackageQuote> => onlinePackageQuote(r.auth, r.divisionId, size, addCameras);
+const quote = (r: Rig, size: OnlineSize, cameras?: boolean): Promise<PackageQuote> => onlinePackageQuote(r.auth, r.divisionId, size, cameras);
 
 /** What the organiser does: open the receipt for `size`, confirm the total it shows. */
-async function confirm(r: Rig, size: OnlineSize, o: { addCameras?: boolean; forfeited?: boolean; deps?: PayDeps } = {}): Promise<{ shown: PackageQuote; result: PayResult }> {
-  const shown = await quote(r, size, o.addCameras);
-  const input: PayInput = { size, expectedOwed: shown.owed, ...(o.addCameras ? { addCameras: true } : {}) };
+async function confirm(r: Rig, size: OnlineSize, o: { cameras?: boolean; forfeited?: boolean; deps?: PayDeps } = {}): Promise<{ shown: PackageQuote; result: PayResult }> {
+  const shown = await quote(r, size, o.cameras);
+  const input: PayInput = { size, expectedOwed: shown.owed, ...(o.cameras === undefined ? {} : { cameras: o.cameras }) };
   if (o.forfeited) input.expectedForfeited = shown.back?.forfeited ?? 0;
   return { shown, result: await payOnlinePackage(r.auth, r.divisionId, input, o.deps) };
 }
@@ -540,7 +547,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the receipt went stale in the other 
 // ─── Upgrade, cameras, move down ──────────────────────────────────────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", () => {
-  it("upgrade charges the difference; addCameras charges the camera difference; a second addCameras owes nothing", async () => {
+  it("upgrade charges the difference; Yes charges the camera difference; Yes again, or no answer, owes nothing", async () => {
     const r = await rig({ size: 16, pack: 20, monthly: 0 });
     await confirm(r, 16);
     const first = await packageRow(r.packageId);
@@ -551,15 +558,15 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
     expect(consumed(await packageLedger(r.packageId))).toBe(4);
     expect(await packageRow(r.packageId), "the first payer and the first payment's time stay").toMatchObject({ paid_by: r.userId, paid_at: first.paid_at });
     expect(await expectBooks(r.packageId, "after the upgrade")).toBe(2);
-    const cams = await confirm(r, 64, { addCameras: true });
+    const cams = await confirm(r, 64, { cameras: true });
     expect(cams.shown).toMatchObject({ owed: 8 - 4, cameras: true });
     expect(await packageRow(r.packageId)).toMatchObject({ size: 64, cameras_paid: true, credits_paid: 8 });
     expect(await expectBooks(r.packageId, "after the cameras")).toBe(2);
-    // P19: paid cameras stay paid. Asked again, or asked without the intent while the policy is still off: nothing owed, nothing written.
-    for (const addCameras of [true, false]) {
-      const again = await confirm(r, 64, { addCameras });
-      expect(again.result.applied, `addCameras ${addCameras}`).toBe(false);
-      expect(again.shown.owed, `addCameras ${addCameras}`).toBe(0);
+    // Yes wrote the setting (Task 15). Asked again, or with no answer: nothing owed, nothing written (the No answer is a move down: below).
+    for (const answer of [true, undefined]) {
+      const again = await confirm(r, 64, { cameras: answer });
+      expect(again.result.applied, `answer ${answer}`).toBe(false);
+      expect(again.shown.owed, `answer ${answer}`).toBe(0);
     }
     expect(consumed(await packageLedger(r.packageId))).toBe(8);
   });
@@ -741,8 +748,8 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
   it("SEQUENCE: pay → pay again → upgrade → add cameras → move down → move down below held (refused) → pay after a refund", async () => {
     const r = await rig({ size: 16, pack: 40, monthly: 0 });
     let steps = 0;
-    const step = async (label: string, size: OnlineSize, want: { owed: number; applied: boolean }, addCameras?: boolean) => {
-      const { shown, result } = await confirm(r, size, { addCameras });
+    const step = async (label: string, size: OnlineSize, want: { owed: number; applied: boolean }, cameras?: boolean) => {
+      const { shown, result } = await confirm(r, size, { cameras });
       expect(shown.owed, `${label}: owed`).toBe(want.owed);
       expect(result.applied, `${label}: applied`).toBe(want.applied);
       expect(await expectBooks(r.packageId, label)).toBe(2);
@@ -751,7 +758,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
     await step("pay 16", 16, { owed: 1, applied: true });
     await step("pay 16 again", 16, { owed: 0, applied: false });
     await step("upgrade to 64", 64, { owed: 3, applied: true });
-    await step("add cameras at 64", 64, { owed: 4, applied: true }, true);
+    await step("the camera answered Yes at 64", 64, { owed: 4, applied: true }, true);
     await step("move down to 32 (cameras stay paid, P19)", 32, { owed: 4 - 8, applied: true });
     expect(await packageRow(r.packageId)).toMatchObject({ size: 32, cameras_paid: true, credits_paid: 8, credits_refunded: 4 });
     await seedEntrants(r, 20);
@@ -764,9 +771,13 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
     // the 20 places held (32), paid at the full price; the refunded row is history.
     const old = r.packageId;
     const fresh = await fullRefundAndReopen(r, 32);
-    const again = await payOnlinePackage(r.auth, r.divisionId, { size: 32, expectedOwed: (await quote(r, 32)).owed });
+    // Task 15: the Yes at 64 wrote the division's camera setting (Required), and the setting is the DIVISION's, so it outlives the
+    // refunded package: with no answer the fresh receipt quotes the camera price. The organiser answers No on it.
+    expect(await divisionPolicy(r), "the Yes at 64 wrote the setting").toBe("required");
+    expect((await quote(r, 32)).owed, "no answer: the division's camera price, in full").toBe(4);
+    const again = await payOnlinePackage(r.auth, r.divisionId, { size: 32, cameras: false, expectedOwed: (await quote(r, 32, false)).owed });
     expect(again.applied).toBe(true);
-    // The policy is off and the new row has paid no cameras: nothing carries over from a refunded package (P19 is per package).
+    // The new row has paid no cameras: nothing carries over from a refunded package (P19 is per package).
     expect(again.quote.owed, "the full price of 32 without cameras").toBe(2);
     expect(again.package.id).toBe(fresh);
     expect(await packageRow(fresh)).toMatchObject({ size: 32, cameras_paid: false, credits_paid: 2, credits_refunded: 0 });
@@ -896,6 +907,260 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: who may pay, where, and when", () =>
     await expect(confirm(r, 16, { deps: failing })).rejects.toThrow("settle failed");
     expect(await packageLedger(r.packageId), "the refund rolled back with the settle").toEqual(before.ledger);
     expect(await packageRow(r.packageId)).toEqual(before.row);
+  });
+});
+
+// ─── Task 15: the Fair-play camera answer ─────────────────────────────────────────────────────────────────────────────
+
+/** The division's own camera setting, and the CAMERA_POLICY_CHANGED audit rows written for it. */
+const divisionPolicy = async (r: Rig): Promise<string | null> =>
+  (await sql<{ p: string | null }[]>`select camera_policy as p from divisions where id = ${r.divisionId}`)[0]!.p;
+const cameraAudits = async (r: Rig) =>
+  sql<{ payload: Record<string, unknown>; actor_id: string | null }[]>`
+    select payload, actor_id from competition_events where type = ${CAMERA_POLICY_CHANGED} and payload->>'divisionId' = ${r.divisionId}`;
+/** The rulebook's nearest-level-wins (spec 2026-10-09 §5.1): the division's own setting, else the competition's (`off` in every rig). */
+const effectiveOn = (own: Policy | null): boolean => (own ?? "off") !== "off";
+
+describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15)", () => {
+  it("Yes on a first payment writes the division's setting in the payment: Required, one audit row, the package holds the camera", async () => {
+    const r = await rig({ size: 32, pack: 10, monthly: 0 });
+    expect(await divisionPolicy(r), "premise: the division inherits the competition's Off").toBeNull();
+    const { shown, result } = await confirm(r, 32, { cameras: true });
+    expect(shown).toMatchObject({ cameras: true, owed: price(32, true) });
+    expect(result.cameraPolicy).toEqual({ from: null, to: "required" });
+    expect(await divisionPolicy(r)).toBe("required");
+    const audits = await cameraAudits(r);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.actor_id, "the payer is the actor").toBe(r.userId);
+    expect(audits[0]!.payload).toMatchObject({ divisionId: r.divisionId, stageId: null, from: null, to: "required", effectiveFrom: "off", effectiveTo: "required", roundOpened: false });
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 32, cameras_paid: true, credits_paid: price(32, true) });
+    expect(await packageLedger(r.packageId), "one consume of the camera price").toEqual([{ delta: -price(32, true), reason: "consume", bucket: "pack" }]);
+    expect(await expectBooks(r.packageId, "Yes")).toBe(2);
+  });
+
+  it("No on a first payment over a division whose setting is on writes Off, and pays the price without the camera", async () => {
+    const r = await rig({ size: 32, pack: 10, monthly: 0, camera: "required" });
+    expect((await quote(r, 32)).cameras, "premise: with no answer the quote is the division's camera price").toBe(true);
+    const { shown, result } = await confirm(r, 32, { cameras: false });
+    expect(shown).toMatchObject({ cameras: false, owed: price(32, false) });
+    expect(result.cameraPolicy).toEqual({ from: "required", to: "off" });
+    expect(await divisionPolicy(r)).toBe("off");
+    expect(await packageRow(r.packageId)).toMatchObject({ cameras_paid: false, credits_paid: price(32, false) });
+    expect((await cameraAudits(r)).map((a) => a.payload.to)).toEqual(["off"]);
+  });
+
+  it("sweep: every own setting × answer - the setting written is the rulebook's, and the answer it already says writes nothing (no audit)", async () => {
+    let checked = 0;
+    let written = 0;
+    for (const own of [null, "off", "optional", "required"] as (Policy | null)[]) {
+      for (const answer of [false, true]) {
+        const r = await rig({ size: 16, pack: 10, monthly: 0, ...(own === null ? {} : { camera: own }) });
+        const { result } = await confirm(r, 16, { cameras: answer });
+        const label = `own ${own}, answer ${answer}`;
+        const says = effectiveOn(own) === answer;
+        // Yes on a division that is off: Required, the setting under which the camera supervises play; No: Off.
+        const to: Policy | null = says ? own : answer ? "required" : "off";
+        expect(result.cameraPolicy, label).toEqual(says ? null : { from: own, to });
+        expect(await divisionPolicy(r), label).toBe(to);
+        expect(await cameraAudits(r), label).toHaveLength(says ? 0 : 1);
+        expect(effectiveOn((await divisionPolicy(r)) as Policy | null), `${label}: the division now says the answer`).toBe(answer);
+        expect((await packageRow(r.packageId)).cameras_paid, label).toBe(answer);
+        checked += 1;
+        if (!says) written += 1;
+      }
+    }
+    expect(checked).toBe(8);
+    expect(written, "anti-vacuity: both kinds of case ran").toBe(4);
+  });
+
+  it("camera OFF before round 1, paid from THIS month's included credits: the camera price comes back to them - a move down at the same size", async () => {
+    const r = await rig({ size: 32, monthly: 4, camera: "required" });
+    await confirm(r, 32);
+    expect(await packageRow(r.packageId), "premise: paid with the camera").toMatchObject({ cameras_paid: true, credits_paid: price(32, true) });
+    const off = await confirm(r, 32, { cameras: false, forfeited: true });
+    const back = price(32, true) - price(32, false);
+    expect(off.shown).toMatchObject({ size: 32, cameras: false, owed: -back, back: { pack: 0, monthly: back, forfeited: 0 } });
+    expect(off.result).toMatchObject({ applied: true, cameraPolicy: { from: "required", to: "off" } });
+    expect(await packageLedger(r.packageId)).toEqual([
+      { delta: -price(32, true), reason: "consume", bucket: "monthly" },
+      { delta: back, reason: "refund", bucket: "monthly" },
+    ]);
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 32, cameras_paid: false, credits_paid: price(32, true), credits_refunded: back, credits_forfeited: 0 });
+    expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(4 - price(32, true) + back);
+    expect(await divisionPolicy(r)).toBe("off");
+    expect(await expectBooks(r.packageId, "camera off")).toBe(2);
+  });
+
+  it("camera OFF before round 1, paid from an EARLIER month's included credits: forfeited, counted on the row, no ledger row", async () => {
+    const r = await rig({ size: 32, monthly: 4, camera: "required" });
+    await confirm(r, 32);
+    await backdateOrgLedger(r.orgId);
+    const before = await orgLedgerCount(r.orgId);
+    const back = price(32, true) - price(32, false);
+    const off = await confirm(r, 32, { cameras: false, forfeited: true });
+    expect(off.shown.back).toEqual({ pack: 0, monthly: 0, forfeited: back });
+    expect(off.result.applied).toBe(true);
+    expect(await orgLedgerCount(r.orgId), "a forfeit writes nothing").toBe(before);
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 32, cameras_paid: false, credits_refunded: 0, credits_forfeited: back });
+    expect(await divisionPolicy(r)).toBe("off");
+    expect(await expectBooks(r.packageId, "camera off, an earlier month")).toBe(2);
+  });
+
+  it("camera OFF from round 1 (frozen) is refused, like the size: 409 with the fresh quote's `frozen`; nothing written - package, ledger, setting, audit", async () => {
+    const r = await rig({ size: 32, pack: 10, monthly: 0, camera: "required" });
+    await confirm(r, 32);
+    await sql`update division_online_packages set frozen_at = now() where id = ${r.packageId}`;
+    const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId), audits: (await cameraAudits(r)).length };
+    const shown = await quote(r, 32, false);
+    expect(shown.refusal).toBe("frozen");
+    const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 32, cameras: false, expectedOwed: shown.owed }));
+    expect(err.code).toBe("ONLINE_QUOTE_CHANGED");
+    expect((err.extra as { quote: PackageQuote }).quote.refusal).toBe("frozen");
+    expect(await orgLedgerCount(r.orgId)).toBe(before.ledger);
+    expect(await packageRow(r.packageId)).toEqual(before.row);
+    expect(await divisionPolicy(r), "the setting is untouched").toBe("required");
+    expect((await cameraAudits(r)).length).toBe(before.audits);
+    // ...and Yes over a frozen package paid WITHOUT it is refused the same way.
+    const without = await rig({ size: 32, pack: 10, monthly: 0 });
+    await confirm(without, 32);
+    await sql`update division_online_packages set frozen_at = now() where id = ${without.packageId}`;
+    const yes = await quote(without, 32, true);
+    expect((await refusal(payOnlinePackage(without.auth, without.divisionId, { size: 32, cameras: true, expectedOwed: yes.owed }))).code).toBe("ONLINE_QUOTE_CHANGED");
+    expect(await divisionPolicy(without)).toBeNull();
+  });
+
+  it("a size AND a camera change in one receipt are ONE payment: one ledger row, the net of both - up with Yes, down with No, and a net of nothing", async () => {
+    let checked = 0;
+    {
+      const r = await rig({ size: 32, pack: 20, monthly: 0 });
+      await confirm(r, 32);
+      const before = await packageLedger(r.packageId);
+      const { shown } = await confirm(r, 64, { cameras: true });
+      expect(shown.owed, "64 with the camera less 32 without").toBe(price(64, true) - price(32, false));
+      const rows = await packageLedger(r.packageId);
+      expect(rows.length - before.length, "one ledger row").toBe(1);
+      expect(consumed(rows)).toBe(price(64, true));
+      expect(await packageRow(r.packageId)).toMatchObject({ size: 64, cameras_paid: true });
+      expect(await divisionPolicy(r)).toBe("required");
+      expect(await expectBooks(r.packageId, "up with Yes")).toBe(2);
+      checked += 1;
+    }
+    {
+      const r = await rig({ size: 64, pack: 20, monthly: 0, camera: "required" });
+      await confirm(r, 64);
+      const before = await packageLedger(r.packageId);
+      const { shown } = await confirm(r, 32, { cameras: false, forfeited: true });
+      expect(shown.owed, "32 without the camera less 64 with").toBe(price(32, false) - price(64, true));
+      const rows = await packageLedger(r.packageId);
+      expect(rows.length - before.length, "one ledger row").toBe(1);
+      expect(rows.filter((x) => x.reason === "refund")).toEqual([{ delta: price(64, true) - price(32, false), reason: "refund", bucket: "pack" }]);
+      expect(await packageRow(r.packageId)).toMatchObject({ size: 32, cameras_paid: false });
+      expect(await divisionPolicy(r)).toBe("off");
+      expect(await expectBooks(r.packageId, "down with No")).toBe(2);
+      checked += 1;
+    }
+    {
+      const r = await rig({ size: 32, pack: 20, monthly: 0 });
+      await confirm(r, 32);
+      const before = await orgLedgerCount(r.orgId);
+      const { shown, result } = await confirm(r, 16, { cameras: true });
+      expect(price(16, true), "premise: 16 with the camera costs what 32 without does").toBe(price(32, false));
+      expect(shown.owed).toBe(0);
+      expect(result.applied).toBe(true);
+      expect(await orgLedgerCount(r.orgId), "a net of nothing writes no ledger row").toBe(before);
+      expect(await packageRow(r.packageId)).toMatchObject({ size: 16, cameras_paid: true });
+      expect(await divisionPolicy(r)).toBe("required");
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("exactly once: the same answer confirmed twice writes once - one ledger row, one audit row, applied false the second time (both ways)", async () => {
+    let checked = 0;
+    for (const [camera, answer] of [[undefined, true], ["required", false]] as const) {
+      const r = await rig({ size: 32, pack: 20, monthly: 0, ...(camera ? { camera } : {}) });
+      await confirm(r, 32);
+      const ledger0 = (await packageLedger(r.packageId)).length;
+      const first = await confirm(r, 32, { cameras: answer, forfeited: !answer });
+      expect(first.result.applied, `answer ${answer}`).toBe(true);
+      const after1 = { ledger: (await packageLedger(r.packageId)).length, audits: (await cameraAudits(r)).length, row: await packageRow(r.packageId) };
+      expect(after1.ledger - ledger0, `answer ${answer}: one ledger row`).toBe(1);
+      expect(after1.audits, `answer ${answer}: one audit row`).toBe(1);
+      const second = await confirm(r, 32, { cameras: answer, forfeited: !answer });
+      expect(second.result.applied, `answer ${answer}: the second confirm`).toBe(false);
+      expect(second.result.cameraPolicy).toBeNull();
+      expect((await packageLedger(r.packageId)).length).toBe(after1.ledger);
+      expect((await cameraAudits(r)).length).toBe(1);
+      expect(await packageRow(r.packageId)).toEqual(after1.row);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the setting is written in the payment's transaction: a failure after the setting write rolls BOTH back (package, ledger, setting, audit)", async () => {
+    // (a) a move down whose settle step fails AFTER the camera answer was written (No): nothing of it stands.
+    const r = await rig({ size: 32, pack: 20, monthly: 0, camera: "required" });
+    await confirm(r, 32);
+    const before = { ledger: await packageLedger(r.packageId), row: await packageRow(r.packageId), audits: (await cameraAudits(r)).length };
+    let sawWritten: string | null = null;
+    const failing: PayDeps = {
+      settle: async (tx) => {
+        sawWritten = (await tx<{ p: string | null }[]>`select camera_policy as p from divisions where id = ${r.divisionId}`)[0]!.p;
+        throw new Error("settle failed");
+      },
+    };
+    await expect(confirm(r, 32, { cameras: false, forfeited: true, deps: failing })).rejects.toThrow("settle failed");
+    expect(sawWritten, "premise: the setting WAS written on the payment's transaction before the failure").toBe("off");
+    expect(await divisionPolicy(r), "the setting rolled back with the payment").toBe("required");
+    expect(await packageLedger(r.packageId)).toEqual(before.ledger);
+    expect(await packageRow(r.packageId)).toEqual(before.row);
+    expect((await cameraAudits(r)).length).toBe(before.audits);
+    // (b) a payment whose setting write fails (a row trigger on the division refuses it): the debit and the package row roll back too.
+    const p = await rig({ size: 32, pack: 20, monthly: 0 });
+    const fn = `t15_refuse_${suffix()}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 't15: the camera setting write failed'; end $$`);
+    await sql.unsafe(`create trigger ${fn} before update of camera_policy on divisions for each row when (old.id = '${p.divisionId}') execute function ${fn}()`);
+    try {
+      const ledgerBefore = await orgLedgerCount(p.orgId);
+      await expect(confirm(p, 32, { cameras: true })).rejects.toThrow("t15: the camera setting write failed");
+      expect(await orgLedgerCount(p.orgId), "the debit rolled back with the setting").toBe(ledgerBefore);
+      expect((await packageRow(p.packageId)).paid_at, "the package is still unpaid").toBeNull();
+      expect(await divisionPolicy(p)).toBeNull();
+      expect(await cameraAudits(p)).toHaveLength(0);
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on divisions`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    expect((await confirm(p, 32, { cameras: true })).result.applied, "with the trigger gone the same payment applies").toBe(true);
+  });
+
+  it("a division that does not take the answer is a named 500 after the write, and nothing stands (the guard behind the setting write)", async () => {
+    // A row trigger that silently keeps the old setting: the write 'succeeds', the division does not say the answer.
+    const r = await rig({ size: 32, pack: 20, monthly: 0 });
+    const fn = `t15_keep_${suffix()}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin new.camera_policy := old.camera_policy; return new; end $$`);
+    await sql.unsafe(`create trigger ${fn} before update of camera_policy on divisions for each row when (old.id = '${r.divisionId}') execute function ${fn}()`);
+    try {
+      const before = await orgLedgerCount(r.orgId);
+      const err = await refusal(confirm(r, 32, { cameras: true }));
+      expect(err.status).toBe(500);
+      expect(err.code).toBe("online_package_camera_not_written");
+      expect(await orgLedgerCount(r.orgId)).toBe(before);
+      expect((await packageRow(r.packageId)).paid_at).toBeNull();
+      expect(await cameraAudits(r), "the audit rolled back too").toHaveLength(0);
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on divisions`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+  });
+
+  it("no answer (an API caller, the Open round gate's own quote) writes nothing to the setting", async () => {
+    const r = await rig({ size: 32, pack: 20, monthly: 0, camera: "optional" });
+    const { result } = await confirm(r, 32);
+    expect(result.cameraPolicy).toBeNull();
+    expect(await divisionPolicy(r)).toBe("optional");
+    expect(await cameraAudits(r)).toHaveLength(0);
+    expect((await packageRow(r.packageId)).cameras_paid, "priced at the setting as it stands").toBe(true);
   });
 });
 

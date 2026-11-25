@@ -32,8 +32,10 @@
 //   Q8b  precedence: below_held before frozen                    -> "refusal precedence"
 //   Q8c  precedence: rounds before rounds_above_max              -> "refusal precedence", "rounds sweep"
 //   Q8d  precedence: plan after the rounds refusals              -> "refusal precedence"
-//   Q9   cameras drop `row.camerasPaid` (a paid camera lowered)  -> "paid sweep", "addCameras"
-//   Q10  cameras drop `addCameras`                               -> "unpaid sweep", "addCameras"
+//   Q9   cameras drop `row.camerasPaid` (no answer: a paid camera lowered) -> "paid sweep", "the camera ANSWER"
+//   Q10  cameras drop the answer `cameras`                       -> "unpaid sweep", "paid sweep", "the camera ANSWER"
+//   Q10b the answer's stage check removed (assertCameraChoiceFits) -> "an answer a stage's own policy contradicts"
+//   Q10c the stage check run without an answer                    -> "an answer a stage's own policy contradicts" (no answer)
 //   Q11  owed ignores the price already paid                     -> "paid sweep", "sequence"
 //   Q12  take/back not nulled on a refusal                       -> "a refusal carries no split"
 //   Q13  the forfeits already on the row are not netted          -> "forfeits already recorded"
@@ -67,7 +69,7 @@
 //   C4   covers ignores the camera price the policy needs        -> "covers sweep", "covers is a fact about the PACKAGE"
 //   C5   covers true for an unpaid row                           -> "covers is false without a paid live package"
 //   C6   covers ignores a frozen row                             -> "covers is false without a paid live package"
-//   C7   covers takes the addCameras intent                      -> "covers is a fact about the PACKAGE"
+//   C7   covers takes the camera answer                          -> "covers is a fact about the PACKAGE"
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql, statementTexts, type Tx } from "@/lib/db";
@@ -267,9 +269,9 @@ function expectSplitInvariant(q: PackageQuote): void {
 }
 
 const quote = async (
-  r: Rig, size: OnlineSize, o: { addCameras?: boolean; facts?: Partial<PackageFacts>; rate?: number } = {},
+  r: Rig, size: OnlineSize, o: { cameras?: boolean; facts?: Partial<PackageFacts>; rate?: number } = {},
 ): Promise<PackageQuote> => {
-  const q = await inTx((tx) => quoteLocked(tx, { orgId: r.orgId, divisionId: r.divisionId, size, addCameras: o.addCameras, rate: o.rate ?? r.rate }, { ...FACTS0, ...o.facts }));
+  const q = await inTx((tx) => quoteLocked(tx, { orgId: r.orgId, divisionId: r.divisionId, size, cameras: o.cameras, rate: o.rate ?? r.rate }, { ...FACTS0, ...o.facts }));
   expectSplitInvariant(q);
   return q;
 };
@@ -442,7 +444,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     expect(await creditBalance(sql, r.orgId)).toBe(6);
   });
 
-  it("unpaid sweep: every size × camera fact × addCameras, with a package row and without one — price, owed and take from the leaf and P4", async () => {
+  it("unpaid sweep: every size × camera fact × camera answer, with a package row and without one — price, owed and take from the leaf and P4", async () => {
     const withRow = await rig({ pack: 100 });
     const orgId = await seedOrg();
     await buy(orgId, 100);
@@ -452,11 +454,12 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     for (const r of [withRow, noRow]) {
       for (const size of ONLINE_SIZES) {
         for (const cameras of [false, true]) {
-          for (const addCameras of [undefined, false, true]) {
-            const q = await quote(r, size, { facts: { cameras }, addCameras });
-            const wantCameras = cameras || addCameras === true;
+          for (const answer of [undefined, false, true]) {
+            const q = await quote(r, size, { facts: { cameras }, cameras: answer });
+            // Task 15: an answer is what the package will be; no answer, the division as it stands.
+            const wantCameras = answer ?? cameras;
             const want = packagePrice(size, wantCameras);
-            const label = `row ${r === withRow} size ${size} cameras ${cameras} addCameras ${addCameras}`;
+            const label = `row ${r === withRow} size ${size} cameras ${cameras} answer ${answer}`;
             expect(q, label).toMatchObject({ size, cameras: wantCameras, price: want, owed: want, take: { monthly: 0, pack: want }, back: null, balance: 100, refusal: null });
             checked += 1;
           }
@@ -469,7 +472,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     expect([16, 32, 64, 128, 256].map((s) => packagePrice(s as OnlineSize, true))).toEqual([2, 4, 8, 16, 32]);
   });
 
-  it("paid sweep: paid at every size × camera state, quoted at every size × camera fact × addCameras — owed = price − price already paid", async () => {
+  it("paid sweep: paid at every size × camera state, quoted at every size × camera fact × camera answer — owed = price − price already paid", async () => {
     let checked = 0;
     let down = 0;
     let up = 0;
@@ -480,13 +483,14 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
         const balance = 100 - packagePrice(paidSize, paidCameras);
         for (const size of ONLINE_SIZES) {
           for (const cameras of [false, true]) {
-            for (const addCameras of [false, true]) {
-              const q = await quote(r, size, { facts: { cameras }, addCameras });
-              // P19: a camera price that was paid is never lowered.
-              const wantCameras = cameras || addCameras || paidCameras;
+            for (const answer of [undefined, false, true]) {
+              const q = await quote(r, size, { facts: { cameras }, cameras: answer });
+              // P19 as amended by Task 15: with no answer a paid camera price is kept (a size change does not drop it); the receipt's
+              // answer is what the package will be, so No returns the camera price and Yes charges it.
+              const wantCameras = answer ?? (cameras || paidCameras);
               const price = packagePrice(size, wantCameras);
               const owed = price - packagePrice(paidSize, paidCameras);
-              const label = `paid ${paidSize}/${paidCameras} → ${size} cameras ${cameras} add ${addCameras}`;
+              const label = `paid ${paidSize}/${paidCameras} → ${size} cameras ${cameras} answer ${answer}`;
               expect(q.cameras, label).toBe(wantCameras);
               expect(q.price, label).toBe(price);
               expect(q.owed, label).toBe(owed);
@@ -504,7 +508,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
         }
       }
     }
-    expect(checked, "paid cases judged").toBe(5 * 2 * 5 * 2 * 2);
+    expect(checked, "paid cases judged").toBe(5 * 2 * 5 * 2 * 3);
     // Anti-vacuity: the sweep reaches all three outcomes.
     expect(down, "move downs").toBeGreaterThan(20);
     expect(up, "pays").toBeGreaterThan(20);
@@ -518,27 +522,49 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     expect(await quote(r, 32)).toMatchObject({ price: 2, owed: 0, take: null, back: null });
   });
 
-  it("addCameras raises the price and never lowers it; on a row with cameras_paid it owes 0", async () => {
+  it("the camera ANSWER prices exactly what it says: Yes charges the camera, No returns a paid one (a move down), no answer keeps P19", async () => {
     // Paid at 64 WITHOUT cameras (4 credits).
     const without = await paidRig({ size: 64, cameras: false, pack: 20 });
     const base = await quote(without, 64);
-    const raised = await quote(without, 64, { addCameras: true });
+    const raised = await quote(without, 64, { cameras: true });
     expect(base).toMatchObject({ cameras: false, price: 4, owed: 0 });
     expect(raised).toMatchObject({ cameras: true, price: 8, owed: 4, take: { monthly: 0, pack: 4 } });
-    expect(raised.price, "addCameras raises the price").toBeGreaterThan(base.price);
-    expect((await quote(without, 64, { addCameras: false })).price, "addCameras:false lowers nothing").toBe(base.price);
-    // The camera policy turning on is the same raise, without the intent.
+    expect(await quote(without, 64, { cameras: false }), "No over No: nothing to pay").toMatchObject({ cameras: false, price: 4, owed: 0, take: null, back: null });
+    // The camera policy turning on is the same raise, without an answer.
     expect(await quote(without, 64, { facts: { cameras: true } })).toMatchObject({ cameras: true, price: 8, owed: 4 });
-    // Paid WITH cameras (8): the camera price was paid, so it stays, whatever the policy and the intent say, and nothing is owed.
+    // No over a policy that is on: the answer wins (paying it writes the setting off).
+    expect(await quote(without, 64, { facts: { cameras: true }, cameras: false })).toMatchObject({ cameras: false, price: 4, owed: 0 });
+    // Paid WITH cameras (8): with no answer the camera price stays, whatever the policy says (P19), and nothing is owed.
     const withCams = await paidRig({ size: 64, cameras: true, pack: 20 });
     for (const [label, o] of [
-      ["no intent, policy off", {}],
-      ["addCameras false", { addCameras: false }],
-      ["addCameras true", { addCameras: true }],
-      ["policy on", { facts: { cameras: true } }],
+      ["no answer, policy off", {}],
+      ["no answer, policy on", { facts: { cameras: true } }],
+      ["Yes", { cameras: true }],
+      ["Yes, policy on", { cameras: true, facts: { cameras: true } }],
     ] as const) {
       expect(await quote(withCams, 64, o), label).toMatchObject({ cameras: true, price: 8, owed: 0, take: null, back: null });
     }
+    // ...and the answer No at the paid size is a move down: the camera price comes back, by P21 (bought credits here, nothing forfeited).
+    const off = await quote(withCams, 64, { cameras: false });
+    expect(off).toMatchObject({ size: 64, cameras: false, price: 4, owed: -4, take: null, back: { pack: 4, monthly: 0, forfeited: 0 }, refusal: null });
+    expect(await quote(withCams, 64, { cameras: false, facts: { cameras: true } }), "the answer beats a policy that is on").toMatchObject({ owed: -4 });
+  });
+
+  it("an answer a stage's own policy contradicts is refused by name (the division setting cannot carry it); no answer is never refused", async () => {
+    // Stage-level policies have no writer in the product (camera-writers-tripwire); this is the guard for a state written by hand.
+    let checked = 0;
+    for (const [stagePolicy, contradicted] of [["off", true], ["required", false]] as const) {
+      const r = await rig({ pack: 20 });
+      await seedStage(r.orgId, r.divisionId, "swiss", { rounds: 3 }, stagePolicy);
+      const e = await inTx((tx) => quoteLocked(tx, { orgId: r.orgId, divisionId: r.divisionId, size: 64, cameras: contradicted, rate: 0 }, FACTS0)).catch((x: unknown) => x);
+      expect(e, `stage ${stagePolicy}`).toMatchObject({ status: 409, code: "online_camera_set_by_stage" });
+      // the answer the stage already gives is quoted
+      expect(await quote(r, 64, { cameras: !contradicted }), `stage ${stagePolicy}: its own answer`).toMatchObject({ cameras: !contradicted, refusal: null });
+      // no answer: the quote is the division as it stands, never refused
+      expect((await quote(r, 64)).refusal, `stage ${stagePolicy}: no answer`).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a short balance answers take null and the true balance — no throw, nothing written; exactly enough takes", async () => {
@@ -1033,10 +1059,13 @@ describe.skipIf(!HAS_DB)("quoteLocked: covers — the paid package covers the di
     expect(await quote(r, 64, { facts: { held: 20, rounds: 8 } })).toMatchObject({ refusal: null, covers: true });
   });
 
-  it("covers is a fact about the PACKAGE, not about the size asked: the intent addCameras raises what is owed and never uncovers", async () => {
+  it("covers is a fact about the PACKAGE, not about the size asked: the camera answer moves what is owed and never uncovers", async () => {
     const r = await paidRig({ size: 64, cameras: false, pack: 20 });
-    // Asking to add cameras at its own size owes 4, and the package still covers a division whose policy needs none.
-    expect(await quote(r, 64, { addCameras: true })).toMatchObject({ owed: 4, covers: true });
+    // Answering Yes at its own size owes 4, and the package still covers a division whose policy needs none.
+    expect(await quote(r, 64, { cameras: true })).toMatchObject({ owed: 4, covers: true });
+    // Answering No over a package paid WITH the camera returns 4, and the package still covers (it holds the camera).
+    const held = await paidRig({ size: 64, cameras: true, pack: 20 });
+    expect(await quote(held, 64, { cameras: false, facts: { cameras: true } })).toMatchObject({ owed: -4, covers: true });
     // A policy that now needs cameras the package has not paid: not covered, and nothing but the cameras is missing.
     expect(await quote(r, 64, { facts: { cameras: true } })).toMatchObject({ owed: 4, refusal: null, covers: false });
     // Cameras paid: the policy on or off, the package covers.
@@ -1168,10 +1197,17 @@ describe.skipIf(!HAS_DB)("onlinePackageQuote: the read the price line and the re
     expect((await onlinePackageQuote(authFor(mine.orgId), mine.divisionId, 16)).size).toBe(16);
   });
 
-  it("a paid, frozen package answers `frozen` on the read too, and addCameras rides through", async () => {
+  it("a paid, frozen package answers `frozen` on the read too, and the camera answer rides through - either way, it is fixed like the size", async () => {
     const paid = await paidRig({ size: 32, cameras: false, pack: 10 });
     expect(await onlinePackageQuote(authFor(paid.orgId), paid.divisionId, 32, true)).toMatchObject({ cameras: true, price: 4, owed: 2 });
+    expect(await onlinePackageQuote(authFor(paid.orgId), paid.divisionId, 32, false)).toMatchObject({ cameras: false, price: 2, owed: 0 });
     await sql`update division_online_packages set frozen_at = now() where id = ${paid.packageId}`;
     expect((await onlinePackageQuote(authFor(paid.orgId), paid.divisionId, 64)).refusal).toBe("frozen");
+    for (const answer of [true, false]) {
+      const q = await onlinePackageQuote(authFor(paid.orgId), paid.divisionId, 32, answer);
+      expect(q.refusal, `answer ${answer} at the paid size`).toBe("frozen");
+      expect(q.take, `answer ${answer}`).toBeNull();
+      expect(q.back, `answer ${answer}`).toBeNull();
+    }
   });
 });

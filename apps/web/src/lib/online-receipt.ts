@@ -11,7 +11,7 @@
 //    check the price, rather than print figures that disagree with the button;
 //  * the confirm button reads the quote that is ON SCREEN (`confirmOf`), and a quote read for another size or camera choice is not it.
 import { OnlinePackageQuote } from "@/server/api-v1/schemas/online-package";
-import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, isOnlineSize, type OnlineSize } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, isOnlineSize, packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 import { onlineSizeOptions, type OnlineSizeDisabled } from "@/lib/online-size-options";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { STREAM_CREDIT_PACKS, type StreamPackSize } from "@/lib/stream-credit-packs";
@@ -84,22 +84,23 @@ export function confirmOf(quote: ReceiptQuote | null): Confirm {
   return quote.take === null && quote.shortBy === null && quote.back === null ? { kind: "change" } : { kind: "none", why: "inconsistent" };
 }
 
-/** What the organiser confirmed, as the pay door and the open-round `pay` take it (`OnlinePackagePayInput`): the size and the TOTAL
- *  THE RECEIPT SHOWED, at most the one `addCameras` intent, and on a move down the credits the receipt said would not come back. */
+/** What the organiser confirmed, as the pay door and the open-round `pay` take it (`OnlinePackagePayInput`): the size, the TOTAL
+ *  THE RECEIPT SHOWED, the Fair-play camera answer it showed (Task 15: every receipt sends it, and paying writes it to the division's
+ *  camera policy), and on a move down the credits the receipt said would not come back. */
 export interface PayBody {
   size: OnlineSize;
   expectedOwed: number;
-  addCameras?: true;
+  cameras: boolean;
   expectedForfeited?: number;
 }
 
 /** The body for the quote on screen. Null unless its confirm is a payment, a move down or a plain change: a quote that is loading,
- *  refused, short of credits or inconsistent sends nothing. `addCameras` is sent only when the organiser asked for it. */
-export function payBodyOf(quote: ReceiptQuote | null, addCameras: boolean): PayBody | null {
+ *  refused, short of credits or inconsistent sends nothing. The size, the total and the camera answer are all the QUOTE's own: the
+ *  quote on screen is the one read for the organiser's choice (the state machine's R1), so what is sent is what is shown. */
+export function payBodyOf(quote: ReceiptQuote | null): PayBody | null {
   const c = confirmOf(quote);
   if (quote === null || (c.kind !== "pay" && c.kind !== "moveDown" && c.kind !== "change")) return null;
-  const body: PayBody = { size: quote.size, expectedOwed: quote.owed };
-  if (addCameras) body.addCameras = true;
+  const body: PayBody = { size: quote.size, expectedOwed: quote.owed, cameras: quote.cameras };
   // The forfeit the receipt printed rides with a move down (a month turning between the receipt and the confirm changes which credits
   // return without changing `owed`); a payment forfeits nothing.
   if (c.kind === "moveDown") body.expectedForfeited = c.forfeited;
@@ -168,7 +169,7 @@ export interface SizeConsequence {
 export interface ReceiptSizeRow {
   size: OnlineSize;
   rounds: number;
-  /** The leaf's price at the division's camera state. */
+  /** The leaf's price at the receipt's camera answer. */
   price: number;
   /** On a paid row: the price less what the row's own size and camera state cost (> 0 pay, < 0 back). Null when unpaid. */
   diff: number | null;
@@ -180,7 +181,9 @@ export interface ReceiptSizeRow {
 }
 
 /** The ladder as the receipt lists it. `reference` is the paid size, or the stored size of an unpaid row. In `change` mode the paid size is
- *  not offered (a size is changed TO another); in `pay` and `payAndOpen` every size is, the stored one included. */
+ *  not offered (a size is changed TO another; the camera answer alone is quoted at it); in `pay` and `payAndOpen` every size is, the stored
+ *  one included. Every size is priced at EXACTLY the receipt's camera answer (`cameras`, Task 15) - a camera price already paid is not added
+ *  on top, because the answer is what the package will be - and a paid row's difference is against what it holds now. */
 export function receiptSizeRows(a: {
   mode: ReceiptMode;
   reference: OnlineSize;
@@ -190,14 +193,16 @@ export function receiptSizeRows(a: {
   cameras: boolean;
   paid: { size: OnlineSize; camerasPaid: boolean } | null;
 }): ReceiptSizeRow[] {
-  const options = onlineSizeOptions({ planCap: a.planCap, held: a.held, rounds: a.rounds, cameras: a.cameras, paid: a.paid });
+  // `paid: null` so the options price at the answer alone (they would otherwise add a paid camera, as the size select does).
+  const options = onlineSizeOptions({ planCap: a.planCap, held: a.held, rounds: a.rounds, cameras: a.cameras, paid: null });
+  const holds = a.paid === null ? null : packagePrice(a.paid.size, a.paid.camerasPaid);
   return options
     .filter((o) => !(a.mode === "change" && o.size === a.reference))
     .map((o): ReceiptSizeRow => ({
       size: o.size,
       rounds: o.rounds,
       price: o.price,
-      diff: o.diff,
+      diff: holds === null ? null : o.price - holds,
       disabled: o.disabled,
       reference: o.size === a.reference,
       consequence: o.disabled === null && o.size < a.reference ? { held: a.held, size: o.size } : null,

@@ -54,13 +54,13 @@ export function OpenPayReceipt(p: OpenPayReceiptProps) {
       failureWords={p.failureWords}
       readQuote={(choice: ReceiptChoice) => readPackageQuote(divisionId, choice)}
       onConfirm={p.onPay}
-      renderBuy={({ pack, size: shortSize }) =>
+      renderBuy={({ pack, size: shortSize, cameras }) =>
         p.buy === null ? (
           <a href={p.buyMoreHref} className="font-medium text-purple-700 underline" data-testid="online-receipt-buy-link">
             {msg("stream.phone.buyMore")}
           </a>
         ) : (
-          <BuyStreamCredits orgId={p.buy.orgId} currency={p.buy.currency} preselect={pack} returnTo={{ divisionId, size: shortSize }} />
+          <BuyStreamCredits orgId={p.buy.orgId} currency={p.buy.currency} preselect={pack} returnTo={{ divisionId, size: shortSize, cameras }} />
         )
       }
       onClose={p.onClose}

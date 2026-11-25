@@ -6,7 +6,7 @@ import "server-only";
 import type { sql, Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isOnlineSize } from "@/lib/online-chess-package";
-import { effectivePolicy, readCameraPolicy } from "@/server/external-play/camera-policy";
+import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import type { PackageRow } from "./types";
 
 interface RawPackageRow {
@@ -87,8 +87,10 @@ function toPackageRow(r: RawPackageRow): PackageRow {
  *  `effectivePolicy`), so a competition on `required` with its division set to `off` is "without", and a division set to
  *  `off` with one stage on `required` is "with". One row per stage; the left join answers a division with no stage as one row
  *  whose stage level is null, which is exactly "no stage: judge the division". A division that does not exist is a 404, never
- *  a quiet `false`: a quote for nothing is a bug upstream. */
-export async function derivedCameras(db: Tx | typeof sql, divisionId: string): Promise<boolean> {
+ *  a quiet `false`: a quote for nothing is a bug upstream.
+ *  `divisionPolicy` asks the same question of the division as it WOULD stand with its OWN policy set to that value (Task 15: the
+ *  receipt's Fair-play camera choice is written to the division's own policy, and the quote judges the choice before the write). */
+export async function derivedCameras(db: Tx | typeof sql, divisionId: string, divisionPolicy?: CameraPolicy): Promise<boolean> {
   const rows = await db<{ stage: unknown; division: unknown; competition: unknown }[]>`
     select s.camera_policy as stage, d.camera_policy as division, c.camera_policy as competition
       from divisions d
@@ -97,7 +99,12 @@ export async function derivedCameras(db: Tx | typeof sql, divisionId: string): P
      where d.id = ${divisionId}`;
   if (rows.length === 0) throw new HttpError(404, "division not found");
   return rows.some(
-    (r) => effectivePolicy({ stage: readCameraPolicy(r.stage), division: readCameraPolicy(r.division), competition: readCameraPolicy(r.competition) }) !== "off",
+    (r) =>
+      effectivePolicy({
+        stage: readCameraPolicy(r.stage),
+        division: divisionPolicy ?? readCameraPolicy(r.division),
+        competition: readCameraPolicy(r.competition),
+      }) !== "off",
   );
 }
 

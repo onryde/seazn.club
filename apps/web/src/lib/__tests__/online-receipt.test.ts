@@ -123,33 +123,32 @@ describe("confirmOf: the button the quote on screen arms", () => {
 });
 
 describe("payBodyOf: what the confirm sends is what the receipt showed", () => {
-  it("a payment sends the size and the total shown, and nothing else", () => {
-    expect(payBodyOf(quoteOf({ size: 64, monthly: 20 }), false)).toEqual({ size: 64, expectedOwed: 4 });
+  it("a payment sends the size, the total shown and the camera answer, and nothing else", () => {
+    expect(payBodyOf(quoteOf({ size: 64, monthly: 20 }))).toEqual({ size: 64, expectedOwed: 4, cameras: false });
   });
 
-  it("addCameras rides only when the organiser asked for it", () => {
-    const q = quoteOf({ size: 32, cameras: true, monthly: 20 });
-    expect(payBodyOf(q, true)).toEqual({ size: 32, expectedOwed: 4, addCameras: true });
-    expect(payBodyOf(q, false)).toEqual({ size: 32, expectedOwed: 4 });
-    expect("addCameras" in payBodyOf(q, false)!).toBe(false);
+  it("the camera answer is the quote's own, both ways (Task 15: every receipt answers it, and paying writes it)", () => {
+    expect(payBodyOf(quoteOf({ size: 32, cameras: true, monthly: 20 }))).toEqual({ size: 32, expectedOwed: packagePrice(32, true), cameras: true });
+    expect(payBodyOf(quoteOf({ size: 32, cameras: false, monthly: 20 }))).toEqual({ size: 32, expectedOwed: packagePrice(32, false), cameras: false });
   });
 
   it("a move down carries the negative total and the forfeit the receipt printed - including 0", () => {
     const withForfeit = quoteOf({ size: 32, cameras: true, paid: { size: 64, camerasPaid: true }, forfeited: 1, backMonthly: 1 });
-    expect(payBodyOf(withForfeit, false)).toEqual({ size: 32, expectedOwed: -4, expectedForfeited: 1 });
+    expect(payBodyOf(withForfeit)).toEqual({ size: 32, expectedOwed: -4, cameras: true, expectedForfeited: 1 });
     const none = quoteOf({ size: 32, paid: { size: 64, camerasPaid: false }, backMonthly: 1 });
-    expect(payBodyOf(none, false)).toEqual({ size: 32, expectedOwed: -2, expectedForfeited: 0 });
+    expect(payBodyOf(none)).toEqual({ size: 32, expectedOwed: -2, cameras: false, expectedForfeited: 0 });
   });
 
   it("a payment never carries a forfeit", () => {
-    expect("expectedForfeited" in payBodyOf(quoteOf({ size: 32, monthly: 20 }), false)!).toBe(false);
+    expect("expectedForfeited" in payBodyOf(quoteOf({ size: 32, monthly: 20 }))!).toBe(false);
   });
 
   it("sends nothing for a quote that is loading, refused, short of credits or inconsistent", () => {
-    expect(payBodyOf(null, false)).toBeNull();
-    expect(payBodyOf(quoteOf({ size: 32, monthly: 20, refusal: "plan" }), false)).toBeNull();
-    expect(payBodyOf(quoteOf({ size: 32, monthly: 1 }), false)).toBeNull(); // short: that is Buy credits
-    expect(payBodyOf({ ...quoteOf({ size: 32, monthly: 20 }), take: { monthly: 0, pack: 0 } }, false)).toBeNull();
+    expect(payBodyOf(null)).toBeNull();
+    expect(payBodyOf(quoteOf({ size: 32, monthly: 20, refusal: "plan" }))).toBeNull();
+    expect(payBodyOf(quoteOf({ size: 32, monthly: 20, refusal: "frozen" }))).toBeNull(); // from round 1 the answer is fixed, like the size
+    expect(payBodyOf(quoteOf({ size: 32, monthly: 1 }))).toBeNull(); // short: that is Buy credits
+    expect(payBodyOf({ ...quoteOf({ size: 32, monthly: 20 }), take: { monthly: 0, pack: 0 } })).toBeNull();
   });
 
   it("every body it builds is one the pay door's own strict schema accepts (sweep over sizes, cameras and the three kinds)", () => {
@@ -157,9 +156,10 @@ describe("payBodyOf: what the confirm sends is what the receipt showed", () => {
     for (const size of ONLINE_SIZES) {
       for (const cameras of [false, true]) {
         const bodies = [
-          payBodyOf(quoteOf({ size, cameras, monthly: 100 }), false),
-          payBodyOf(quoteOf({ size, cameras: true, monthly: 100 }), true),
-          size === 256 ? null : payBodyOf(quoteOf({ size, cameras, paid: { size: 256, camerasPaid: cameras }, forfeited: 1, backMonthly: 1 }), false),
+          payBodyOf(quoteOf({ size, cameras, monthly: 100 })),
+          // the camera answer alone at a paid size, either way
+          payBodyOf(quoteOf({ size, cameras, paid: { size, camerasPaid: !cameras }, monthly: 100 })),
+          size === 256 ? null : payBodyOf(quoteOf({ size, cameras, paid: { size: 256, camerasPaid: cameras }, forfeited: 1, backMonthly: 1 })),
         ];
         for (const body of bodies) {
           if (body === null) continue;
@@ -283,9 +283,24 @@ describe("receiptSizeRows: the sizes the receipt lists", () => {
     expect(rows.map((r) => r.diff)).toEqual([-3, -2, 4, 12]);
   });
 
-  it("a paid camera prices every other size at the camera rate (P19)", () => {
-    const rows = receiptSizeRows({ mode: "change", ...FACTS, paid: { size: 32, camerasPaid: true } });
-    for (const r of rows) expect(r.diff, String(r.size)).toBe(packagePrice(r.size, true) - packagePrice(32, true));
+  it("every size is priced at EXACTLY the receipt's camera answer, against what the package holds (P19 as amended by Task 15)", () => {
+    let checked = 0;
+    for (const camerasPaid of [false, true]) {
+      for (const cameras of [false, true]) {
+        const rows = receiptSizeRows({ mode: "change", ...FACTS, cameras, paid: { size: 32, camerasPaid } });
+        for (const r of rows) {
+          expect(r.price, `${r.size} ${camerasPaid}/${cameras}`).toBe(packagePrice(r.size, cameras));
+          expect(r.diff, `${r.size} ${camerasPaid}/${cameras}`).toBe(packagePrice(r.size, cameras) - packagePrice(32, camerasPaid));
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(4 * (ONLINE_SIZES.length - 1));
+    // a paid camera with the answer No: a size up costs less than with Yes - the camera price comes back with the move (it was never kept)
+    const no = receiptSizeRows({ mode: "change", ...FACTS, reference: 32, cameras: false, paid: { size: 32, camerasPaid: true } });
+    expect(no.map((r) => r.size), "the paid size is not listed").toEqual([16, 64, 128, 256]);
+    expect(no.find((r) => r.size === 64)!.diff).toBe(packagePrice(64, false) - packagePrice(32, true));
+    expect(no.find((r) => r.size === 64)!.diff).toBeLessThan(packagePrice(64, true) - packagePrice(32, true));
   });
 });
 

@@ -66,25 +66,30 @@ describe("onlineReceiptRequest: oc=pay reopens the receipt", () => {
   });
 });
 
-// Fix round 3: a short-balance purchase for the CAMERA of a paid package comes back with the intent in the address (`cameras=1`), so the page can
-// reopen the camera receipt - the size alone is the paid size, which names nothing to pay.
-describe("onlineReceiptRequest: the camera intent rides the return (`cameras=1`)", () => {
-  it("cameras=1 is the intent, beside the size; absent otherwise (the key is not even present)", () => {
+// Task 15: a short-balance purchase comes back with the receipt's Fair-play camera ANSWER in the address (`cameras=1` Yes, `cameras=0` No), so the page
+// reopens the receipt on the answer the buyer left with - either way (at the paid size, the answer alone is what names a change).
+describe("onlineReceiptRequest: the camera answer rides the return (`cameras=1` / `cameras=0`)", () => {
+  it("cameras=1 is Yes and cameras=0 is No, beside the size; absent otherwise (the key is not even present)", () => {
     expect(onlineReceiptRequest({ oc: "pay", size: "64", cameras: "1" })).toEqual({ size: 64, key: "", cameras: true });
     expect(onlineReceiptRequest({ oc: "pay", cameras: "1" })).toEqual({ size: null, key: "", cameras: true });
+    expect(onlineReceiptRequest({ oc: "pay", size: "64", cameras: "0" })).toEqual({ size: 64, key: "", cameras: false });
+    expect(onlineReceiptRequest({ oc: "pay", cameras: "0" })).toEqual({ size: null, key: "", cameras: false });
     const plain = onlineReceiptRequest({ oc: "pay", size: "64" })!;
-    expect("cameras" in plain, "no intent is no key").toBe(false);
+    expect("cameras" in plain, "no answer is no key").toBe(false);
   });
 
-  it("only the exact `1` is the intent (sweep over the ways it can be spelled)", () => {
-    const not = ["0", "", "true", "yes", "01", "1 ", " 1", "1.0", "on", "TRUE"];
+  it("only the exact `1` and `0` are answers (sweep over the ways they can be spelled)", () => {
+    const not = ["", "true", "false", "yes", "no", "01", "00", "1 ", " 0", "1.0", "on", "TRUE"];
     for (const raw of not) expect("cameras" in onlineReceiptRequest({ oc: "pay", size: "64", cameras: raw })!, JSON.stringify(raw)).toBe(false);
-    for (const raw of [["1"], ["1", "1"], 1, true, undefined, null]) expect("cameras" in onlineReceiptRequest({ oc: "pay", size: "64", cameras: raw })!, JSON.stringify(raw)).toBe(false);
-    expect(not.length + 6, "anti-vacuity: every spelling was checked").toBe(16);
+    const odd = [["1"], ["0"], ["1", "1"], 1, 0, true, false, undefined, null];
+    for (const raw of odd) expect("cameras" in onlineReceiptRequest({ oc: "pay", size: "64", cameras: raw })!, JSON.stringify(raw)).toBe(false);
+    expect(not.length + odd.length, "anti-vacuity: every spelling was checked").toBe(21);
   });
 
-  it("a camera intent without oc=pay opens nothing (it is the receipt's, never a page's own switch)", () => {
-    expect(onlineReceiptRequest({ cameras: "1" })).toBeNull();
-    expect(onlineReceiptRequest({ size: "64", cameras: "1" })).toBeNull();
+  it("a camera answer without oc=pay opens nothing (it is the receipt's, never a page's own switch)", () => {
+    for (const cameras of ["1", "0"]) {
+      expect(onlineReceiptRequest({ cameras })).toBeNull();
+      expect(onlineReceiptRequest({ size: "64", cameras })).toBeNull();
+    }
   });
 });

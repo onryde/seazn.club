@@ -169,13 +169,16 @@ export async function gateFirstOpen(
   }
 
   const row = await liveOrRefuse(tx, a.divisionId, true);
-  const quote = await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: row.size, rate: money.rate }, facts);
+  // A payment's camera answer may have just written the division's camera policy (Task 15): the cover is asked of the division as
+  // it NOW stands, so its facts are read again after a `pay`. (Places held and rounds do not move here; the camera can.)
+  const standing = a.pay === undefined ? facts : await readPackageFacts(tx, a.divisionId, money.planCap);
+  const quote = await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: row.size, rate: money.rate }, standing);
   if (!quote.covers) {
-    const fits = quote.refusal === null ? null : smallestHolding(facts);
+    const fits = quote.refusal === null ? null : smallestHolding(standing);
     const next = fits === null || fits === row.size
       ? null
-      : await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: fits, rate: money.rate }, facts);
-    throw new HttpError(402, unpaidMessage(row, quote, next, facts), ONLINE_PACKAGE_CODES.unpaid, { quote, next, invitable: a.invitable });
+      : await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: fits, rate: money.rate }, standing);
+    throw new HttpError(402, unpaidMessage(row, quote, next, standing), ONLINE_PACKAGE_CODES.unpaid, { quote, next, invitable: a.invitable });
   }
   await freezeOnlinePackage(tx, row.id);
   return { asked: true, movedUp, payment, event };

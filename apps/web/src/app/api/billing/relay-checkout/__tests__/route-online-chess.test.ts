@@ -218,28 +218,31 @@ describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, or
     expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), "the settings return opens no receipt").toBeNull();
   });
 
-  // Fix round 3: the CAMERA of a paid package, bought with a short balance, must come back to a receipt. The body carries `cameras: true`; the route writes
-  // `&cameras=1` after the size; the page's own parser reads it back. Producer through consumer, no hand-built URL.
-  it("a camera purchase's return carries `cameras=1` after the size, and the page's parser reads the intent back; no intent writes none; the intent is the division arm's alone and only `true`", async () => {
+  // Fix round 3, Task 15: the receipt's Fair-play camera ANSWER, bought with a short balance, must come back to the receipt - Yes and No both. The
+  // body carries `cameras`; the route writes `&cameras=1` or `&cameras=0` after the size; the page's own parser reads it back. Producer through
+  // consumer, no hand-built URL.
+  it("a receipt's return carries its camera answer (`cameras=1` / `cameras=0`) after the size, and the page's parser reads it back; no answer writes none; the answer is the division arm's alone and only a boolean", async () => {
     const s = await scene();
     signIn(s.o.orgId, s.o.auth.userId!);
     const queryOf = (returnUrl: string) => Object.fromEntries(new URL(returnUrl).searchParams);
     const base = `/o/${s.orgSlug}/c/${s.compSlug}/d/${s.divSlug}?${TAIL}`;
     let read = 0;
     for (const size of LADDER) {
-      createRelayCheckoutMock.mockClear();
-      expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size, cameras: true })).status).toBe(200);
-      expect(lastArgs().returnUrl.endsWith(`${base}&size=${size}&cameras=1`), `size ${size}: size, then the intent, last`).toBe(true);
-      expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), `size ${size}`).toEqual({ size, key: "", cameras: true });
-      read += 1;
+      for (const cameras of [true, false]) {
+        createRelayCheckoutMock.mockClear();
+        expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size, cameras })).status).toBe(200);
+        expect(lastArgs().returnUrl.endsWith(`${base}&size=${size}&cameras=${cameras ? 1 : 0}`), `size ${size} ${cameras}: size, then the answer, last`).toBe(true);
+        expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), `size ${size} ${cameras}`).toEqual({ size, key: "", cameras });
+        read += 1;
+      }
     }
-    expect(read, "anti-vacuity: every ladder size carried the intent through the parser").toBe(LADDER.length);
+    expect(read, "anti-vacuity: every ladder size carried both answers through the parser").toBe(LADDER.length * 2);
     createRelayCheckoutMock.mockClear();
     expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size: 64 })).status).toBe(200);
     expect(lastArgs().returnUrl, "no intent, no key").not.toContain("cameras");
-    // only the literal `true`, only on the division arm
+    // only a boolean, only on the division arm
     createRelayCheckoutMock.mockClear();
-    for (const bad of [false, "1", 1, "true", null]) {
+    for (const bad of ["1", 1, "true", "0", 0, null]) {
       expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size: 64, cameras: bad })).status, JSON.stringify(bad)).toBe(400);
     }
     expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "settings", cameras: true })).status, "the settings arm takes no intent").toBe(400);

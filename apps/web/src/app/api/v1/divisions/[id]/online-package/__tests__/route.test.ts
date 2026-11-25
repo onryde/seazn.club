@@ -162,9 +162,11 @@ describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
     expect(again.status).toBe(200);
     expect(OnlinePackagePayResult.parse(again.body.data).applied).toBe(false);
     expect((await written(r)).row.credits_paid, "one debit").toBe(PRICE[32]);
-    // The camera intent over the query string.
-    const cams = await read(await get(r.divisionId, "size=32&addCameras=true"));
+    // The camera answer over the query string (Task 15): Yes prices the camera, No over a package paid without it owes nothing.
+    const cams = await read(await get(r.divisionId, "size=32&cameras=true"));
     expect(OnlinePackageQuote.parse(cams.body.data)).toMatchObject({ cameras: true, owed: PRICE.cams32 - PRICE[32] });
+    const no = await read(await get(r.divisionId, "size=32&cameras=false"));
+    expect(OnlinePackageQuote.parse(no.body.data)).toMatchObject({ cameras: false, owed: 0 });
   });
 
   it("a stale total is 409 ONLINE_QUOTE_CHANGED carrying the fresh quote; a short balance is 402 ONLINE_CHESS_NO_CREDITS with owed and balance", async () => {
@@ -186,17 +188,17 @@ describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
     expect(await written(poor), "nothing written, not even the month's grant").toMatchObject({ ledger: 0, row: { paid_at: null } });
   });
 
-  it("the body is strict: `cameras`, an off-ladder size, a negative or fractional figure, a missing total — 400, nothing written", async () => {
+  it("the body is strict: the retired `addCameras`, an off-ladder size, a negative or fractional figure, a missing total — 400, nothing written", async () => {
     const r = await rig();
     authState.userId = r.ownerId;
     const bodies: [string, unknown][] = [
-      ["a body carrying `cameras`", { size: 32, expectedOwed: PRICE[32], cameras: false }],
+      ["a body carrying the retired `addCameras`", { size: 32, expectedOwed: PRICE[32], addCameras: true }],
       ["an off-ladder size", { size: 20, expectedOwed: PRICE[32] }],
       ["a size as a string", { size: "32", expectedOwed: PRICE[32] }],
       ["a negative expectedForfeited", { size: 32, expectedOwed: PRICE[32], expectedForfeited: -1 }],
       ["a fractional expectedOwed", { size: 32, expectedOwed: 1.5 }],
       ["no expectedOwed", { size: 32 }],
-      ["addCameras not a boolean", { size: 32, expectedOwed: PRICE[32], addCameras: "yes" }],
+      ["cameras not a boolean", { size: 32, expectedOwed: PRICE[32], cameras: "yes" }],
       ["an expectedOwed above the dearest package", { size: 256, expectedOwed: 33 }],
       ["an expectedOwed below minus the dearest package", { size: 16, expectedOwed: -33 }],
     ];
@@ -205,12 +207,12 @@ describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
       expect(res.status, label).toBe(400);
       expect(res.body.error?.code, label).toBe("VALIDATION");
     }
-    const queries = ["size=20", "", "size=abc", "size=32&addCameras=yes"];
+    const queries = ["size=20", "", "size=abc", "size=32&cameras=yes"];
     for (const q of queries) expect((await get(r.divisionId, q)).status, `?${q}`).toBe(400);
     expect(await written(r)).toMatchObject({ ledger: 1, row: { credits_paid: 0, paid_at: null } });
     expect(bodies.length + queries.length, "bad requests").toBe(13);
-    // The positive pair: the same body without `cameras` pays.
-    expect((await post(r.divisionId, { size: 32, expectedOwed: PRICE[32] })).status).toBe(200);
+    // The positive pair: the same body with the answer as a boolean pays.
+    expect((await post(r.divisionId, { size: 32, expectedOwed: PRICE[32], cameras: false })).status).toBe(200);
   });
 
   it("organisers only: a viewer and a stranger are refused on both doors and write nothing; an admin pays", async () => {

@@ -1,7 +1,8 @@
 import "server-only";
-// server/usecases/online-package/pay.ts — pay, upgrade, add cameras and move down (spec 2026-11-23-online-chess-credits-design.md
-// §7.3, §7.4 item 3; decisions 7, 14, 16; P6, P13, P19, P21). The money-moving door: the organiser confirmed a quote (Task 4's
-// `PackageQuote`); this re-asks it under the locks and turns it into ledger rows and package-row state, exactly once.
+// server/usecases/online-package/pay.ts — pay, upgrade, the Fair-play camera on or off, and move down (spec
+// 2026-11-23-online-chess-credits-design.md §7.3, §7.4 item 3, §8.4-§8.6; decisions 7, 14, 16; P6, P13, P19 as amended 2026-11-25,
+// P21). The money-moving door: the organiser confirmed a quote (Task 4's `PackageQuote`); this re-asks it under the locks and turns
+// it into ledger rows and package-row state, exactly once.
 //
 //  * THE LOCKS, in the spec's order (§7.3, §7.4): the `division:` advisory lock, then the org money lock (`lockOrg`), then the
 //    package row `for update`. On the privileged `sql.begin`, as every ledger writer runs (§7.3's table: "Pay, upgrade: its own
@@ -25,8 +26,17 @@ import "server-only";
 //    refunds are never flag-gated, and the billing freeze keeps writes that cost nothing.
 //  * After the write, the row's books are CHECKED, both invariants of §7.1, so a corrupt row is a named 500 that rolls the whole
 //    payment back rather than a payment that compounds it.
+//  * THE CAMERA ANSWER (Task 15, owner 2026-11-25). Every receipt asks "Fair-play camera: Yes / No" and sends the answer
+//    (`cameras`). The quote prices it as given, and the payment WRITES it to the division's own camera policy (the "Camera during
+//    online play" setting, `writeDivisionCameraChoice`: the division save's own gate and audit) on this transaction, after the
+//    package row, so the receipt and the settings never disagree and a "No" is never cheaper without the camera actually going
+//    off. Turning the camera off on a package paid with it, before the freeze, is a move down: the difference comes back by P21,
+//    exactly as a smaller size's does. After the write the division is asked again (`derivedCameras`) and must say the answer, or
+//    the whole payment rolls back (a named 500: "cannot happen" once the quote has checked the answer fits). A body with no answer
+//    keeps the camera state as it stands and writes no policy.
 //  * Then the stored registration capacity follows the size down (§7.4 item 2, §11), and a move down runs the settle step (§7.5)
 //    on the same transaction, under the same money lock.
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { getLimit } from "@/lib/entitlements";
@@ -39,23 +49,31 @@ import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { assertNotFrozen, frozenCompetitionIds } from "@/server/usecases/entitlement-freeze";
 import { onlineChessDisabled, onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { log } from "@/server/logger";
+import { writeDivisionCameraChoice } from "@/server/usecases/division-camera-policy";
 import { lockOrg, streamMonthlyRate } from "@/server/usecases/stream-credits";
 import { capturePackageEvent, payEvent } from "./events";
 import { formatNotSupported } from "./format";
 import { debitForPackage, refundForPackage } from "./ledger";
 import { quoteLocked, readPackageFacts, type PackageQuote } from "./quote";
-import { livePackage } from "./read";
+import { derivedCameras, livePackage } from "./read";
 import { settleReversals } from "./settle";
 import type { PackageFacts, PackageRow } from "./types";
 
-/** What the organiser confirmed: a size, the total the receipt showed (positive to pay, negative to return), and at most the one
- *  intent `addCameras` (which only ever raises the price, §7.4). On a move down, optionally the credits the receipt said would NOT
- *  come back (`back.forfeited`). The server derives everything else. */
-export type PayInput = { size: OnlineSize; expectedOwed: number; addCameras?: boolean; expectedForfeited?: number };
+/** What the organiser confirmed: a size, the total the receipt showed (positive to pay, negative to return), and the Fair-play
+ *  camera answer the receipt showed (`cameras`; absent keeps the camera state as it stands). On a move down, optionally the credits
+ *  the receipt said would NOT come back (`back.forfeited`). The server derives everything else. */
+export type PayInput = { size: OnlineSize; expectedOwed: number; cameras?: boolean; expectedForfeited?: number };
 
 /** `applied` false: the row was already at the target and nothing was written. `quote` is the quote the server acted on (asked
- *  under the locks, before the write). `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered. */
-export type PayResult = { applied: boolean; quote: PackageQuote; package: PackageRow; capacityLoweredTo: number | null };
+ *  under the locks, before the write). `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered.
+ *  `cameraPolicy`: the division's own camera policy the camera answer wrote (`from` → `to`), or null when it already said it. */
+export type PayResult = {
+  applied: boolean;
+  quote: PackageQuote;
+  package: PackageRow;
+  capacityLoweredTo: number | null;
+  cameraPolicy: { from: CameraPolicy | null; to: CameraPolicy } | null;
+};
 
 /** The settle step of §7.5: re-runs the netted attribution of the org's reversed packs after a return, on the caller's
  *  transaction and under its money lock. `settleReversals` unless a test injects another (to watch it run, or make it fail). */
@@ -134,12 +152,12 @@ export async function payOnlinePackageInTx(
     throw new HttpError(500, `Online Chess division ${a.divisionId} has no live package; nothing was paid`, "online_package_missing");
   }
   const quote = await quoteLocked(
-    tx, { orgId: a.orgId, divisionId: a.divisionId, size: a.size, addCameras: a.addCameras, rate: money.rate }, facts,
+    tx, { orgId: a.orgId, divisionId: a.divisionId, size: a.size, cameras: a.cameras, rate: money.rate }, facts,
   );
 
   // 1. Already at the target: nothing to do, whatever was confirmed.
   if (row.paidAt !== null && row.size === a.size && row.camerasPaid === quote.cameras) {
-    return { applied: false, quote, package: row, capacityLoweredTo: null };
+    return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy: null };
   }
   if (quote.owed > 0) money.beforeCharge?.();
   // 2. The quote the organiser confirmed is not the quote the server holds now.
@@ -167,8 +185,8 @@ export async function payOnlinePackageInTx(
     await refundForPackage(tx, { orgId: a.orgId, packageId: row.id, pack: back.pack, monthly: back.monthly, size: a.size });
     returned = back.pack + back.monthly;
   }
-  // The row in ONE statement (V560's CHECKs hold per statement). `cameras_paid` is the quote's camera figure, which already
-  // includes a camera price paid before (P19: never lowered). paid_at and paid_by keep the FIRST payment. Written only while
+  // The row in ONE statement (V560's CHECKs hold per statement). `cameras_paid` is the quote's camera figure: the organiser's answer,
+  // or (no answer) the state as it stands, a camera price paid before included. paid_at and paid_by keep the FIRST payment. Written only while
   // the row is still writable (not frozen, not refunded) and asserted to be exactly that one row: the row is locked and the
   // quote refused a frozen one, so a miss is a writer that changed it on this transaction — a named 500, never a silent payment.
   const written = await tx`
@@ -188,11 +206,22 @@ export async function payOnlinePackageInTx(
   // The row is locked, live and was just written: it is still the division's live package.
   const after = (await livePackage(tx, a.divisionId))!;
   await assertBooks(tx, after);
+  // The camera answer, written to the division's own setting in this transaction (Task 15), then asked back of the division.
+  const cameraPolicy = a.cameras === undefined
+    ? null
+    : await writeDivisionCameraChoice(tx, { divisionId: a.divisionId, orgId: a.orgId, actorId: a.userId, cameras: a.cameras });
+  if (a.cameras !== undefined && (await derivedCameras(tx, a.divisionId)) !== a.cameras) {
+    throw new HttpError(
+      500,
+      `Online Chess package ${row.id}: the division does not say the Fair-play camera answer (${a.cameras ? "on" : "off"}) after writing it; nothing was paid`,
+      "online_package_camera_not_written",
+    );
+  }
 
   const capacityLoweredTo = await clampCapacity(tx, a.divisionId, a.size);
   // The settle step (§7.5) on EVERY move down, the route's and Task 9's pay-and-open alike: the default is the real one.
   if (quote.owed < 0) await (deps.settle ?? settleReversals)(tx, a.orgId);
-  return { applied: true, quote, package: after, capacityLoweredTo };
+  return { applied: true, quote, package: after, capacityLoweredTo, cameraPolicy };
 }
 
 /** The first stage kind of the division that online play does not allow (P16), or null. The pay door's format gate on a charge, and
@@ -204,7 +233,7 @@ export async function refusedStageKind(tx: Tx, divisionId: string): Promise<stri
 }
 
 /** The pay door: an organiser of the division's org (owner or admin, signed in — the payment names who paid) pays for, upgrades,
- *  adds cameras to, or moves down the division's Online Chess package. Never an API key, a device link or a Match Day code. */
+ *  turns the Fair-play camera on or off on, or moves down the division's Online Chess package. Never an API key, a device link or a Match Day code. */
 export async function payOnlinePackage(auth: AuthCtx, divisionId: string, input: PayInput, deps: PayDeps = {}): Promise<PayResult> {
   if (auth.via !== "session" || auth.userId === null) {
     throw new HttpError(403, "Paying for Online Chess needs a signed-in organiser");

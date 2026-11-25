@@ -5,6 +5,7 @@
 import { z } from "zod";
 // The size ladder. The leaf is import-free, so the standalone generator loads it like the other modules' lib imports.
 import { ONLINE_SIZES, packagePrice } from "../../../lib/online-chess-package.ts";
+import { CAMERA_POLICIES } from "../../../lib/camera-policy.ts";
 import { Uuid } from "./common.ts";
 
 /** A size on the ladder (16, 32, 64, 128, 256): the entrant limit an Online Chess package buys. Anything else is a 400. */
@@ -15,30 +16,31 @@ export const OnlineSizeS = z.literal(ONLINE_SIZES);
  *  |owed| never exceeds it. */
 export const ONLINE_MAX_OWED = Math.max(...ONLINE_SIZES.flatMap((s) => [packagePrice(s, false), packagePrice(s, true)]));
 
-/** GET /divisions/{id}/online-package: the size asked about, and the one intent the client may send (`addCameras`, which only
- *  ever raises the price). Query values are strings: `size` is coerced to the ladder, `addCameras` is `true` or `false`. */
+/** GET /divisions/{id}/online-package: the size asked about, and the organiser's Fair-play camera answer (`cameras`, Task 15): the
+ *  receipt's Yes or No, priced as given (paying writes it to the division's camera policy). Absent: the division's camera state as it
+ *  stands. Query values are strings: `size` is coerced to the ladder, `cameras` is `true` or `false` (absent stays absent). */
 export const OnlinePackageQuoteQuery = z.object({
   size: z.coerce.number().pipe(OnlineSizeS),
-  addCameras: z.enum(["true", "false"]).optional().transform((v) => v === "true"),
+  cameras: z.enum(["true", "false"]).optional().transform((v) => (v === undefined ? undefined : v === "true")),
 });
 export type OnlinePackageQuoteQuery = z.infer<typeof OnlinePackageQuoteQuery>;
 
 /** POST /divisions/{id}/online-package: what the organiser confirmed. A size, the total the receipt showed (positive to pay,
- *  negative to return), at most the `addCameras` intent, and — on a move down — the credits the receipt said would NOT come
- *  back. Strict: the server derives the camera state, the rounds and the places itself, so a body carrying `cameras` (or any
- *  other field) is refused rather than ignored.
+ *  negative to return), the Fair-play camera answer the receipt showed (`cameras`: paying writes it to the division's camera policy
+ *  in the same transaction; absent keeps the camera state as it stands), and — on a move down — the credits the receipt said would
+ *  NOT come back. Strict: the server derives the rounds and the places itself, so any other field is refused rather than ignored.
  *  The published examples are whole bodies, priced from the leaf's table (review m9: the field-by-field example put a forfeit
  *  beside a positive total, a body no receipt shows): a payment (16 with cameras), and a move down (32 with cameras paid,
  *  moved to 16 with cameras: the difference comes back, nothing forfeited). The first is the one the document shows. */
 export const ONLINE_PAY_EXAMPLES = [
-  { size: 16, expectedOwed: packagePrice(16, true), addCameras: true },
-  { size: 16, expectedOwed: packagePrice(16, true) - packagePrice(32, true), expectedForfeited: 0 },
+  { size: 16, expectedOwed: packagePrice(16, true), cameras: true },
+  { size: 16, expectedOwed: packagePrice(16, true) - packagePrice(32, true), cameras: true, expectedForfeited: 0 },
 ] as const;
 export const OnlinePackagePayInput = z
   .object({
     size: OnlineSizeS,
     expectedOwed: z.number().int().min(-ONLINE_MAX_OWED).max(ONLINE_MAX_OWED),
-    addCameras: z.boolean().optional(),
+    cameras: z.boolean().optional(),
     /** A forfeit is included credits a package held, so never more than its price: bounded by the dearest one, as `owed` is. Sent
      *  only on a move down (a negative `expectedOwed`). */
     expectedForfeited: z.number().int().min(0).max(ONLINE_MAX_OWED).optional(),
@@ -97,10 +99,13 @@ export const OnlineSaveResultS = z.object({
 });
 
 /** `applied` false: the package was already at the target and nothing was written. `quote`: the quote the server acted on.
- *  `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered to it. */
+ *  `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered to it. `cameraPolicy`: the division's own
+ *  camera policy the payment's camera answer wrote (`from`, null = it inherited the competition's; `to`), or null when the division
+ *  already said the answer (or no answer was sent). */
 export const OnlinePackagePayResult = z.object({
   applied: z.boolean(),
   quote: OnlinePackageQuote,
   package: OnlinePackageRow,
   capacityLoweredTo: z.number().int().nullable(),
+  cameraPolicy: z.object({ from: z.enum(CAMERA_POLICIES).nullable(), to: z.enum(CAMERA_POLICIES) }).nullable(),
 });

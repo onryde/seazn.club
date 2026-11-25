@@ -18,8 +18,9 @@
 //                usecases/competitions.ts's `update competitions set ${q(values, ...cols)}`);
 //   orm-write    `.update(stages|competitions)` / `.insert(...)` / `.insertInto("...")` (drizzle, kysely) followed, to the end of its
 //                statement, by camera_policy / cameraPolicy.
-// `divisions.camera_policy` is NOT in scope: its two writers are divisions/create.ts (a new division is unpaid: nothing to price) and
-// divisions/patch.ts (gated, cameras-doors.test.ts).
+// `divisions.camera_policy` is NOT in scope: its writers are divisions/create.ts (a new division is unpaid: nothing to price),
+// divisions/patch.ts (gated, cameras-doors.test.ts) and the Online Chess receipt's camera answer (division-camera-policy.ts
+// `writeDivisionCameraChoice`, called by online-package/pay.ts in the payment's own transaction, which prices it: pay.test.ts, Task 15).
 //
 // A writer may be added: name its file in EXPECTED_WRITERS below with the count of writes, and the file must call
 // `assertCamerasPaidFor(` (or the helper `divisionsNeedingCameraUpgrade(` it wraps) - and a test of that door's refusal belongs with it.

@@ -30,7 +30,7 @@ interface Over extends Partial<Omit<OnlineReceiptProps, "facts">> {
   facts?: Partial<ReceiptFacts>;
 }
 function make(over: Over = {}) {
-  const readQuote = vi.fn(async (choice: { size: OnlineSize; addCameras: boolean }): Promise<ReceiptQuote> => quoteOf({ size: choice.size, cameras: choice.addCameras, monthly: 20, pack: 20 }));
+  const readQuote = vi.fn(async (choice: { size: OnlineSize; cameras: boolean }): Promise<ReceiptQuote> => quoteOf({ size: choice.size, cameras: choice.cameras, monthly: 20, pack: 20 }));
   const onConfirm = vi.fn(async (body: PayBody): Promise<void> => { void body; });
   const onClose = vi.fn();
   const props: OnlineReceiptProps = {
@@ -65,8 +65,8 @@ const spec = (s: QuoteSpec) => quoteOf(s);
 
 describe("pay mode: the receipt of the stored size (spec 8.4)", () => {
   it("reads the quote for the stored size on open, then draws the rows, the total and the confirm: 64 with camera = 8 credits, 3 + 5", async () => {
-    const m = make({ readQuote: vi.fn(async () => spec({ size: 64, cameras: true, monthly: 3, pack: 5 })) });
-    expect(m.readQuote).toHaveBeenCalledWith({ size: 64, addCameras: false });
+    const m = make({ facts: { cameras: true }, readQuote: vi.fn(async () => spec({ size: 64, cameras: true, monthly: 3, pack: 5 })) });
+    expect(m.readQuote).toHaveBeenCalledWith({ size: 64, cameras: true });
     expect(m.text()).toContain(EN["onlineChess.receipt.checking"]);
     await flush();
     expect(m.text()).toContain("Up to 64 players · up to 8 rounds");
@@ -96,7 +96,7 @@ describe("pay mode: the receipt of the stored size (spec 8.4)", () => {
     await flush();
     await m.press("online-receipt-confirm");
     expect(m.onConfirm).toHaveBeenCalledTimes(1);
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: packagePrice(32, false) });
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: packagePrice(32, false), cameras: false });
     expect(m.onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -154,7 +154,7 @@ describe("payAndOpen: Open round 1 on an unpaid division (spec 8.5, decision 15)
     expect(m.has("online-receipt-row-total")).toBe(false); // the old size's total is not under the new pick
     expect(m.text()).toContain(EN["onlineChess.receipt.checking"]);
     expect(propsOf(m.by("online-receipt-confirm")!).disabled).toBe(true);
-    expect(m.readQuote).toHaveBeenCalledWith({ size: 128, addCameras: false });
+    expect(m.readQuote).toHaveBeenCalledWith({ size: 128, cameras: false });
     await flush();
     expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${packagePrice(128, false)} credits`);
     expect(confirmLabel(m)).toBe(`Pay ${packagePrice(128, false)} credits and open round 1`);
@@ -238,7 +238,7 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
     expect(confirmLabel(m)).toBe("Move down · 3 credits back");
     expect(confirmLabel(m)).not.toContain("4");
     await m.press("online-receipt-confirm");
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: -4, expectedForfeited: 1 });
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: -4, cameras: true, expectedForfeited: 1 });
   });
 
   it("the Not returned row is shown at 0 on a move down and carries no reason (the spec's own mock)", async () => {
@@ -259,112 +259,241 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
     expect(propsOf(m.els()[0]!).title).toBe("Move up to 128 players");
   });
 
-  // Fix round 2: the OLD version of this test mounted the receipt on size 64, the paid size - a state no entry point creates (the chip opens a change
-  // receipt with NO size chosen, and the list leaves the paid size out). It passed while the camera upgrade was unreachable. The state below is the chip's.
-  const cameraRead = vi.fn(async (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 20 }));
-  const CAMERA_DIFF = () => packagePrice(64, true) - packagePrice(64, false);
-  const tick = (m: ReturnType<typeof make>, checked: boolean) => (propsOf(m.by("online-receipt-cameras")!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked } });
+});
 
-  it("Add Fair-play camera from the state the chip opens (NO size chosen): the tick chooses the PAID size, reads its camera quote, owes the camera difference and sends addCameras", async () => {
-    cameraRead.mockClear();
-    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
-    await flush();
-    expect(cameraRead, "premise: nothing is chosen, so nothing is read").not.toHaveBeenCalled();
-    expect(confirmLabel(m), "premise: the button waits for a size").toBe("Choose a size");
-    expect(m.has("online-receipt-cameras")).toBe(true);
-    expect(m.has("online-receipt-cameras-paid")).toBe(false);
-    tick(m, true);
-    expect(cameraRead).toHaveBeenLastCalledWith({ size: 64, addCameras: true });
-    await flush();
-    expect(CAMERA_DIFF(), "premise: the camera costs credits at 64").toBeGreaterThan(0);
-    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
-    expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${CAMERA_DIFF()} credits`);
-    expect(propsOf(m.els()[0]!).title, "it is not a move UP to the size it already is").toBe("Add the Fair-play camera");
-    expect(m.has("online-receipt-cameras-paid"), "fix round 3: the 'is paid' line is not said while the organiser is still deciding (spec 8.6: after payment, on the page)").toBe(false);
-    await m.press("online-receipt-confirm");
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF(), addCameras: true });
+// Task 15 (owner 2026-11-25): EVERY receipt asks "Fair-play camera: Yes / No" - a pair of radios, opening at the division's camera setting
+// (`pay`, `payAndOpen`) or the paid package's (`change`). The total follows the answer; the confirm sends it. Expected totals are the price leaf's.
+describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
+  const PAID = { size: 64 as OnlineSize, camerasPaid: false };
+  const CH = { paid: PAID, storedSize: 64 as OnlineSize };
+  const PAID_WITH = { size: 64 as OnlineSize, camerasPaid: true };
+  const CH_WITH = { paid: PAID_WITH, storedSize: 64 as OnlineSize, cameras: true };
+  const readAt = (paid: typeof PAID | null, money: { monthly?: number; pack?: number } = { monthly: 20 }) =>
+    vi.fn(async (c: { size: OnlineSize; cameras: boolean }) => spec({ size: c.size, cameras: c.cameras, ...(paid ? { paid } : {}), ...money }));
+  const CAMERA_DIFF = packagePrice(64, true) - packagePrice(64, false);
+  const answer = (m: ReturnType<typeof make>, yes: boolean) => (propsOf(m.by(yes ? "online-receipt-cameras-yes" : "online-receipt-cameras-no")!).onChange as () => void)();
+  const checked = (m: ReturnType<typeof make>) => ({
+    yes: propsOf(m.by("online-receipt-cameras-yes")!).checked,
+    no: propsOf(m.by("online-receipt-cameras-no")!).checked,
+  });
+  const title = (m: ReturnType<typeof make>) => propsOf(m.els()[0]!).title;
+
+  it("is on every receipt, and opens at the division's setting (pay, payAndOpen) or the PAID package's (change) - sweep", () => {
+    let n = 0;
+    for (const mode of ["pay", "payAndOpen"] as const) {
+      for (const cameras of [false, true]) {
+        const m = make({ mode, size: 64, facts: { cameras } });
+        expect(m.has("online-receipt-cameras"), `${mode}/${cameras}`).toBe(true);
+        expect(checked(m), `${mode}/${cameras}`).toEqual({ yes: cameras, no: !cameras });
+        expect(m.readQuote).toHaveBeenCalledWith({ size: 64, cameras });
+        n += 1;
+      }
+    }
+    // change: the PAID package's answer, not the division's setting (the settings may have turned it off since; the package holds it)
+    for (const [paid, divisionOn] of [[PAID, true], [PAID_WITH, false]] as const) {
+      const m = make({ mode: "change", size: null, facts: { paid, storedSize: 64, cameras: divisionOn } });
+      expect(checked(m), `change ${paid.camerasPaid}`).toEqual({ yes: paid.camerasPaid, no: !paid.camerasPaid });
+      expect(m.readQuote, "the answer the package holds at its own size is no change: nothing is read").not.toHaveBeenCalled();
+      n += 1;
+    }
+    expect(n).toBe(6);
   });
 
-  it("unticking the camera gives the 'choose a size' state back (the paid size without a camera is nothing to pay)", async () => {
-    cameraRead.mockClear();
-    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
-    tick(m, true);
+  it("pay: Yes reads the camera price, the total follows it, and the confirm sends cameras: true; No goes back to the price without it", async () => {
+    const m = make({ size: 32 });
     await flush();
-    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
-    tick(m, false);
+    expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${packagePrice(32, false)} credits`);
+    expect(textOfAll([m.by("online-receipt-row-cameras")!])).toBe("Fair-play camera off");
+    answer(m, true);
+    expect(m.readQuote).toHaveBeenLastCalledWith({ size: 32, cameras: true });
+    expect(m.has("online-receipt-row-total"), "the old total is gone at once").toBe(false);
+    await flush();
+    expect(checked(m)).toEqual({ yes: true, no: false });
+    expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${packagePrice(32, true)} credits`);
+    expect(textOfAll([m.by("online-receipt-row-cameras")!])).toBe("Fair-play camera on");
+    answer(m, false);
+    await flush();
+    expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${packagePrice(32, false)} credits`);
+    answer(m, true);
+    await flush();
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledTimes(1);
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: packagePrice(32, true), cameras: true });
+  });
+
+  it("change, from the chip's state (no size chosen), paid WITHOUT the camera: Yes is quoted AT the paid size, and pays the camera difference", async () => {
+    const read = readAt(PAID);
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: read });
+    await flush();
+    expect(read, "premise: nothing is chosen, so nothing is read").not.toHaveBeenCalled();
+    expect(confirmLabel(m), "premise: the button waits for a choice").toBe("Choose a size");
+    answer(m, true);
+    expect(read).toHaveBeenLastCalledWith({ size: 64, cameras: true });
+    await flush();
+    expect(CAMERA_DIFF, "premise: the camera costs credits at 64").toBeGreaterThan(0);
+    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF} credits`);
+    expect(title(m), "not a move UP to the size it already is").toBe(EN["onlineChess.receipt.title.cameras"]);
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF, cameras: true });
+  });
+
+  it("change, paid WITH the camera: No is a move down at the paid size - the camera price comes back, in its own words", async () => {
+    const read = vi.fn(async (c: { size: OnlineSize; cameras: boolean }) => spec({ size: c.size, cameras: c.cameras, paid: PAID_WITH, backMonthly: 1 }));
+    const m = make({ mode: "change", size: null, facts: CH_WITH, readQuote: read });
+    answer(m, false);
+    expect(read).toHaveBeenLastCalledWith({ size: 64, cameras: false });
+    await flush();
+    expect(title(m)).toBe(EN["onlineChess.receipt.title.camerasOff"]);
+    expect(confirmLabel(m)).toBe(fill(EN["onlineChess.receipt.confirm.camerasOff.other"]!, { count: CAMERA_DIFF }));
+    expect(textOfAll([m.by("online-receipt-row-not-returned")!])).toBe("Not returned 0");
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: -CAMERA_DIFF, cameras: false, expectedForfeited: 0 });
+  });
+
+  it("change: Yes then No gives the 'choose a size' state back (the paid size at the answer held is nothing to pay)", async () => {
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: readAt(PAID) });
+    answer(m, true);
+    await flush();
+    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF} credits`);
+    answer(m, false);
     await flush();
     expect(confirmLabel(m)).toBe("Choose a size");
     expect(m.has("online-receipt-row-total")).toBe(false);
-    expect(propsOf(m.els()[0]!).title).toBe("Change the Online Chess size");
+    expect(title(m)).toBe("Change the Online Chess size");
   });
 
-  it("a move with cameras still works: pick a size, then tick - the quote is for THAT size with the camera, and the title is the move's", async () => {
-    cameraRead.mockClear();
-    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
+  it("a size AND the camera in one receipt are one payment: pick 128, then Yes - one quote for that pair, one body, the net of both", async () => {
+    const read = readAt(PAID);
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: read });
     m.pick(128);
     await flush();
-    tick(m, true);
-    expect(cameraRead).toHaveBeenLastCalledWith({ size: 128, addCameras: true });
+    answer(m, true);
+    expect(read).toHaveBeenLastCalledWith({ size: 128, cameras: true });
     await flush();
-    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(128, true) - packagePrice(64, false)} credits`);
-    expect(propsOf(m.els()[0]!).title).toBe("Move up to 128 players");
+    const net = packagePrice(128, true) - packagePrice(64, false);
+    expect(confirmLabel(m)).toBe(`Pay ${net} credits`);
+    expect(title(m)).toBe("Move up to 128 players");
     await m.press("online-receipt-confirm");
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 128, expectedOwed: packagePrice(128, true) - packagePrice(64, false), addCameras: true });
+    expect(m.onConfirm).toHaveBeenCalledTimes(1);
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 128, expectedOwed: net, cameras: true });
   });
 
-  // Fix round 3: a short balance for the camera add. The buy chooser's return must name the camera intent, or the return page has nothing to reopen.
-  it("a SHORT balance for the camera add: the button reads Buy credits, and the chooser is handed the paid size WITH the camera intent", async () => {
-    const short = (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 0, pack: 0 });
+  it("the size list prices every size at the answer: with No over a package paid WITH the camera, a move up owes less than with Yes", async () => {
+    const m = make({ mode: "change", size: null, facts: CH_WITH, readQuote: readAt(PAID_WITH) });
+    const diff256 = (cameras: boolean) => packagePrice(256, cameras) - packagePrice(64, true);
+    expect(diff256(false), "premise: still a move up without the camera").toBeGreaterThan(0);
+    expect(m.text()).toContain(`pay ${diff256(true)} more credits`);
+    answer(m, false);
+    await flush();
+    expect(m.text()).toContain(`pay ${diff256(false)} more credits`);
+    expect(m.text()).not.toContain(`pay ${diff256(true)} more credits`);
+    expect(diff256(false)).toBeLessThan(diff256(true));
+  });
+
+  it("a size that costs exactly what was paid reads 'same price', never 'paid' - the paid size is not in the list (No over a paid camera makes one)", async () => {
+    // Found by the Task 15 screenshots: No over 64-with-camera (8) prices 128-without at 8 too, and the row said "paid" although 128 was never bought.
+    expect(packagePrice(128, false), "premise: 128 without the camera costs what 64 with it did").toBe(packagePrice(64, true));
+    const m = make({ mode: "change", size: null, facts: CH_WITH, readQuote: readAt(PAID_WITH) });
+    const note = (size: number) => textOfAll([m.by(`online-receipt-size-${size}-note`)!]);
+    expect(note(128), "Yes: 128 with the camera is a move up").toBe(`pay ${packagePrice(128, true) - packagePrice(64, true)} more credits`);
+    answer(m, false);
+    await flush();
+    expect(note(128), "No: 128 without the camera nets nothing").toBe(EN["onlineChess.receipt.size.even"]);
+    // The sweep: in both answers no row of the list says "paid" (the paid size is filtered out of a change receipt's list).
+    let rows = 0;
+    for (const yes of [false, true]) {
+      answer(m, yes);
+      await flush();
+      for (const s of ONLINE_SIZES.filter((x) => m.has(`online-receipt-size-${x}-note`))) {
+        expect(note(s), `answer ${yes}, size ${s}`).not.toBe(EN["onlineChess.size.note.paid"]);
+        rows += 1;
+      }
+    }
+    expect(rows, "anti-vacuity: every listed size in both answers").toBe((ONLINE_SIZES.length - 1) * 2);
+  });
+
+  it("a SHORT balance for the camera: Buy credits, and the chooser is handed the paid size WITH the answer Yes", async () => {
     const renderBuy = vi.fn(() => null);
-    const m = make({ mode: "change", size: null, facts: CH, readQuote: vi.fn(async (c) => short(c)), renderBuy });
-    tick(m, true);
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: readAt(PAID, { monthly: 0, pack: 0 }), renderBuy });
+    answer(m, true);
     await flush();
     expect(confirmLabel(m)).toBe("Buy credits");
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 64, addCameras: true });
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 64, cameras: true });
   });
 
-  it("a move up WITH the camera that comes up short hands the chooser that size and the intent; the same move without the camera hands the intent false", async () => {
+  it("a move up that comes up short hands the chooser that size and the answer, either way", async () => {
     const renderBuy = vi.fn(() => null);
-    const read = vi.fn(async (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 0, pack: 0 }));
-    const m = make({ mode: "change", size: null, facts: CH, readQuote: read, renderBuy });
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: readAt(PAID, { monthly: 0, pack: 0 }), renderBuy });
     m.pick(128);
     await flush();
     await m.press("online-receipt-confirm");
     // owed 4 (128 without the camera, 8, less the paid 4) is 4 short: the 5 pack; with the camera it is 16 - 4 = 12 short: the 20 pack
     expect(packagePrice(128, false) - packagePrice(64, false), "premise: 4 owed").toBe(4);
     expect(packagePrice(128, true) - packagePrice(64, false), "premise: 12 owed").toBe(12);
-    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 128, addCameras: false });
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 128, cameras: false });
     await m.press("online-receipt-back");
-    tick(m, true);
+    answer(m, true);
     await flush();
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 20, size: 128, addCameras: true });
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 20, size: 128, cameras: true });
   });
 
-  it("a receipt opened WITH the camera intent (the return from buying credits for it) starts on the paid size with the box ticked and the quote read at once", async () => {
-    cameraRead.mockClear();
-    const m = make({ mode: "change", size: 64, addCameras: true, facts: CH, readQuote: cameraRead });
-    expect(cameraRead).toHaveBeenCalledWith({ size: 64, addCameras: true });
+  it("opened on a checkout return's answer, both directions: the answer is set and its quote read at once", async () => {
+    const on = make({ mode: "change", size: null, cameras: true, facts: CH, readQuote: readAt(PAID) });
+    expect(on.readQuote).toHaveBeenCalledWith({ size: 64, cameras: true });
     await flush();
-    expect(propsOf(m.by("online-receipt-cameras")!).checked, "the box is ticked").toBe(true);
-    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
-    expect(propsOf(m.els()[0]!).title).toBe("Add the Fair-play camera");
-    await m.press("online-receipt-confirm");
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF(), addCameras: true });
+    expect(checked(on)).toEqual({ yes: true, no: false });
+    expect(confirmLabel(on)).toBe(`Pay ${CAMERA_DIFF} credits`);
+    await on.press("online-receipt-confirm");
+    expect(on.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF, cameras: true });
+    const off = make({ mode: "change", size: null, cameras: false, facts: CH_WITH, readQuote: vi.fn(async (c: { size: OnlineSize; cameras: boolean }) => spec({ size: c.size, cameras: c.cameras, paid: PAID_WITH, backMonthly: 1 })) });
+    expect(off.readQuote).toHaveBeenCalledWith({ size: 64, cameras: false });
+    await flush();
+    expect(checked(off)).toEqual({ yes: false, no: true });
+    expect(title(off)).toBe(EN["onlineChess.receipt.title.camerasOff"]);
+    const pay = make({ mode: "pay", size: 64, cameras: true });
+    expect(pay.readQuote, "a first payment's return too").toHaveBeenCalledWith({ size: 64, cameras: true });
   });
 
-  it("the camera intent is ignored where there is no camera to add: a package paid WITH cameras, an unpaid package, a pay receipt", () => {
-    const paidWith = make({ mode: "change", size: 64, addCameras: true, facts: { paid: { size: 64, camerasPaid: true }, storedSize: 64 } });
-    expect(paidWith.has("online-receipt-cameras")).toBe(false);
-    expect(paidWith.readQuote).toHaveBeenCalledWith({ size: 64, addCameras: false });
-    const pay = make({ mode: "pay", size: 64, addCameras: true });
-    expect(pay.readQuote).toHaveBeenCalledWith({ size: 64, addCameras: false });
+  it("while a payment is in flight the answer cannot move: both radios and the group are off", async () => {
+    let release = () => {};
+    const onConfirm = vi.fn(() => new Promise<void>((r) => { release = r; }));
+    const m = make({ size: 32, onConfirm });
+    await flush();
+    expect(propsOf(m.by("online-receipt-cameras-yes")!).disabled, "premise: armed before the press").toBe(false);
+    const pressed = m.press("online-receipt-confirm");
+    await flush();
+    expect(propsOf(m.by("online-receipt-cameras")!).disabled).toBe(true);
+    expect(propsOf(m.by("online-receipt-cameras-yes")!).disabled).toBe(true);
+    expect(propsOf(m.by("online-receipt-cameras-no")!).disabled).toBe(true);
+    release();
+    await pressed;
   });
 
-  it("no camera checkbox where the camera is already paid, or the package is not paid yet", () => {
-    expect(make({ mode: "change", size: null, facts: { paid: { size: 64, camerasPaid: true }, storedSize: 64 } }).has("online-receipt-cameras")).toBe(false);
-    expect(make({ mode: "pay", size: 64 }).has("online-receipt-cameras")).toBe(false);
+  it("from round 1 the answer is fixed, like the size: a frozen quote shows the answer and takes no pick (spec 8.7)", async () => {
+    const m = make({ size: 64, facts: { cameras: true }, readQuote: vi.fn(async () => spec({ size: 64, cameras: true, monthly: 20, refusal: "frozen" })) });
+    await flush();
+    expect(textOfAll([m.by("online-receipt-refused")!])).toBe(EN["onlineChess.receipt.refused.frozen"]);
+    expect(checked(m)).toEqual({ yes: true, no: false });
+    expect(propsOf(m.by("online-receipt-cameras")!).disabled).toBe(true);
+    expect(propsOf(m.by("online-receipt-cameras-no")!).disabled).toBe(true);
+  });
+
+  it("renders as markup: a fieldset named by its legend, two radios of one name, each named by its own label (anchored on `=\"`)", () => {
+    const markup = renderToStaticMarkup(
+      <DictProvider dict={enUi as Dict} locale="en">
+        <OnlineReceipt mode="pay" facts={{ ...FACTS, cameras: true }} size={64} quote={null} readQuote={async (c) => spec({ size: c.size, cameras: c.cameras })} onConfirm={async () => {}} onClose={() => {}} />
+      </DictProvider>,
+    );
+    expect(markup).toMatch(/<fieldset[^>]*data-testid="online-receipt-cameras"[^>]*data-cameras="yes"/);
+    expect(markup).toContain("<legend");
+    expect(clean(markup)).toContain(`${EN["onlineChess.receipt.row.cameras"]} ${EN["onlineChess.receipt.cameras.yes"]} ${EN["onlineChess.receipt.cameras.no"]}`);
+    expect(markup.match(/<input type="radio"[^>]*name="online-receipt-cameras"/g) ?? []).toHaveLength(2);
+    expect(markup).toMatch(/<input[^>]*data-testid="online-receipt-cameras-yes"[^>]*checked=""/);
+    expect(markup).not.toMatch(/<input[^>]*data-testid="online-receipt-cameras-no"[^>]*checked=""/);
+    expect(markup).toContain('data-testid="online-receipt-cameras-yes"');
+    expect(markup).toContain('data-testid="online-receipt-cameras-no"');
   });
 });
 
@@ -569,7 +698,7 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
   const SHORT = spec({ size: 64, cameras: true, monthly: 2, pack: 3 });
 
   it("reads Buy credits, says how short, and never sends a payment", async () => {
-    const m = make({ readQuote: vi.fn(async () => SHORT) });
+    const m = make({ facts: { cameras: true }, readQuote: vi.fn(async () => SHORT) });
     await flush();
     expect(confirmLabel(m)).toBe("Buy credits");
     expect(root(m)["data-confirm"]).toBe("buy");
@@ -582,10 +711,10 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
 
   it("opens the credits chooser with the smallest covering pack, and Back returns to the receipt", async () => {
     const renderBuy = vi.fn(({ pack }: { pack: number }) => <div data-testid="buy-stub" data-pack={pack} />);
-    const m = make({ readQuote: vi.fn(async () => SHORT), renderBuy: renderBuy as OnlineReceiptProps["renderBuy"] });
+    const m = make({ facts: { cameras: true }, readQuote: vi.fn(async () => SHORT), renderBuy: renderBuy as OnlineReceiptProps["renderBuy"] });
     await flush();
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, addCameras: false });
+    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, cameras: true });
     expect(propsOf(m.by("buy-stub")!)["data-pack"]).toBe(5);
     expect(root(m)["data-view"]).toBe("buy");
     expect(m.text()).toContain("You are 3 credits short. Pick a pack to cover them");
@@ -603,7 +732,7 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
     m.pick(64);
     await flush();
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, addCameras: false });
+    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, cameras: false });
   });
 
   it("the covering pack follows the shortfall of 8: 1 short is the 1 pack, 5 short the 5 pack, 6 short the 20 pack (sweep)", async () => {
@@ -611,10 +740,10 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
     for (const [balance, pack] of [[7, 1], [5, 5], [3, 5], [2, 20], [1, 20]] as const) {
       const q = spec({ size: 64, cameras: true, pack: balance }); // owed 8
       const renderBuy = vi.fn(() => null);
-      const m = make({ readQuote: vi.fn(async () => q), renderBuy });
+      const m = make({ facts: { cameras: true }, readQuote: vi.fn(async () => q), renderBuy });
       await flush();
       await m.press("online-receipt-confirm");
-      expect(renderBuy, `balance ${balance}`).toHaveBeenCalledWith({ pack, size: 64, addCameras: false });
+      expect(renderBuy, `balance ${balance}`).toHaveBeenCalledWith({ pack, size: 64, cameras: true });
       checked += 1;
     }
     expect(checked).toBe(5);
@@ -641,7 +770,7 @@ describe("refused sizes and view states", () => {
       ["plan", "Your plan does not include this size."],
       ["rounds", "This size includes fewer rounds than your 9."],
       ["rounds_above_max", "Online Chess includes up to 10 Swiss rounds."],
-      ["frozen", "A round has opened, so the size can no longer change."],
+      ["frozen", "A round has opened, so the size and the camera can no longer change."],
     ];
     for (const [refusal, sentence] of cases) {
       const m = make({ size: 16, readQuote: vi.fn(async () => spec({ size: 16, monthly: 20, held: 30, rounds: 9, refusal })) });
@@ -672,7 +801,7 @@ describe("refused sizes and view states", () => {
     const quote = spec({ size: 64, cameras: true, monthly: 3, pack: 5 });
     const markup = renderToStaticMarkup(
       <DictProvider dict={enUi as Dict} locale="en">
-        <OnlineReceipt mode="payAndOpen" facts={{ ...FACTS, held: 30 }} size={64} quote={quote} readQuote={async () => quote} onConfirm={async () => {}} onClose={() => {}} />
+        <OnlineReceipt mode="payAndOpen" facts={{ ...FACTS, held: 30, cameras: true }} size={64} quote={quote} readQuote={async () => quote} onConfirm={async () => {}} onClose={() => {}} />
       </DictProvider>,
     );
     expect(markup).toContain('role="dialog"');

@@ -166,6 +166,7 @@ describe("Online Chess credits copy: every key exists in all four locales", () =
     { key: "onlineChess.size.plan.pro", locales: ["es", "fr", "nl"], why: "a plan's brand name is not translated" },
     { key: "onlineChess.size.plan.enterprise", locales: ["es", "fr", "nl"], why: "a plan's brand name is not translated" },
     { key: "onlineChess.receipt.row.total", locales: ["es", "fr"], why: "'Total' is the same word" },
+    { key: "onlineChess.receipt.cameras.no", locales: ["es"], why: "es 'No' is the same word" },
     { key: "onlineChess.receipt.credits.one", locales: ["nl"], why: "nl writes 'credit' as en does" },
     { key: "onlineChess.receipt.credits.other", locales: ["nl"], why: "nl writes 'credits' as en does" },
     { key: "onlineChess.receipt.size.price.one", locales: ["nl"], why: "nl writes 'credit' as en does" },

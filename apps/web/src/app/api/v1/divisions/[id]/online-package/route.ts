@@ -14,12 +14,13 @@ export async function GET(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "write");
     const q = OnlinePackageQuoteQuery.parse(Object.fromEntries(new URL(req.url).searchParams));
-    return onlinePackageQuote(auth, id, q.size, q.addCameras);
+    return onlinePackageQuote(auth, id, q.size, q.cameras);
   });
 }
 
-/** Pay for, upgrade, add cameras to, or move down the division's Online Chess package (spec §7.3, §7.4): the confirmed quote
- *  turned into ledger rows and package-row state under the locks, exactly once. Organisers only, signed in (the payment names
+/** Pay for, upgrade, turn the Fair-play camera on or off on, or move down the division's Online Chess package (spec §7.3, §7.4,
+ *  §8.4-§8.6): the confirmed quote turned into ledger rows and package-row state under the locks, exactly once, and the camera answer
+ *  written to the division's camera policy in the same transaction. Organisers only, signed in (the payment names
  *  who paid); never an API key. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {

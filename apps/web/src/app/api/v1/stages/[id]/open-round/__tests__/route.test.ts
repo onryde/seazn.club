@@ -240,12 +240,13 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round - the first open needs a 
     const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
     authState.userId = s.ownerUserId;
     let checked = 0;
-    for (const pay of [{ size: 48, expectedOwed: 1 }, { size: 16 }, { size: 16, expectedOwed: 1.5 }, { size: 16, expectedOwed: 1, cameras: true }]) {
+    for (const pay of [{ size: 48, expectedOwed: 1 }, { size: 16 }, { size: 16, expectedOwed: 1.5 }, { size: 16, expectedOwed: 1, addCameras: true }, { size: 16, expectedOwed: 1, cameras: "yes" }]) {
       const res = await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay }), ctx(s.stageId));
       expect(res.status, JSON.stringify(pay)).toBe(400);
       checked++;
     }
-    expect(checked).toBe(4);
+    // Task 15: `cameras` is the receipt's answer now, a boolean; the retired `addCameras` and a non-boolean answer are the strict body's 400.
+    expect(checked).toBe(5);
     expect(await stamps(s.stageId)).toHaveLength(0);
     expect(await packageOf(s.divisionId)).toEqual({ paid: false, frozen: false, credits: 0 });
   });

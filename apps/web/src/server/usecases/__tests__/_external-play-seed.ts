@@ -67,7 +67,9 @@ export type SeedPlayer = { personId: string; userId: string; lichessId: string }
 export type SeedPackage = "paid" | "unpaid";
 
 /** The division's live package PAID, at the size it holds, WITH the camera price (so a camera policy a case sets later - by a door or
- *  by SQL - never leaves the package short), through the real money path: the `division:` lock, then `payOnlinePackageInTx` (the org
+ *  by SQL - never leaves the package short) and WITHOUT touching the division's camera setting (the case's own policy stands: the
+ *  receipt's camera ANSWER, Task 15, would write it, so the seed gives none and prices the camera through the facts it reads - the
+ *  product state "paid with the camera, then turned off in Division settings"), through the real money path: the `division:` lock, then `payOnlinePackageInTx` (the org
  *  money lock, the row lock, the quote under them, the ledger debit). A precondition, not a door under test: the pay DOOR's own gates
  *  (the flag, the billing freeze, the stage kinds online play runs) are not asked, because the legacy shapes these seeds build (a
  *  league on an online division) are what staging still holds and the door would refuse to charge one. The org is granted the
@@ -80,14 +82,15 @@ export async function paySeededPackage(owner: AuthCtx, divisionId: string): Prom
   const rate = await streamMonthlyRate(owner.orgId);
   await sql.begin(async (tx) => {
     await lockDivisionForCap(tx, divisionId);
-    const facts = await readPackageFacts(tx, divisionId, null);
+    // Priced as if the division's policy said "camera on" (`cameras: true`): the camera price without the answer's write (see above).
+    const facts = { ...(await readPackageFacts(tx, divisionId, null)), cameras: true };
     let row = await livePackage(tx, divisionId);
     if (row === null) {
       const [d] = await tx<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
       await writeOnlineSize(tx, { orgId: owner.orgId, divisionId, divisionName: d!.name, size: sizeFor(facts.held)! });
       row = (await livePackage(tx, divisionId))!;
     }
-    const quote = await quoteLocked(tx, { orgId: owner.orgId, divisionId, size: row.size, addCameras: true, rate }, facts);
+    const quote = await quoteLocked(tx, { orgId: owner.orgId, divisionId, size: row.size, rate }, facts);
     if (quote.shortBy !== null) {
       await lockOrg(tx, owner.orgId);
       const { total } = await creditBreakdown(tx, owner.orgId);
@@ -96,7 +99,7 @@ export async function paySeededPackage(owner: AuthCtx, divisionId: string): Prom
         values (${owner.orgId}, ${quote.shortBy}, 'grant', 'pack', ${total + quote.shortBy}, 'test seed: an online division paid for')`;
     }
     await payOnlinePackageInTx(
-      tx, { orgId: owner.orgId, divisionId, userId, size: row.size, expectedOwed: quote.owed, addCameras: true }, facts, { rate },
+      tx, { orgId: owner.orgId, divisionId, userId, size: row.size, expectedOwed: quote.owed }, facts, { rate },
     );
   });
 }

@@ -1,13 +1,17 @@
 import "server-only";
 // server/usecases/online-package/quote.ts — the Online Chess quote (spec 2026-11-23-online-chess-credits-design.md §7.4 item 1; P9,
-// P10, P13, P15, P17, P19, P21). One answer for the size select's price line, the amber line and the receipt: what a size costs,
+// P10, P13, P15, P17, P19 (amended 2026-11-25, Task 15), P21). One answer for the size select's price line, the amber line and the receipt: what a size costs,
 // what is owed (positive to pay, negative to return), how it would split over the org's two buckets, and whether the size is
 // refused at all. The payment and refund usecases (Tasks 5, 6) and the open-round gate (Task 9) ask it under their locks and
 // compare its `owed` with what the organiser confirmed; the read doors ask it with no lock.
 //
 //  * The SERVER derives everything but the size (§7.4): cameras (P9), counted rounds (P15) and places held come from the
 //    division's own rows (`readPackageFacts`), the plan cap from the plan, the row from the division. The client sends a size,
-//    and at most the one intent `addCameras`, which only ever raises the price.
+//    and at most the organiser's Fair-play camera answer (`cameras`, Task 15). The answer is priced as given because paying WRITES
+//    it to the division's own camera policy in the same transaction (pay.ts): a "No" is cheaper only because it turns the camera
+//    off. An answer the division's own policy cannot carry (a stage that sets its own camera, which no door writes today) is
+//    refused by name, never priced. With no answer, the camera state is the division's as it stands: the policy's, or a camera
+//    price already paid.
 //  * A quote WRITES and LOCKS nothing. In particular it does not roll the month: `debitForPackage` rolls under the money lock
 //    when it pays. The balance and the split a quote shows are therefore what the org WILL hold once that roll has run, projected
 //    read-only by the stream ledger's own rule (`projectMonthlyRollDelta`, the Settings rail's projection): an org that has not
@@ -30,6 +34,7 @@ import { countOnlineHeld } from "@/server/external-play/online-entrant-cap";
 import {
   creditBreakdown, projectMonthlyRollDelta, streamMonthlyRate, type StreamCreditBreakdown,
 } from "@/server/usecases/stream-credits";
+import { CAMERA_CHOICE_ON } from "@/server/usecases/division-camera-policy";
 import { planDebit, planReturn, returnableFor, transactionNow } from "./ledger";
 import { countedRounds, derivedCameras, livePackage } from "./read";
 import type { BucketSplit, PackageFacts, PackageRow, ReturnPlan } from "./types";
@@ -37,7 +42,8 @@ import type { BucketSplit, PackageFacts, PackageRow, ReturnPlan } from "./types"
 export type PackageQuote = {
   /** The size asked about (not the row's: a quote can be asked about any size on the ladder). */
   size: OnlineSize;
-  /** What the price assumes: the policy's cameras, or the `addCameras` intent, or a camera price already paid (P19: never lowered). */
+  /** What the price assumes: the organiser's answer (`cameras`) when one was given; otherwise the policy's cameras, or a camera price
+   *  already paid. */
   cameras: boolean;
   /** Credits to buy `size` at `cameras`. */
   price: number;
@@ -64,11 +70,28 @@ export type PackageQuote = {
   /** Whether the row's PAID package covers the division as it stands (spec §7.6: places held, counted rounds and cameras, and
    *  nothing else): a live paid row, not frozen, whose own size holds the places and includes the rounds, and whose camera price
    *  is paid when the policy needs cameras. A fact about the package, not about the size asked: it is the same for every `size`
-   *  and ignores the `addCameras` intent, which only raises what a payment owes. The PLAN does not enter it: a paid organiser
+   *  and ignores the `cameras` answer, which says what a payment WOULD make the package. The PLAN does not enter it: a paid organiser
    *  whose plan was downgraded can still open round 1, so a `plan` refusal never breaks it (and, `plan` coming before the rounds
    *  refusals in the order, it is not derived from `refusal`). */
   covers: boolean;
 };
+
+/** 409 online_camera_set_by_stage: the organiser's Fair-play camera answer cannot be carried by the division's OWN camera policy,
+ *  because a stage of the division sets its own (nearest level wins). No door writes a stage's camera policy today (the writers
+ *  tripwire, camera-writers-tripwire.test.ts, keeps it so), so this is a guard on that premise, not a screen anyone meets. */
+export function cameraSetByStage(divisionId: string, cameras: boolean): HttpError {
+  return new HttpError(
+    409,
+    `The Fair-play camera of division ${divisionId} is set by one of its stages, so it cannot be turned ${cameras ? "on" : "off"} from the receipt; nothing was quoted or paid`,
+    "online_camera_set_by_stage",
+  );
+}
+
+/** The answer `cameras` fits the division when setting its OWN policy to it (Yes: on; No: off) makes the division say it, judged as P9
+ *  judges it (`derivedCameras`). Throws `cameraSetByStage` otherwise. */
+export async function assertCameraChoiceFits(db: Tx | typeof sql, divisionId: string, cameras: boolean): Promise<void> {
+  if ((await derivedCameras(db, divisionId, cameras ? CAMERA_CHOICE_ON : "off")) !== cameras) throw cameraSetByStage(divisionId, cameras);
+}
 
 /** The last day of the UTC month of `now`, as an ISO date. UTC on purpose: the ledger's month is the UTC month
  *  (`streamMonthlyPeriod`), and the database runs in Europe/London. */
@@ -127,7 +150,7 @@ export async function backFor(tx: Tx, row: PackageRow, credits: number): Promise
  *  never priced. */
 export async function quoteLocked(
   tx: Tx,
-  a: { orgId: string; divisionId: string; size: OnlineSize; addCameras?: boolean; rate: number },
+  a: { orgId: string; divisionId: string; size: OnlineSize; cameras?: boolean; rate: number },
   facts: PackageFacts,
 ): Promise<PackageQuote> {
   if (!isOnlineSize(a.size)) throw new RangeError(`size ${String(a.size)} is not on the ladder (${ONLINE_SIZES.join(", ")})`);
@@ -143,8 +166,10 @@ export async function quoteLocked(
   }
 
   const now = await transactionNow(tx);
-  // P9 / P19: the camera price is what the policy needs, or what the organiser added, or what was already paid.
-  const cameras = facts.cameras || a.addCameras === true || row?.camerasPaid === true;
+  // Task 15: the organiser's answer, when given, is the camera state the payment would leave (and write to the division's policy);
+  // the division must be able to carry it. No answer: the camera state as it stands (P9), a camera price already paid included.
+  if (a.cameras !== undefined) await assertCameraChoiceFits(tx, a.divisionId, a.cameras);
+  const cameras = a.cameras ?? (facts.cameras || row?.camerasPaid === true);
   const price = packagePrice(a.size, cameras);
   const paid = row !== null && row.paidAt !== null ? row : null;
   // Paid: the difference to what the row's own size and camera state cost (P13, P19). V560's CHECK ties `cameras_paid` to
@@ -153,7 +178,7 @@ export async function quoteLocked(
 
   const frozen = row !== null && row.frozenAt !== null;
   const refusal = refusalFor(a.size, facts, frozen);
-  // Covers: the PAID package at ITS OWN size, whatever size is asked, judged without the plan and without the intent: the
+  // Covers: the PAID package at ITS OWN size, whatever size is asked, judged without the plan and without the answer: the
   // places and rounds the size holds, and the camera price when the policy needs it (the same arithmetic as `owed`, at the row's
   // own size and the policy's cameras alone).
   const covers =
@@ -203,7 +228,7 @@ export async function readPackageFacts(db: Tx | typeof sql, divisionId: string, 
 /** The read the price line and the receipt make: the quote for `size` on a division of the caller's org, in a READ-ONLY
  *  transaction with no lock (the database refuses a write in it). Organisers only: a device link or a Match Day code is 403, and
  *  a division of another org reads as not found. The plan cap and the plan's monthly rate are read before the transaction. */
-export async function onlinePackageQuote(auth: AuthCtx, divisionId: string, size: OnlineSize, addCameras?: boolean): Promise<PackageQuote> {
+export async function onlinePackageQuote(auth: AuthCtx, divisionId: string, size: OnlineSize, cameras?: boolean): Promise<PackageQuote> {
   if (auth.via === "device_link" || auth.via === "match_day_code") {
     throw new HttpError(403, "A device link or a Match Day code cannot read an Online Chess quote");
   }
@@ -213,6 +238,6 @@ export async function onlinePackageQuote(auth: AuthCtx, divisionId: string, size
   const planCap = await getLimit(division.org_id, "entrants.per_division.max", division.competition_id);
   const rate = await streamMonthlyRate(division.org_id, { quiet: true });
   return sql.begin("read only", async (tx) =>
-    quoteLocked(tx, { orgId: division.org_id, divisionId, size, addCameras, rate }, await readPackageFacts(tx, divisionId, planCap)),
+    quoteLocked(tx, { orgId: division.org_id, divisionId, size, cameras, rate }, await readPackageFacts(tx, divisionId, planCap)),
   ) as Promise<PackageQuote>;
 }

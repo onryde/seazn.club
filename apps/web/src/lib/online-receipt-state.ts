@@ -13,24 +13,29 @@
 //  R4. A short balance found at the debit turns the receipt into the Buy credits receipt, from the numbers the server answered.
 //  R5. Any other failure keeps the receipt open on the same quote, with the code, and allows another press (the pay door is exactly-once by
 //      state and the confirmed total: a repeated press cannot pay twice).
-//  R6. The camera of a PAID package is a change AT the paid size (spec §8.6). A change receipt opens with no size chosen and does not list the paid
-//      size (a size is changed TO another), so a camera ticked alone has no size to quote: ticking it with none chosen chooses the paid size, and
-//      unticking it from there gives the size back (the paid size without a camera is nothing to pay). With another size chosen it changes nothing.
+//  R6. Every receipt asks "Fair-play camera: Yes / No" (Task 15, owner 2026-11-25), and the answer is part of the choice a quote is read for (R1):
+//      the total follows it. It opens at the division's camera setting (`pay`, `payAndOpen`) or the paid package's (`change`), or at the answer a
+//      checkout return carried back. A `change` receipt opens with no size chosen and does not list the paid size (a size is changed TO another), so
+//      a camera answer with the size unchanged is quoted AT the paid size; the paid size at the paid camera state is no change at all (nothing is
+//      read, nothing can be confirmed). The answer moves with the size and on its own alike, and one confirm pays the net of both.
 import type { OnlineSize } from "@/lib/online-chess-package";
 import { confirmOf, payBodyOf, shortQuoteOf, type PayBody, type PayFailure, type ReceiptMode, type ReceiptQuote } from "@/lib/online-receipt";
 
 export interface ReceiptChoice {
   size: OnlineSize;
-  addCameras: boolean;
+  /** The Fair-play camera answer: Yes (true) or No. */
+  cameras: boolean;
 }
 
 export interface ReceiptState {
   mode: ReceiptMode;
-  /** The size the package is PAID at, on a `change` receipt over a paid package (R6); null otherwise. */
+  /** The size the package is PAID at, and whether its camera price was paid, on a `change` receipt over a paid package (R6); null otherwise. */
   paidSize: OnlineSize | null;
-  /** The size on the receipt; null while none is chosen (`change`: it is chosen in the list). */
+  paidCameras: boolean | null;
+  /** The size on the receipt; null while none is chosen (`change`: it is chosen in the list, and none means the paid size, R6). */
   size: OnlineSize | null;
-  addCameras: boolean;
+  /** The Fair-play camera answer on the receipt (R6). */
+  cameras: boolean;
   /** The last quote that arrived, and the choice it was read for. */
   quote: ReceiptQuote | null;
   quoteFor: ReceiptChoice | null;
@@ -49,25 +54,29 @@ export function initialReceipt(a: {
   mode: ReceiptMode;
   size: OnlineSize | null;
   quote: ReceiptQuote | null;
-  paidSize?: OnlineSize | null;
-  /** The camera box starts ticked: the return from buying credits for the camera of a paid package (`size` is then the paid size, R6). Only on a
-   *  `change` receipt over a paid package; anywhere else there is no camera to add and the intent is dropped. */
-  addCameras?: boolean;
+  /** The paid package a `change` receipt changes (R6); ignored by the other modes. */
+  paid?: { size: OnlineSize; camerasPaid: boolean } | null;
+  /** The camera answer the receipt opens on (R6): the division's camera setting, the paid package's, or a checkout return's. */
+  cameras: boolean;
 }): ReceiptState {
-  const paidSize = a.mode === "change" ? (a.paidSize ?? null) : null;
-  return {
+  const paid = a.mode === "change" ? (a.paid ?? null) : null;
+  const s: ReceiptState = {
     mode: a.mode,
-    paidSize,
+    paidSize: paid?.size ?? null,
+    paidCameras: paid?.camerasPaid ?? null,
     size: a.size,
-    addCameras: paidSize !== null && a.addCameras === true,
+    cameras: a.cameras,
     quote: a.quote,
-    quoteFor: a.quote !== null && a.size !== null && a.quote.size === a.size ? { size: a.size, addCameras: paidSize !== null && a.addCameras === true } : null,
+    quoteFor: null,
     readFailedFor: null,
     submitting: false,
     changed: false,
     failed: null,
     view: "receipt",
   };
+  // A quote handed in is on screen only when it answers the choice the receipt opens on: its size AND its camera answer (R1).
+  const want = wantedOf(s);
+  return a.quote !== null && want !== null && a.quote.size === want.size && a.quote.cameras === want.cameras ? { ...s, quoteFor: want } : s;
 }
 
 export type ReceiptAction =
@@ -80,11 +89,15 @@ export type ReceiptAction =
   | { type: "buy" }
   | { type: "back" };
 
-const same = (a: ReceiptChoice | null, b: ReceiptChoice | null) => a !== null && b !== null && a.size === b.size && a.addCameras === b.addCameras;
+const same = (a: ReceiptChoice | null, b: ReceiptChoice | null) => a !== null && b !== null && a.size === b.size && a.cameras === b.cameras;
 
-/** The choice the receipt wants a quote for, or null while no size is chosen. */
+/** The choice the receipt wants a quote for, or null when there is none: no size chosen (`pay`, `payAndOpen`), or - on a `change` receipt - the
+ *  paid size at the paid camera state, which changes nothing (R6). A `change` receipt with no size chosen asks about the PAID size. */
 export function wantedOf(s: ReceiptState): ReceiptChoice | null {
-  return s.size === null ? null : { size: s.size, addCameras: s.addCameras };
+  const size = s.size ?? (s.mode === "change" ? s.paidSize : null);
+  if (size === null) return null;
+  if (s.mode === "change" && size === s.paidSize && s.cameras === s.paidCameras) return null;
+  return { size, cameras: s.cameras };
 }
 
 /** The quote ON SCREEN (R1): the last one that arrived, only while it answers the choice now wanted. */
@@ -105,20 +118,22 @@ export function receiptReducer(s: ReceiptState, a: ReceiptAction): ReceiptState 
       if (s.submitting || s.size === a.size) return s;
       return { ...s, size: a.size, changed: false, failed: null, view: "receipt" };
     case "cameras":
-      if (s.submitting || s.addCameras === a.on) return s;
-      // R6: the camera of a paid package is quoted AT the paid size; the tick with no size chosen chooses it, the untick from it gives it back.
-      const size = s.paidSize === null ? s.size : a.on && s.size === null ? s.paidSize : !a.on && s.size === s.paidSize ? null : s.size;
-      return { ...s, size, addCameras: a.on, changed: false, failed: null, view: "receipt" };
+      // R6: the answer is part of the choice (R1: its figures are not the other answer's). Ignored while a confirm is in flight.
+      if (s.submitting || s.cameras === a.on) return s;
+      return { ...s, cameras: a.on, changed: false, failed: null, view: "receipt" };
     case "read": {
       // R1: an answer for a choice nobody wants any more is dropped, and so is one whose own size is not the size it was read for.
       if (!same(a.choice, wantedOf(s)) || a.quote.size !== a.choice.size) return s;
+      // A quote that did not price the camera answer it was asked about is not the figure the organiser chose: the read is counted as failed (the
+      // receipt says the price could not be checked) rather than drawn, or read again in a loop.
+      if (a.quote.cameras !== a.choice.cameras) return { ...s, readFailedFor: a.choice };
       return { ...s, quote: a.quote, quoteFor: a.choice, readFailedFor: null };
     }
     case "readFailed":
       return same(a.choice, wantedOf(s)) ? { ...s, readFailedFor: a.choice } : s;
     case "submit": {
       // R2: one at a time, and only on a payable quote.
-      if (s.submitting || payBodyOf(shownQuote(s), s.addCameras) === null) return s;
+      if (s.submitting || payBodyOf(shownQuote(s)) === null) return s;
       return { ...s, submitting: true, failed: null };
     }
     case "settled": {
@@ -126,10 +141,10 @@ export function receiptReducer(s: ReceiptState, a: ReceiptAction): ReceiptState 
       const f = a.failure;
       if (f === null) return { ...s, submitting: false };
       if (f.kind === "changed") {
-        // R3: the figures the server holds now. The size follows the quote's own (the server priced the size it was sent), and the
-        // quote is for the choice the organiser had made, so the receipt shows it at once with the price-changed line.
-        const choice: ReceiptChoice = { size: f.quote.size, addCameras: s.addCameras };
-        return { ...s, submitting: false, size: f.quote.size, quote: f.quote, quoteFor: choice, readFailedFor: null, changed: true, failed: null };
+        // R3: the figures the server holds now. The size AND the camera answer follow the quote's own (the server priced what it was sent - or,
+        // for an unpaid Open round's 402, the division as it stands), so the receipt shows it at once, with the price-changed line.
+        const choice: ReceiptChoice = { size: f.quote.size, cameras: f.quote.cameras };
+        return { ...s, submitting: false, size: f.quote.size, cameras: f.quote.cameras, quote: f.quote, quoteFor: choice, readFailedFor: null, changed: true, failed: null };
       }
       if (f.kind === "noCredits") {
         // R4
@@ -148,5 +163,5 @@ export function receiptReducer(s: ReceiptState, a: ReceiptAction): ReceiptState 
 
 /** The body a press would send now, or null when no press is payable: what the confirm sends is what the receipt shows (R1, R2). */
 export function pressBody(s: ReceiptState): PayBody | null {
-  return s.submitting ? null : payBodyOf(shownQuote(s), s.addCameras);
+  return s.submitting ? null : payBodyOf(shownQuote(s));
 }

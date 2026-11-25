@@ -10,8 +10,9 @@ import "server-only";
 //   ROUNDS   `assertRoundsFit(rounds, row)` — the Swiss rounds the division's stages declare must fit the size's included rounds
 //            (P1, P15), while the live row is NOT frozen (a round added mid-event is free, P11). `assertDivisionRoundsFit` reads the
 //            row and the counted rounds in the caller's transaction.
-//   CAMERAS  `divisionsNeedingCameraUpgrade` / `assertCamerasPaidFor` — a camera policy that turns cameras ON is refused for a PAID,
-//            unfrozen package that did not pay for them (P9, P19). Turning cameras OFF is never asked here.
+//   CAMERAS  `divisionsNeedingCameraUpgrade` / `assertCamerasPaidFor` — a camera policy that turns cameras ON in Division settings is
+//            refused for a PAID, unfrozen package that did not pay for them (P9, P19). Turning cameras OFF there is never asked here
+//            (and returns nothing: the receipt's "No" is the one door that gives the camera price back, Task 15).
 //
 // Legacy: online divisions holding a league (or a ladder) exist on staging, and divisions written before these gates hold more
 // rounds than their size includes. Every gate asks about the CHANGE a write makes, never about what already stands, so a legacy
@@ -107,8 +108,9 @@ export async function assertDivisionRoundsFit(
 
 /** CAMERAS: of these divisions, the ones whose PAID, unfrozen package did not pay for the camera while the division's stages and
  *  policies now say it has cameras (P9: `derivedCameras`, read AFTER the write the caller made). Each with its name and the
- *  difference the camera column costs over the plain one at the paid size (the receipt's `addCameras` owes exactly this). An unpaid
- *  row is never listed (its quote follows the policy), nor a frozen one, nor one whose camera price was paid (P19: never lowered).
+ *  difference the camera column costs over the plain one at the paid size (the receipt's "Fair-play camera: Yes" at the paid size
+ *  owes exactly this). An unpaid row is never listed (its quote follows the policy), nor a frozen one, nor one whose camera price was
+ *  paid (P19: the policy turned off and back on in Division settings costs nothing more; only the receipt's "No" returns it).
  *
  *  Whole and in ONE order: the ids are deduplicated and taken ascending, each division's lock first (the order every writer of
  *  several divisions uses, so two saves over the same set cannot cross), and the answer lists every division that needs the

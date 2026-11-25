@@ -28,7 +28,7 @@ const BASE: OpenPayReceiptProps = {
 const receiptOf = (over: Partial<OpenPayReceiptProps> = {}) => {
   const ui = renderIsland(OpenPayReceipt, { ...BASE, ...over });
   const el = ui.tree().find((e) => e.type === OnlineReceipt)!;
-  return propsOf(el) as unknown as { mode: string; size: number | null; quote: { size: number } | null; facts: Record<string, unknown>; warnings?: { noInvitable?: boolean }; failureWords?: (code: string) => string | null; readQuote(c: unknown): Promise<unknown>; onConfirm: unknown; renderBuy(a: { pack: 1 | 5 | 20; size: 64 }): { type: unknown; props: Record<string, unknown> }; onClose: unknown };
+  return propsOf(el) as unknown as { mode: string; size: number | null; quote: { size: number } | null; facts: Record<string, unknown>; warnings?: { noInvitable?: boolean }; failureWords?: (code: string) => string | null; readQuote(c: unknown): Promise<unknown>; onConfirm: unknown; renderBuy(a: { pack: 1 | 5 | 20; size: 64; cameras: boolean }): { type: unknown; props: Record<string, unknown> }; onClose: unknown };
 };
 
 describe("OpenPayReceipt: a pay-and-open receipt on the STORED size (decision 15)", () => {
@@ -71,17 +71,19 @@ describe("OpenPayReceipt: a pay-and-open receipt on the STORED size (decision 15
   it("reads a size's quote from THIS division (the row's, not the page's), and its confirm and close are the caller's", async () => {
     readQuote.mockResolvedValue(quoteOf({ size: 128 }));
     const r = receiptOf();
-    await r.readQuote({ size: 128, addCameras: false });
-    expect(readQuote).toHaveBeenCalledWith("div-9", { size: 128, addCameras: false });
+    await r.readQuote({ size: 128, cameras: false });
+    expect(readQuote).toHaveBeenCalledWith("div-9", { size: 128, cameras: false });
     expect(r.onConfirm).toBe(BASE.onPay);
     expect(r.onClose).toBe(BASE.onClose);
   });
 
   it("a short balance's chooser is the credits chooser for THIS division with the covering pack and the receipt's size - or the credits link with no org to charge", () => {
-    const choose = receiptOf().renderBuy({ pack: 5, size: 64 });
+    const choose = receiptOf().renderBuy({ pack: 5, size: 64, cameras: true });
     expect(choose.type).toBe(BuyStreamCredits);
-    expect(choose.props).toMatchObject({ orgId: "org-1", currency: "gbp", preselect: 5, returnTo: { divisionId: "div-9", size: 64 } });
-    const link = receiptOf({ buy: null }).renderBuy({ pack: 5, size: 64 });
+    expect(choose.props).toMatchObject({ orgId: "org-1", currency: "gbp", preselect: 5, returnTo: { divisionId: "div-9", size: 64, cameras: true } });
+    // the answer No rides back too (Task 15): the Match Day receipt reopens on the answer the buyer left with, either way
+    expect(receiptOf().renderBuy({ pack: 5, size: 64, cameras: false }).props).toMatchObject({ returnTo: { divisionId: "div-9", size: 64, cameras: false } });
+    const link = receiptOf({ buy: null }).renderBuy({ pack: 5, size: 64, cameras: false });
     expect(link.type).toBe("a");
     expect(link.props.href).toBe("/o/club/settings/credits?kind=stream");
   });

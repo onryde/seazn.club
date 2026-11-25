@@ -126,12 +126,21 @@ describe.skipIf(!HAS_DB)("the pay door sends its events after the commit", () =>
 
     const before = await liveOf(d.id);
     const shown = await onlinePackageQuote(o.auth, d.id, 32, true);
-    await payOnlinePackage(o.auth, d.id, { size: 32, addCameras: true, expectedOwed: shown.owed });
+    await payOnlinePackage(o.auth, d.id, { size: 32, cameras: true, expectedOwed: shown.owed });
     const cams = eventsOf(o.orgId)[3]!;
     expect(cams.event).toBe("online_chess_package_resized");
     expect(cams.properties).toMatchObject({ size: 32, cameras: true, credits: gcPrice(32, true) - gcPrice(32), pack: gcPrice(32, true) - gcPrice(32) });
     expect(before.cameras_paid, "premise: the cameras were not paid before").not.toBe(true);
-    expect(eventsOf(o.orgId), "one event per action: four actions, four events").toHaveLength(4);
+
+    // Task 15: the camera turned OFF before round 1 is a move down at the same size - the existing `resized` kind, the camera price back.
+    const off = await onlinePackageQuote(o.auth, d.id, 32, false);
+    await payOnlinePackage(o.auth, d.id, { size: 32, cameras: false, expectedOwed: off.owed, expectedForfeited: 0 });
+    const camsOff = eventsOf(o.orgId)[4]!;
+    expect(camsOff.event).toBe("online_chess_package_resized");
+    expect(camsOff.properties).toEqual({
+      size: 32, cameras: false, credits: -(gcPrice(32, true) - gcPrice(32)), monthly: 0, pack: gcPrice(32, true) - gcPrice(32), forfeited: 0, plan: "pro", at_round_one: false,
+    });
+    expect(eventsOf(o.orgId), "one event per action: five actions, five events").toHaveLength(5);
   }, 120_000);
 
   it("… sent after the commit: another connection already sees the payment when the event is sent", async () => {

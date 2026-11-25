@@ -55,14 +55,8 @@ import {
   readOnlinePlay,
   withoutDivisionMetaKeys,
 } from "@/server/external-play/online-play";
-import {
-  assertCameraPolicyForSport,
-  assertCameraPolicyValue,
-  assertPolicyChange,
-  CAMERA_POLICY_CHANGED,
-  effectivePolicy,
-  readCameraPolicy,
-} from "@/server/external-play/camera-policy";
+import { assertCameraPolicyValue } from "@/server/external-play/camera-policy";
+import { auditDivisionCameraChange, lockDivisionCameraRow } from "../division-camera-policy";
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
@@ -82,7 +76,6 @@ import {
   type RefundedPackage,
 } from "../online-package";
 import type { OnlineSize } from "@/lib/online-chess-package";
-import { audit } from "../audit";
 import { type DivisionRow, COLS } from "./types";
 import { deriveYouth } from "./helpers";
 
@@ -326,56 +319,19 @@ export async function patchDivision(
     if (cameraPolicyNamed) {
       // The stored value this write replaces, under the same `for no key
       // update` the masking/seeds reads below use, plus the competition floor
-      // it inherits when it is null.
-      const [cur] = await tx<
-        {
-          sport_key: string;
-          competition_id: string;
-          camera_policy: string | null;
-          competition_policy: string;
-        }[]
-      >`
-        select d.sport_key, d.competition_id, d.camera_policy,
-               c.camera_policy as competition_policy
-          from divisions d
-          join competitions c on c.id = d.competition_id
-         where d.id = ${id}
-           for no key update of d`;
-      if (!cur) throw new HttpError(404, "division not found");
-      assertCameraPolicyForSport(cur.sport_key, incomingCamera);
-      const storedCamera = readCameraPolicy(cur.camera_policy);
-      // Only a real CHANGE of the stored value is gated and audited: a re-send
-      // of the current value must never 409 or leave a row.
-      if (incomingCamera !== storedCamera) {
-        // The gate judges what PLAYERS get (the division-level effective
-        // policy), not the stored values: clearing 'off' to inherit a
-        // 'required' competition is a tightening even though null has no rank.
-        const floor = readCameraPolicy(cur.competition_policy);
-        const effectiveFrom = effectivePolicy({ stage: null, division: storedCamera, competition: floor });
-        const effectiveTo = effectivePolicy({ stage: null, division: incomingCamera, competition: floor });
-        assertPolicyChange({ from: effectiveFrom, to: effectiveTo, windowOpened: roundOpened });
-        // Online Chess (P9, P19): what the division's stages and policies said BEFORE this write, so that after it a save that turns
-        // cameras ON is asked whether the package paid for them (below, after the UPDATE).
+      // it inherits when it is null. The gate and the audit are the ONE rule
+      // every writer of the division's own policy shares (the Online Chess
+      // receipt writes the same column, division-camera-policy.ts): only a real
+      // CHANGE is gated and audited, judged on the division-level effective
+      // policy, the audit row in this transaction.
+      const cur = await lockDivisionCameraRow(tx, id);
+      const changed = await auditDivisionCameraChange(tx, {
+        cur, to: incomingCamera, divisionId: id, orgId: auth.orgId, actorId: auth.userId, roundOpened,
+      });
+      if (changed) {
+        // Online Chess (P9): what the division's stages and policies said BEFORE this write (the audit row writes no policy), so that
+        // after it a save that turns cameras ON is asked whether the package paid for them (below, after the UPDATE).
         camerasBefore = await derivedCameras(tx, id);
-        // Same transaction as the write it describes (ruling Q2: one row in
-        // competition_events per change), so a refused or rolled-back change
-        // can never leave a row saying it happened.
-        await audit(
-          tx,
-          cur.competition_id,
-          auth.orgId,
-          CAMERA_POLICY_CHANGED,
-          {
-            divisionId: id,
-            stageId: null,
-            from: storedCamera,
-            to: incomingCamera,
-            effectiveFrom,
-            effectiveTo,
-            roundOpened,
-          },
-          auth.userId,
-        );
       }
       effective.camera_policy = incomingCamera;
     }

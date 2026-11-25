@@ -1,13 +1,14 @@
 // The Fair-play camera is priced before round 1 (spec 2026-11-23-online-chess-credits-design.md §3 decisions 5, 13, §7.6 "Camera policy
 // save while frozen_at is null", P9, P19; plan Task 8): a camera policy save that turns cameras ON for a division whose package is
 // PAID without cameras is refused 422 ONLINE_CAMERAS_NEED_UPGRADE (the division, its name and the difference), until the camera price
-// is paid (`addCameras`); unpaid divisions take any policy (the quote follows: it derives cameras every time); turning cameras OFF is
-// never refused, and back ON is free once the camera price is paid (P19). Once the package freezes the gate is not asked.
+// is paid (the receipt's "Fair-play camera: Yes", Task 15); unpaid divisions take any policy (the quote follows: it derives cameras every
+// time); turning cameras OFF here is never refused and returns nothing, and back ON is free once the camera price is paid (P19 - the
+// receipt's No is the door that returns it). Once the package freezes the gate is not asked.
 // REAL doors against a REAL database (skipped without DATABASE_URL).
 //
 // Where the expected numbers come from — never from the gate:
 //   * Global Constraints' price table (16 → 1 / 2, 32 → 2 / 4, 64 → 4 / 8 credits without / with cameras): the difference `owed`
-//     is the table's cameras column minus its plain column (32 → 2, 64 → 4). The REAL quote (`onlinePackageQuote` with `addCameras`)
+//     is the table's cameras column minus its plain column (32 → 2, 64 → 4). The REAL quote (`onlinePackageQuote` answered Yes)
 //     is the cross-check: the gate says to pay exactly what the receipt will ask.
 //
 // FALSE PREMISE of the brief, recorded: there is NO stage-level and NO competition-level camera save in the product (the competition
@@ -19,7 +20,7 @@
 //
 // Mutant table (each run once by hand; results in the commit message):
 //   C1 the camera gate removed from the division save                               -> "paid without cameras: refused …"
-//   C2 the helper ignores `cameras_paid` (a paid camera price still listed)         -> "after addCameras is paid …", the competition list
+//   C2 the helper ignores `cameras_paid` (a paid camera price still listed)         -> "after the camera answered Yes is paid …", the competition list
 //   C3 the helper ignores `frozen_at`                                                -> "frozen (a round opened): the gate is not asked"
 //   C4 the helper lists an UNPAID row                                                -> "an unpaid online division takes any policy"
 //   C5 the gate asked on every camera save, not only on off -> on                    -> "the cameras stay on …"
@@ -124,7 +125,7 @@ describe.skipIf(!HAS_DB)("a PAID division without cameras", () => {
       checked += 1;
     }
     expect(checked).toBe(2);
-    // The refusal is the receipt's: it asks for what the real quote with `addCameras` owes.
+    // The refusal is the receipt's: it asks for what the real quote answered Yes owes.
     expect((await onlinePackageQuote(o.auth, id, 32, true)).owed, "the gate says what the receipt will ask").toBe(cameraDifference(32));
     expect((await onlinePackageQuote(o.auth, id, 32)).covers, "and the paid package still covers the division").toBe(true);
   });
@@ -197,13 +198,14 @@ describe.skipIf(!HAS_DB)("a PAID division without cameras", () => {
     expect(await storedPolicy(id)).toBeNull();
   });
 
-  it("after addCameras is paid the policy save goes through, off and back on cost nothing more (P19)", async () => {
+  it("after the camera answered Yes is paid the policy save goes through, off and back on cost nothing more (P19)", async () => {
     const { o, id } = await paidWithoutCameras(32);
     const shown = await onlinePackageQuote(o.auth, id, 32, true);
     expect(shown.owed, "premise: the camera price is owed").toBe(cameraDifference(32));
-    const paid = await payOnlinePackage(o.auth, id, { size: 32, expectedOwed: shown.owed, addCameras: true });
+    const paid = await payOnlinePackage(o.auth, id, { size: 32, expectedOwed: shown.owed, cameras: true });
     expect(paid.applied).toBe(true);
     expect((await liveOf(id)).cameras_paid, "cameras are paid").toBe(true);
+    expect(await storedPolicy(id), "Task 15: the Yes wrote the division's setting in the payment").toBe("required");
 
     const credits = await balance(o.orgId);
     await patchDivision(o.auth, id, { camera_policy: "required" });
@@ -320,7 +322,7 @@ describe.skipIf(!HAS_DB)("the competition-level judgement: divisionsNeedingCamer
     expect(shape(err)).toEqual({ status: 422, code: ONLINE_PACKAGE_CODES.camerasNeedUpgrade, extra: { divisions: want } });
 
     // The organiser upgrades one: the other is still listed alone. (A repeated id is judged once.)
-    await payOnlinePackage(o.auth, paidA.id, { size: 16, expectedOwed: cameraDifference(16), addCameras: true });
+    await payOnlinePackage(o.auth, paidA.id, { size: 16, expectedOwed: cameraDifference(16), cameras: true });
     expect(await sql.begin((tx) => divisionsNeedingCameraUpgrade(tx, [...ids, paidB.id]))).toEqual([want.find((w) => w.id === paidB.id)]);
     // The empty case: no ids, nothing listed, and the assertion passes.
     expect(await sql.begin((tx) => divisionsNeedingCameraUpgrade(tx, []))).toEqual([]);
