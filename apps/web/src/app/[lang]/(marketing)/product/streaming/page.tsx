@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { AppBand } from "@/components/marketing/app-band";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { ChaseDemo } from "@/components/marketing/product/chase-demo";
 import { chaseDemoLabels } from "@/components/marketing/product/chase-demo-labels";
@@ -66,6 +67,8 @@ export default async function StreamingProductPage({ params }: { params: Promise
             { image: "appStreamSettings", heading: s("cam.2.h"), body: s("cam.2.p") },
           ]}
         />
+
+        {await AppBand({ lang, title: s("app.title"), label: s("app.label"), line: s("app.line") })}
 
         <Ticket
           title={s("ticket.title")}

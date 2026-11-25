@@ -30,7 +30,7 @@ describe("/product/remote-scoring", () => {
 
   it("sections come in the feature-page order, the club block omitted, ending on the closing call", async () => {
     const html = await renderPage(Page, { lang: "en" });
-    expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "offline", "ticket", "questions", "closing"]);
+    expect(sectionOrder(html)).toEqual(["hero", "demo", "app", "road", "offline", "ticket", "questions", "closing"]);
     expect(html.slice(html.indexOf('data-section="closing"'))).not.toMatch(/<nav|mkp-more|mkp-chips/);
   });
 

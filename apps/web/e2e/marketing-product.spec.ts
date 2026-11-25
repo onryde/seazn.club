@@ -714,7 +714,7 @@ test.describe("product pages: layout", () => {
     const ctx = await browser.newContext({ javaScriptEnabled: false, storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
     for (const [path, sections, scores] of [
-      ["/product/streaming", 8, ["chase-score", "chase-stream-score"]],
+      ["/product/streaming", 9, ["chase-score", "chase-stream-score"]],
       ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
       ["/sports/badminton", 7, []],
       ["/sports/table-tennis", 7, []],
@@ -723,11 +723,11 @@ test.describe("product pages: layout", () => {
       ["/sports/hockey", 7, []],
       ["/sports/ice-hockey", 7, []],
       ["/sports/tennis", 7, []],
-      ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
+      ["/product/remote-scoring", 8, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
       ["/product/scheduling", 7, []],
       ["/product/sponsoring", 6, []],
-      ["/product/match-day", 8, []],
+      ["/product/match-day", 9, []],
       ["/product/registration", 7, []],
     ] as const) {
       await page.goto(path);

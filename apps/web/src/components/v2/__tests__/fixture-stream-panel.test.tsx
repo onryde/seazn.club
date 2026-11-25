@@ -1619,7 +1619,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     });
   });
 
-  it("Ready, silent (§6.9): amber — the dot, the Phone node 'Not answering', the strip 'Open Seazn Capture' — and Go live DISABLED", () => {
+  it("Ready, silent (§6.9): amber — the dot, the Phone node 'Not answering', the strip 'Open the Seazn Club Mobile App' — and Go live DISABLED", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: SILENT }) });
     expect(attr(byTestId(tree, "stream-go-live")!, "disabled")).toBe(true);
     expect(attr(byTestId(tree, "stream-go-live")!, "aria-describedby")).toBe("stream-why-f-1");

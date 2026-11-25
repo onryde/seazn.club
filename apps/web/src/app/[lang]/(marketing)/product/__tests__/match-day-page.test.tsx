@@ -37,7 +37,7 @@ describe("/product/match-day", () => {
 
   it("sections come in the feature-page order and end on the closing call", async () => {
     const html = await renderPage(Page, { lang: "en" });
-    expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "courtstream", "ticket", "club", "questions", "closing"]);
+    expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "courtstream", "app", "ticket", "club", "questions", "closing"]);
     expect(html.slice(html.indexOf('data-section="closing"'))).not.toMatch(/<nav|mkp-more|mkp-chips/);
     expect(html.slice(html.indexOf('data-section="ticket"'), html.indexOf('data-section="club"'))).toContain('href="/pricing"');
   });

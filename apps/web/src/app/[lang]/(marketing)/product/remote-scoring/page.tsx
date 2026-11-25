@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { AppBand } from "@/components/marketing/app-band";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { Accent, Closing, DEMO_TEAMS, DemoBand, PageHero, ProductPage, Questions, Road, SplitBand, Ticket } from "@/components/marketing/product/parts";
 import { SignalDemo } from "@/components/marketing/product/signal-demo";
@@ -47,6 +48,8 @@ export default async function RemoteScoringProductPage({ params }: { params: Pro
             <SignalDemo labels={signalDemoLabels(d)} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
           </DemoBand>
         </PageHero>
+
+        {await AppBand({ lang, title: s("app.title"), label: s("app.label"), line: s("app.line") })}
 
         <Road
           title={s("road.title")}
