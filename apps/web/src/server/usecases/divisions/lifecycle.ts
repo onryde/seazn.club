@@ -5,7 +5,7 @@ import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { expireCompetitionShell } from "@/server/public-site/revalidate";
-import { applyPackageDelete, planPackageDelete, type PackageDeletePlan } from "../online-package";
+import { applyPackageDelete, captureRefundEvents, planPackageDelete, type PackageDeletePlan, type RefundedPackage } from "../online-package";
 import { type DivisionRow, COLS } from "./types";
 import { assertCompetitionNotEnded } from "./helpers";
 
@@ -74,6 +74,8 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
   // `division:` lock and the money lock; applied in the privileged epilogue by the ids read here, so the refund commits or
   // rolls back with the delete. Never flag-gated.
   let packages: PackageDeletePlan | null = null;
+  // The packages the epilogue refunded, for the analytics sent after the commit (a fresh list per attempt).
+  let refunded: RefundedPackage[] = [];
   const deleted = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<DeleteTarget[]>`
       select id, competition_id, name, slug, sport_key, status, archived_at
@@ -170,9 +172,11 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
       packages = await planPackageDelete(ptx, { orgId: auth.orgId, divisionIds: [id] });
     },
     privilegedEpilogue: async (etx) => {
-      await applyPackageDelete(etx, auth.orgId, packages!);
+      refunded = [];
+      await applyPackageDelete(etx, auth.orgId, packages!, refunded);
     },
   });
+  await captureRefundEvents(refunded, { orgId: auth.orgId, actorId: auth.userId });
   // A purge removes a division the shell stopped listing when it was archived.
   if (deleted.archived_at === null) {
     await expireCompetitionShell(auth.orgId, { competitionId: deleted.competition_id, divisionId: id });

@@ -70,6 +70,7 @@ import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard, readPlanLimi
 import { onlineChessDisabled, onlineChessOffered } from "../external-play/online-chess-flag";
 import {
   applyOnlineSave,
+  captureRefundEvents,
   assertCamerasPaidFor,
   assertOnlineFormat,
   decideOnlineSize,
@@ -78,6 +79,7 @@ import {
   promoteWaitlistAfterMoveUp,
   type OnlineSavePrelude,
   type OnlineSaveResult,
+  type RefundedPackage,
 } from "../online-package";
 import type { OnlineSize } from "@/lib/online-chess-package";
 import { audit } from "../audit";
@@ -226,6 +228,8 @@ export async function patchDivision(
   let onlineSize: OnlineSize | null = null;
   // Out of the epilogue through this closure (it returns void): the response's `online`.
   let onlineSaved: OnlineSaveResult = { capacityLoweredTo: null, refunded: null };
+  // The packages a switch-off refunded, for the analytics sent after the commit (a fresh list per attempt).
+  let onlineRefunds: RefundedPackage[] = [];
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -919,7 +923,10 @@ export async function patchDivision(
     ...(onlineNamed
       ? {
           privilegedEpilogue: async (etx: Tx, written: DivisionRow) => {
-            onlineSaved = await applyOnlineSave(etx, { orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize });
+            onlineRefunds = [];
+            onlineSaved = await applyOnlineSave(etx, {
+              orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize, refunded: onlineRefunds,
+            });
           },
         }
       : {}),
@@ -938,6 +945,8 @@ export async function patchDivision(
     if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
   });
+  // Online Chess credits §14: the packages a switch-off refunded, reported after the commit (none for any other save). Never throws.
+  await captureRefundEvents(onlineRefunds as RefundedPackage[], { orgId: auth.orgId, actorId: auth.userId });
   // P18 (Online Chess credits): an unpaid size moved UP by this save made room, so the waitlist is promoted into it - after the
   // commit, best-effort, and only for a division that already had a live size (turning online play on with a default size is not a
   // move). `onlinePrelude.liveSize` is the size read under the division lock before the write.

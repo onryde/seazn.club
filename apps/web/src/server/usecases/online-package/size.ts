@@ -29,7 +29,7 @@ import { formatNotSupported, roundsAboveMax, roundsNeedSize } from "./format";
 import { clampCapacity } from "./pay";
 import { refusalFor, readPackageFacts } from "./quote";
 import { livePackage } from "./read";
-import { applyPackageDelete, planPackageDelete, type PackageDeletePlan, type RefundResult } from "./refund";
+import { applyPackageDelete, planPackageDelete, type PackageDeletePlan, type RefundedPackage, type RefundResult } from "./refund";
 import type { PackageFacts } from "./types";
 
 /** The refusals of the size door, each the leaf's code (plan Global Constraints), judged in the quote's ONE order (`refusalFor`):
@@ -148,7 +148,14 @@ export type OnlineSaveResult = { capacityLoweredTo: number | null; refunded: Ref
  *  Otherwise a size the callback decided → `writeOnlineSize`. Answers what moved, for the save's response. */
 export async function applyOnlineSave(
   etx: Tx,
-  a: { orgId: string; division: { id: string; name: string; sport_key: string; config: unknown }; prelude: OnlineSavePrelude; size: OnlineSize | null },
+  a: {
+    orgId: string;
+    division: { id: string; name: string; sport_key: string; config: unknown };
+    prelude: OnlineSavePrelude;
+    size: OnlineSize | null;
+    /** Filled with each package a switch-off refunded, for the analytics the caller sends after its commit (events.ts). */
+    refunded?: RefundedPackage[];
+  },
 ): Promise<OnlineSaveResult> {
   const onlineAfter = divisionPlaysOnline(a.division);
   if (a.prelude.storedOnline && !onlineAfter) {
@@ -156,7 +163,7 @@ export async function applyOnlineSave(
     if (a.prelude.plan === null) {
       throw new HttpError(500, `Division ${a.division.id} stopped playing online without a package plan; nothing was saved`, "online_package_unplanned");
     }
-    return { capacityLoweredTo: null, refunded: await applyPackageDelete(etx, a.orgId, a.prelude.plan) };
+    return { capacityLoweredTo: null, refunded: await applyPackageDelete(etx, a.orgId, a.prelude.plan, a.refunded) };
   }
   if (a.size === null) return { capacityLoweredTo: null, refunded: null };
   if (!onlineAfter) {

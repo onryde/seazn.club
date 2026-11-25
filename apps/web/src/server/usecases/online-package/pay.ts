@@ -40,6 +40,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "@/server/usecases/entitle
 import { onlineChessDisabled, onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { log } from "@/server/logger";
 import { lockOrg, streamMonthlyRate } from "@/server/usecases/stream-credits";
+import { capturePackageEvent, payEvent } from "./events";
 import { formatNotSupported } from "./format";
 import { debitForPackage, refundForPackage } from "./ledger";
 import { quoteLocked, readPackageFacts, type PackageQuote } from "./quote";
@@ -225,6 +226,8 @@ export async function payOnlinePackage(auth: AuthCtx, divisionId: string, input:
 
   // Whether the payment moved the size UP, read under the division lock (a size write takes the same lock) before the payment writes.
   let sizeBefore: OnlineSize | null = null;
+  // Whether the package was already paid when this payment came, read under the same lock: a first payment is `bought`, a later one `resized`.
+  let paidBefore = false;
   const result = await sql.begin(async (tx) => {
     await lockDivisionForCap(tx, divisionId);
     // Under the division lock: the division plays online (a sport that can, set to Lichess).
@@ -232,7 +235,9 @@ export async function payOnlinePackage(auth: AuthCtx, divisionId: string, input:
     if (!d || !divisionPlaysOnline(d)) throw formatNotSupported(null);
     const refusedKind = await refusedStageKind(tx, divisionId);
     const facts = await readPackageFacts(tx, divisionId, planCap);
-    sizeBefore = (await livePackage(tx, divisionId))?.size ?? null;
+    const live = await livePackage(tx, divisionId);
+    sizeBefore = live?.size ?? null;
+    paidBefore = live?.paidAt != null;
     return payOnlinePackageInTx(tx, { orgId, divisionId, userId, ...input }, facts, {
       rate,
       beforeCharge: () => {
@@ -242,6 +247,9 @@ export async function payOnlinePackage(auth: AuthCtx, divisionId: string, input:
       },
     }, deps);
   }) as PayResult;
+  // The analytics event (spec §14), AFTER the commit and only for a payment that wrote something; it never throws (events.ts).
+  const event = payEvent(result, { orgId, actorId: userId, paidBefore, atRoundOne: false });
+  if (event !== null) await capturePackageEvent(event.kind, event.fact);
   // P18: a move UP made room, and whoever is waiting for it is promoted - after the commit (the payment stands whatever happens
   // here: a failed promotion is logged and the organiser's own Promote still works). Imported where it is used: the promotion
   // reaches the registrations modules, whose own imports reach this package's barrel.

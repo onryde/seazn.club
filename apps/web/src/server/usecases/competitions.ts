@@ -11,7 +11,9 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
-import { applyPackageDelete, lockCompetitionDivisions, planPackageDelete, type PackageDeletePlan } from "./online-package";
+import {
+  applyPackageDelete, captureRefundEvents, lockCompetitionDivisions, planPackageDelete, type PackageDeletePlan, type RefundedPackage,
+} from "./online-package";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
@@ -908,6 +910,8 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
   // null (the divisions read org-scoped, their `division:` locks in ascending id, then the money lock), applied in the
   // privileged epilogue by the ids read there, so the refunds commit or roll back with the delete. Never flag-gated.
   let packages: PackageDeletePlan | null = null;
+  // The packages the epilogue refunded, for the analytics sent after the commit (a fresh list per attempt).
+  let refunded: RefundedPackage[] = [];
   const gone = await withTenant(auth.orgId, async (tx) => {
     // Guard: no deleting a competition with recorded play (ledger is precious).
     const [scored] = await tx`
@@ -1017,9 +1021,11 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
       packages = await planPackageDelete(ptx, { orgId: auth.orgId, divisionIds: divisions.map((d) => d.id) });
     },
     privilegedEpilogue: async (etx) => {
-      await applyPackageDelete(etx, auth.orgId, packages!);
+      refunded = [];
+      await applyPackageDelete(etx, auth.orgId, packages!, refunded);
     },
   });
+  await captureRefundEvents(refunded, { orgId: auth.orgId, actorId: auth.userId });
   // Public hub perf T2: a deleted competition must stop answering the polled
   // public readers' cached slug lookup (`findCompetitionRef`, usecases/public.ts)
   // now, not at its TTL. After the commit; never throws.

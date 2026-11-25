@@ -19,6 +19,7 @@ import "server-only";
 //    Never flag-gated.
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import type { OnlineSize } from "@/lib/online-chess-package";
 import { lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
 import { lockOrg } from "@/server/usecases/stream-credits";
 import { refundForPackage } from "./ledger";
@@ -49,6 +50,10 @@ export type PackageDeletePlan = { refund: PackageRow[]; drop: string[] /* unpaid
 /** What a refund (or a door's refunds, summed) gave back, by bucket, and gave up (the included credits of an earlier month). */
 export type RefundResult = { pack: number; monthly: number; forfeited: number };
 
+/** One package a door refunded, for the analytics (events.ts): what the row was (size, camera price) and what its refund gave back.
+ *  Collected by `applyPackageDelete` as it refunds; sent after the door's commit, so a rolled-back refund is never reported. */
+export type RefundedPackage = { size: OnlineSize; cameras: boolean; back: RefundResult };
+
 /** The PRELUDE half (privileged, before the role drops): take each division's `division:` lock in ascending id order, read every
  *  LIVE package of those divisions that belongs to `orgId` (paid, unpaid and frozen alike) under those locks, and sort them; then
  *  take the org money lock when one of them holds money to return. Scoped to the org: the prelude runs with the pool's privileges,
@@ -76,13 +81,18 @@ export async function planPackageDelete(ptx: Tx, a: { orgId: string; divisionIds
 /** The EPILOGUE half (privileged, after the tenant writes, on the same transaction): refund each planned paid row and delete each
  *  planned unpaid one, by the ids the prelude read. Answers the credits returned and forfeited, summed. A refund that fails throws,
  *  and the whole transaction — the delete with it — rolls back: money first (§7.3). */
-export async function applyPackageDelete(etx: Tx, orgId: string, plan: PackageDeletePlan): Promise<RefundResult> {
+export async function applyPackageDelete(
+  etx: Tx, orgId: string, plan: PackageDeletePlan, refunded?: RefundedPackage[],
+): Promise<RefundResult> {
   const total: RefundResult = { pack: 0, monthly: 0, forfeited: 0 };
   for (const row of plan.refund) {
     if (row.orgId !== orgId.toLowerCase()) {
       throw new HttpError(500, `Online Chess package ${row.id} does not belong to organisation ${orgId}; nothing was refunded`, "online_package_not_of_org");
     }
     const r = await refundOnlinePackageLocked(etx, row);
+    // A paid package always holds its size's price in value (V556 and the pay door's books), so a real refund returns or forfeits
+    // something: an all-zero answer is `refundOnlinePackageLocked`'s no-op on a row already refunded, which is no event.
+    if (refunded !== undefined && r.pack + r.monthly + r.forfeited > 0) refunded.push({ size: row.size, cameras: row.camerasPaid === true, back: r });
     total.pack += r.pack;
     total.monthly += r.monthly;
     total.forfeited += r.forfeited;

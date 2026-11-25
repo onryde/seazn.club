@@ -74,7 +74,7 @@ import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
 import { getLimit } from "@/lib/entitlements";
 import { streamMonthlyRate } from "../stream-credits";
-import { gateFirstOpen, promoteWaitlistAfterMoveUp, type PayInput } from "../online-package";
+import { capturePackageEvent, gateFirstOpen, promoteWaitlistAfterMoveUp, type PackageEvent, type PayInput } from "../online-package";
 import { isPlayableFixtureStatus } from "./preflight";
 import {
   bridgeTakesInvites,
@@ -255,6 +255,8 @@ type Decision =
       movedUp: boolean;
       /** Online Chess credits: what the press's `pay` did, for the answer (null when none was sent). */
       payment: OpenRoundPayment | null;
+      /** Online Chess credits §14: the analytics event of the payment this open made, sent after the commit (null when none was made). */
+      packageEvent: PackageEvent | null;
     };
 
 type LinkHold = LinkHoldReason;
@@ -723,13 +725,16 @@ export async function openRound(
     const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay, invitable }, money);
     return {
       kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
-      movedUp: gate.movedUp, payment: gate.payment,
+      movedUp: gate.movedUp, payment: gate.payment, packageEvent: gate.event,
     };
   });
 
   if (decision.kind === "nothing") {
     return { opened: false, reason: "already_open", skipped: decision.skipped };
   }
+  // Online Chess credits §14: the payment this open made, reported after the commit that made it (never for a refused open, which
+  // threw above, nor for a press that paid nothing); it never throws.
+  if (decision.packageEvent !== null) await capturePackageEvent(decision.packageEvent.kind, decision.packageEvent.fact);
   // P18: a payment on this open moved the size up, so whoever is waiting for the room it made is promoted - after the commit (the
   // payment and the open stand whatever happens here; the promotion reports its own failure and never throws).
   if (decision.movedUp) await promoteWaitlistAfterMoveUp(st.divisionId, a.actorUserId);

@@ -31,6 +31,7 @@ import {
   ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, sizeAllowedByPlan, type OnlineSize,
 } from "@/lib/online-chess-package";
 import { lockOrg } from "@/server/usecases/stream-credits";
+import { payEvent, type PackageEvent } from "./events";
 import { formatNotSupported } from "./format";
 import { payOnlinePackageInTx, refusedStageKind, type PayInput } from "./pay";
 import { quoteLocked, readPackageFacts, refusalFor, type PackageQuote } from "./quote";
@@ -46,7 +47,14 @@ export type GateMoney = { rate: number; planCap: number | null };
  *  m1, m2) - null when no `pay` was sent; `applied` false with 0 credits when it moved nothing (a frozen row ignores it; a row
  *  already paid at that size and camera state is step 1 of the pay door, which returns BEFORE it compares the confirmed total, so
  *  that total is never reported as paid). */
-export type GateResult = { asked: boolean; movedUp: boolean; payment: OpenRoundPayment | null };
+export type GateResult = {
+  asked: boolean;
+  movedUp: boolean;
+  payment: OpenRoundPayment | null;
+  /** The analytics event of the payment this open made (`at_round_one` true), for the caller to send AFTER its commit; null when
+   *  nothing was paid (no `pay`, a frozen row, a payment that wrote nothing). Never sent from here: this is inside the transaction. */
+  event: PackageEvent | null;
+};
 
 /** The largest size on the ladder: the most places Online Chess holds in one division. */
 const LARGEST: OnlineSize = ONLINE_SIZES[ONLINE_SIZES.length - 1]!;
@@ -130,7 +138,7 @@ export async function gateFirstOpen(
   const first = await liveOrRefuse(tx, a.divisionId, false);
   if (first.frozenAt !== null) {
     const ignored = a.pay === undefined ? null : { applied: false, credits: 0, size: first.size, capacityLoweredTo: null };
-    return { asked: false, movedUp: false, payment: ignored };
+    return { asked: false, movedUp: false, payment: ignored, event: null };
   }
 
   await lockOrg(tx, a.orgId);
@@ -138,6 +146,7 @@ export async function gateFirstOpen(
   const facts = await readPackageFacts(tx, a.divisionId, money.planCap);
   let movedUp = false;
   let payment: OpenRoundPayment | null = null;
+  let event: PackageEvent | null = null;
   if (a.pay !== undefined) {
     // The pay door's own gates on a charge, but only the one an open has not already asked: the flag and the billing freeze were
     // asked by `openRound` before its transaction; the stage kinds online play runs (P16) are asked here, under the lock.
@@ -156,6 +165,7 @@ export async function gateFirstOpen(
       size: paid.package.size,
       capacityLoweredTo: paid.capacityLoweredTo,
     };
+    event = payEvent(paid, { orgId: a.orgId, actorId: a.userId, paidBefore: before.paidAt !== null, atRoundOne: true });
   }
 
   const row = await liveOrRefuse(tx, a.divisionId, true);
@@ -168,7 +178,7 @@ export async function gateFirstOpen(
     throw new HttpError(402, unpaidMessage(row, quote, next, facts), ONLINE_PACKAGE_CODES.unpaid, { quote, next, invitable: a.invitable });
   }
   await freezeOnlinePackage(tx, row.id);
-  return { asked: true, movedUp, payment };
+  return { asked: true, movedUp, payment, event };
 }
 
 /** P8: the package freezes at the first open of any round, on the transaction's clock. Only a PAID, live, not yet frozen row (V556:
