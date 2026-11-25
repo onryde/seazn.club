@@ -14,12 +14,15 @@ import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "../refusal-focus";
 import { targetName, youtubeTargetLabel } from "../youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "../stream-signal-chain";
 import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage, SeaznQrPlaceholder } from "../seazn-qr-image";
+import { OpenInAppHint, OpenInAppRow } from "../open-in-app";
 import { ScoreLiveSummary } from "../stream-score-settings";
 import type { MessageKey } from "@/lib/messages";
 import type { Currency } from "@/lib/currency";
 import { chainFor, phoneDot } from "@/lib/stream-chain";
 import { effectiveStreamMode } from "@/lib/stream-settings";
 import { seaznQrModules } from "@/lib/seazn-qr";
+import { clientOrigin, streamAppLink } from "@/lib/open-in-app";
+import { streamHintKey, streamHintNeeds } from "@/lib/open-in-app-hint";
 import type { StreamPackSize } from "@/lib/stream-credit-packs";
 import {
   END_REASON_KEYS,
@@ -314,8 +317,24 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       </button>
     </div>
   );
+  // "Open in app" for the code this card holds (Android phones only; elsewhere the card is as it was). Its link is the
+  // QR's own text. Not drawn under a plan refusal. The line below the button names what the page knows is missing.
+  const origin = clientOrigin();
+  const codeHint = streamHintKey(
+    streamHintNeeds({
+      sessionOpen: state === "provisioning" || state === "warming" || state === "live" || state === "ending",
+      selectedTargetId: p.selectedTargetId,
+      balance: p.balance,
+      freeRestart: Boolean(p.restart?.free),
+    }),
+  );
   const codeInner = (
     <>
+      {p.code.status === "ok" && !p.planGate && (
+        <OpenInAppRow className="mt-2" href={origin === null ? null : streamAppLink(origin, p.code.text)}>
+          <OpenInAppHint hint={codeHint} />
+        </OpenInAppRow>
+      )}
       <div className="mt-2">
         {p.code.status === "ok" ? (
           p.code.image ? (

@@ -16,6 +16,7 @@
 // The QR's token is a credential: it is held only long enough to draw, never logged, never in an error or a URL.
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
+import { OpenInAppHint, OpenInAppRow } from "@/components/v2/open-in-app";
 import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { captureQrV2Text } from "@/lib/capture-qr";
@@ -24,6 +25,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { canWriteCourtStream, courtTargets, lastWorkingMinute, linkFailureKey } from "@/lib/match-day/court-stream";
 import type { MatchDayCourt, MatchDayCourtStream } from "@/lib/match-day/types";
+import { clientOrigin, streamAppLink } from "@/lib/open-in-app";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { useStreamingHref } from "@/components/use-org-paths";
 import type { CourtStream, StreamTarget } from "@/server/api-v1/schemas";
@@ -31,7 +33,9 @@ import type { MatchDayCtx } from "./court-focus";
 import { CourtPhoneStatus } from "./court-phone-status";
 
 export type TargetsState = { status: "loading" } | { status: "error" } | { status: "ok"; list: readonly StreamTarget[] };
-type QrState = { status: "loading" } | { status: "error" } | { status: "ok"; qr: SeaznQr; expiresAt: string };
+/** `text` is the exact string the QR encodes: "Open in app" carries the same bytes. A credential, like the QR. */
+interface DrawnQr { qr: SeaznQr; expiresAt: string; text: string }
+type QrState = { status: "loading" } | { status: "error" } | ({ status: "ok" } & DrawnQr);
 
 /** The destinations a court may stream to, as radios: Seazn first (a card of its own, saying nothing needs connecting), then the
  *  connected YouTube channels. With none: why, and the way to connect a channel (the Streaming page). */
@@ -92,9 +96,10 @@ export function TargetPicker({
 }
 
 /** The QR of a court link, drawn from the answer's payload (the write's, or the list's: the same `CourtStream`). */
-async function drawn(link: CourtStream | undefined): Promise<{ qr: SeaznQr; expiresAt: string } | null> {
+async function drawn(link: CourtStream | undefined): Promise<DrawnQr | null> {
   if (link === undefined || link.qr === null) return null;
-  return { qr: await renderSeaznQr(captureQrV2Text(link.qr)), expiresAt: link.expires_at };
+  const text = captureQrV2Text(link.qr);
+  return { qr: await renderSeaznQr(text), expiresAt: link.expires_at, text };
 }
 
 export function CourtStreamSheet({
@@ -214,8 +219,15 @@ function QrView({ dict, state, ctx }: { dict: Dict; state: QrState; ctx: MatchDa
       </p>
     );
   }
+  const origin = clientOrigin();
   return (
     <div className="grid min-w-0 gap-3">
+      {/* Android phones only (renders nothing elsewhere). This sheet holds neither the court's destination nor the
+          credit balance, so it asks the person to check both (spec 2026-11-25 §5.4). */}
+      <OpenInAppRow href={origin === null ? null : streamAppLink(origin, state.text)}>
+        <OpenInAppHint hint="openApp.stream.checkFirst" />
+        <OpenInAppHint hint="openApp.stream.thenGoLive" />
+      </OpenInAppRow>
       <div data-testid="md-cs-qr" className="mx-auto w-full max-w-xs">
         <SeaznQrImage testId="md-cs-qr-image" sensitive qr={state.qr} alt={t(dict, "matchDay.courtStream.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
       </div>
