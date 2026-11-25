@@ -10,7 +10,8 @@
  *      asks for nothing, and after the freeze the chip offers no Change size;
  *   B  pay and open: the first press on an unpaid package is refused 402, the receipt opens on the STORED size, its one confirm re-sends the open
  *      with the payment, and the round opens with the payment said in its notice;
- *   C  a division paid early from the amber line, moved up from the chip, and moved down with the credits shown and then really back;
+ *   C  a division paid early from the amber line, moved up from the chip, moved down with the credits shown and then really back, and - paid
+ *      without cameras - given the Fair-play camera at the SAME size from the chip (the camera box alone is enough, the total is the server's difference);
  *   D  the competition page flags the unpaid division for its organiser (a link to the Fixtures tab) and stops when it is paid.
  *
  * Where the expected numbers come from: the price table is the leaf's (`packagePrice`, checked against the spec's table by the unit suite), the
@@ -48,8 +49,8 @@ interface Quote {
   size: number; price: number; owed: number; shortBy: number | null; balance: number; refusal: string | null; covers: boolean;
   back: { pack: number; monthly: number; forfeited: number } | null;
 }
-const quoteOf = async (page: Page, divisionId: string, size: number): Promise<Quote> => {
-  const q = await apiJson<Quote>(page.request, `/api/v1/divisions/${divisionId}/online-package?size=${size}&addCameras=false`);
+const quoteOf = async (page: Page, divisionId: string, size: number, addCameras = false): Promise<Quote> => {
+  const q = await apiJson<Quote>(page.request, `/api/v1/divisions/${divisionId}/online-package?size=${size}&addCameras=${addCameras}`);
   expect(q.status, `quote ${size}: ${JSON.stringify(q.error)}`).toBe(200);
   return q.data!;
 };
@@ -87,8 +88,8 @@ async function setShortByOne(page: Page, divisionId: string): Promise<{ size: On
 
 const packageRow = (divisionId: string) =>
   withDb(async (sql) => {
-    const [p] = await sql<{ size: number; paid_at: Date | null; frozen_at: Date | null; credits_paid: number; credits_refunded: number }[]>`
-      select size, paid_at, frozen_at, credits_paid, credits_refunded from division_online_packages where division_id = ${divisionId} and refunded_at is null`;
+    const [p] = await sql<{ size: number; paid_at: Date | null; frozen_at: Date | null; credits_paid: number; credits_refunded: number; cameras_paid: boolean }[]>`
+      select size, paid_at, frozen_at, credits_paid, credits_refunded, cameras_paid from division_online_packages where division_id = ${divisionId} and refunded_at is null`;
     return p!;
   });
 
@@ -285,7 +286,7 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect((await packageRow(r.divisionId)).frozen_at, "paid and opened: frozen").not.toBeNull();
   });
 
-  test("C: pay early from the amber line, move up from the chip, move down - the credits are shown, then really back", async ({ page }) => {
+  test("C: pay early from the amber line, move up from the chip, move down - the credits are shown, then really back - then add the camera at the paid size", async ({ page }) => {
     test.setTimeout(budget(28));
     const r = await unpaidDivision(page, "ocmove");
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -328,6 +329,30 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(page.getByTestId("online-paid-chip")).toContainText(fill("onlineChess.chip.text", { size: small }), { timeout: 30_000 });
     expect(await balanceOf(page, r.divisionId), "the credits the receipt promised are back").toBe(afterUp + backTotal);
     expect((await packageRow(r.divisionId)).size).toBe(small);
+
+    // Add the Fair-play camera at the SAME paid size (spec 8.6): the chip opens the change receipt with no size chosen, and the camera box alone must be
+    // enough to get a quote - the camera difference at this size, as the server prices it (the receipt's total is the server's, not the receipt's own sum).
+    expect((await packageRow(r.divisionId)).cameras_paid, "premise: paid without cameras").toBe(false);
+    const camera = await quoteOf(page, r.divisionId, small, true);
+    const cameraDiff = packagePrice(small, true) - packagePrice(small, false);
+    expect(cameraDiff, "premise: the camera costs credits at the paid size").toBeGreaterThan(0);
+    expect(camera.owed, "the server's quote for (paid size, camera) is the leaf's camera difference").toBe(cameraDiff);
+    const beforeCamera = await balanceOf(page, r.divisionId);
+    await page.getByTestId("online-paid-chip-change").click();
+    await expect(receipt(page)).toHaveAttribute("data-mode", "change");
+    await expect(confirm(page), "nothing chosen yet").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
+    await page.getByTestId("online-receipt-cameras").check();
+    await expect(receipt(page), "the camera is quoted AT the paid size").toHaveAttribute("data-size", String(small));
+    await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(camera.owed));
+    await expect(confirm(page)).toHaveText(fill(camera.owed === 1 ? "onlineChess.payLine.pay.one" : "onlineChess.payLine.pay.other", { count: camera.owed }));
+    await confirm(page).click();
+    await expect(receipt(page)).toHaveCount(0, { timeout: 30_000 });
+    const after = await packageRow(r.divisionId);
+    expect([after.size, after.cameras_paid], "the camera is paid, the size did not move").toEqual([small, true]);
+    expect(await balanceOf(page, r.divisionId), "exactly the camera difference left the balance").toBe(beforeCamera - camera.owed);
+    // Paid with cameras: the change receipt no longer offers the box.
+    await page.getByTestId("online-paid-chip-change").click();
+    await expect(page.getByTestId("online-receipt-cameras")).toHaveCount(0);
   });
 
   test("D: the competition page flags the unpaid online division for its organiser, links to the Fixtures tab, and stops when it is paid", async ({ page }) => {

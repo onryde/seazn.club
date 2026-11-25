@@ -4986,6 +4986,7 @@ export type DictionaryKey =
   | "onlineChess.receipt.size.price.one"
   | "onlineChess.receipt.size.price.other"
   | "onlineChess.receipt.size.yours"
+  | "onlineChess.receipt.title.cameras"
   | "onlineChess.receipt.title.change"
   | "onlineChess.receipt.title.down"
   | "onlineChess.receipt.title.pay"

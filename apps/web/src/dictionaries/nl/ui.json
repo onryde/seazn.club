@@ -3734,6 +3734,7 @@
   "onlineChess.receipt.title.change": "Formaat van online schaken wijzigen",
   "onlineChess.receipt.title.up": "Opschalen naar {size} spelers",
   "onlineChess.receipt.title.down": "Afschalen naar {size} spelers",
+  "onlineChess.receipt.title.cameras": "Fairplay-camera toevoegen",
   "onlineChess.receipt.row.name": "Online schaken",
   "onlineChess.receipt.row.size": "Tot {size} spelers · tot {rounds} rondes",
   "onlineChess.receipt.row.cameras": "Fairplay-camera",

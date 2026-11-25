@@ -73,7 +73,7 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
   const msg = useMsg();
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
-  const [state, dispatch] = useReducer(receiptReducer, undefined, () => initialReceipt({ mode, size: props.size, quote: props.quote }));
+  const [state, dispatch] = useReducer(receiptReducer, undefined, () => initialReceipt({ mode, size: props.size, quote: props.quote, paidSize: facts.paid?.size ?? null }));
   /** A ref, so a second tap landing on one render's handler - before the first has re-rendered `submitting` - is refused too. */
   const pressing = useRef(false);
   /** The latest `readQuote`, read through a ref so a caller's fresh function every render cannot re-run the read below (it would fetch for ever:
@@ -144,6 +144,8 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
   const title = ((): string => {
     if (mode === "pay") return msg("onlineChess.receipt.title.pay");
     if (mode === "payAndOpen") return msg("onlineChess.receipt.title.payAndOpen");
+    // The camera of a paid package is a payment AT the paid size, not a move to it (R6): "Move up to 64 players" over a 64 package would be wrong.
+    if (quote !== null && quote.refusal === null && facts.paid !== null && quote.size === facts.paid.size) return msg("onlineChess.receipt.title.cameras");
     if (quote !== null && quote.refusal === null && quote.owed < 0) return msg("onlineChess.receipt.title.down", { size: quote.size });
     if (quote !== null && quote.refusal === null && quote.owed > 0) return msg("onlineChess.receipt.title.up", { size: quote.size });
     return msg("onlineChess.receipt.title.change");

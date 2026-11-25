@@ -3787,6 +3787,7 @@
   "onlineChess.receipt.title.change": "Changer la taille des Échecs en ligne",
   "onlineChess.receipt.title.up": "Passer à {size} joueurs",
   "onlineChess.receipt.title.down": "Descendre à {size} joueurs",
+  "onlineChess.receipt.title.cameras": "Ajouter la caméra fair-play",
   "onlineChess.receipt.row.name": "Échecs en ligne",
   "onlineChess.receipt.row.size": "Jusqu'à {size} joueurs · jusqu'à {rounds} rondes",
   "onlineChess.receipt.row.cameras": "Caméra fair-play",

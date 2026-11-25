@@ -6,11 +6,8 @@
 // reports how many cells it checked and zero is a failure. Every quote is the SERVER's own shape (`OnlinePackageQuote`), built by `quoteOf`.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactElement, ReactNode } from "react";
-import { isValidElement } from "react";
-import { expandWithHooks, propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { Modal } from "@/components/modal";
 import enUi from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { Dict } from "@/lib/i18n-constants";
@@ -18,6 +15,7 @@ import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, packagePrice, type 
 import type { PayBody, ReceiptMode, ReceiptQuote } from "@/lib/online-receipt";
 import { quoteOf, type QuoteSpec } from "@/lib/__tests__/_receipt-quote";
 import { OnlineReceipt, type OnlineReceiptProps, type ReceiptFacts } from "../receipt";
+import { expandAll, textOfAll } from "./_receipt-tree";
 
 const EN = enUi as Record<string, string>;
 const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_m, k: string) => String(v[k]));
@@ -26,36 +24,6 @@ const clean = (markup: string) => markup.replace(/<[^>]+>/g, " ").replace(/&#x27
 const FACTS: ReceiptFacts = { planCap: null, held: 0, rounds: 0, cameras: false, paid: null, storedSize: 64, viewerPlan: "pro" };
 const flush = async () => {
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
-};
-
-/** Every element the receipt draws: the harness's one-level walk, plus the Modal's `footer` prop and any hook-using child component. */
-function expandAll(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
-  if (Array.isArray(node)) {
-    for (const n of node) expandAll(n, out);
-    return out;
-  }
-  if (!isValidElement(node)) return out;
-  out.push(node);
-  const p = node.props as { children?: ReactNode; footer?: ReactNode };
-  if (typeof node.type === "function" && node.type !== Modal) expandAll(expandWithHooks(node.type as (props: unknown) => ReactNode, node.props), out);
-  expandAll(p.children, out);
-  if (p.footer !== undefined) expandAll(p.footer, out);
-  return out;
-}
-const textOfAll = (els: ReactElement[]) => {
-  const parts: string[] = [];
-  const visit = (n: ReactNode) => {
-    if (typeof n === "string" || typeof n === "number") parts.push(String(n));
-    else if (Array.isArray(n)) n.forEach(visit);
-    else if (isValidElement(n)) {
-      const p = n.props as { children?: ReactNode; footer?: ReactNode };
-      if (typeof n.type === "function" && n.type !== Modal) visit(expandWithHooks(n.type as (props: unknown) => ReactNode, n.props));
-      visit(p.children);
-      if (p.footer !== undefined) visit(p.footer);
-    }
-  };
-  els.forEach(visit);
-  return parts.join(" ").replace(/\s+/g, " ").trim();
 };
 
 interface Over extends Partial<Omit<OnlineReceiptProps, "facts">> {
@@ -291,18 +259,57 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
     expect(propsOf(m.els()[0]!).title).toBe("Move up to 128 players");
   });
 
-  it("Add Fair-play camera sends addCameras and says where to turn it on", async () => {
-    const m = make({ mode: "change", size: 64, facts: CH, readQuote: vi.fn(async (c) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 20 })) });
+  // Fix round 2: the OLD version of this test mounted the receipt on size 64, the paid size - a state no entry point creates (the chip opens a change
+  // receipt with NO size chosen, and the list leaves the paid size out). It passed while the camera upgrade was unreachable. The state below is the chip's.
+  const cameraRead = vi.fn(async (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 20 }));
+  const CAMERA_DIFF = () => packagePrice(64, true) - packagePrice(64, false);
+  const tick = (m: ReturnType<typeof make>, checked: boolean) => (propsOf(m.by("online-receipt-cameras")!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked } });
+
+  it("Add Fair-play camera from the state the chip opens (NO size chosen): the tick chooses the PAID size, reads its camera quote, owes the camera difference and sends addCameras", async () => {
+    cameraRead.mockClear();
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
     await flush();
+    expect(cameraRead, "premise: nothing is chosen, so nothing is read").not.toHaveBeenCalled();
+    expect(confirmLabel(m), "premise: the button waits for a size").toBe("Choose a size");
     expect(m.has("online-receipt-cameras")).toBe(true);
     expect(m.has("online-receipt-cameras-paid")).toBe(false);
-    (propsOf(m.by("online-receipt-cameras")!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
-    expect(m.readQuote).toHaveBeenLastCalledWith({ size: 64, addCameras: true });
+    tick(m, true);
+    expect(cameraRead).toHaveBeenLastCalledWith({ size: 64, addCameras: true });
     await flush();
-    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(64, true) - packagePrice(64, false)} credits`);
+    expect(CAMERA_DIFF(), "premise: the camera costs credits at 64").toBeGreaterThan(0);
+    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
+    expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${CAMERA_DIFF()} credits`);
+    expect(propsOf(m.els()[0]!).title, "it is not a move UP to the size it already is").toBe("Add the Fair-play camera");
     expect(textOfAll([m.by("online-receipt-cameras-paid")!])).toBe("Fair-play camera is paid. Turn it on in Division rules.");
     await m.press("online-receipt-confirm");
-    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: 4, addCameras: true });
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF(), addCameras: true });
+  });
+
+  it("unticking the camera gives the 'choose a size' state back (the paid size without a camera is nothing to pay)", async () => {
+    cameraRead.mockClear();
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
+    tick(m, true);
+    await flush();
+    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
+    tick(m, false);
+    await flush();
+    expect(confirmLabel(m)).toBe("Choose a size");
+    expect(m.has("online-receipt-row-total")).toBe(false);
+    expect(propsOf(m.els()[0]!).title).toBe("Change the Online Chess size");
+  });
+
+  it("a move with cameras still works: pick a size, then tick - the quote is for THAT size with the camera, and the title is the move's", async () => {
+    cameraRead.mockClear();
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: cameraRead });
+    m.pick(128);
+    await flush();
+    tick(m, true);
+    expect(cameraRead).toHaveBeenLastCalledWith({ size: 128, addCameras: true });
+    await flush();
+    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(128, true) - packagePrice(64, false)} credits`);
+    expect(propsOf(m.els()[0]!).title).toBe("Move up to 128 players");
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 128, expectedOwed: packagePrice(128, true) - packagePrice(64, false), addCameras: true });
   });
 
   it("no camera checkbox where the camera is already paid, or the package is not paid yet", () => {

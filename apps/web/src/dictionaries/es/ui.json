@@ -3734,6 +3734,7 @@
   "onlineChess.receipt.title.change": "Cambiar el tamaño del Ajedrez en línea",
   "onlineChess.receipt.title.up": "Subir a {size} jugadores",
   "onlineChess.receipt.title.down": "Bajar a {size} jugadores",
+  "onlineChess.receipt.title.cameras": "Añadir la cámara de juego limpio",
   "onlineChess.receipt.row.name": "Ajedrez en línea",
   "onlineChess.receipt.row.size": "Hasta {size} jugadores · hasta {rounds} rondas",
   "onlineChess.receipt.row.cameras": "Cámara de juego limpio",

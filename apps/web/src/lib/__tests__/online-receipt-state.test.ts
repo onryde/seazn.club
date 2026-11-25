@@ -208,3 +208,79 @@ describe("sweep: every reachable choice reads, presses and settles", () => {
     expect(checked).toBe(10);
   });
 });
+
+// R6 (fix round 2): the camera of a PAID package. The change receipt opens with NO size chosen (the paid size is not in its list: a size is
+// changed TO another), so a camera ticked on its own had no size to read a quote for and the button stayed "Choose a size" - the camera upgrade
+// at the paid size (spec 8.6) was unreachable. Ticking the camera now chooses the paid size; unticking it with nothing else chosen gives it back.
+describe("R6: adding the camera to a paid package is a change AT the paid size", () => {
+  const SIZES = [16, 32, 64, 128, 256] as const;
+  const paidOpen = (paidSize: OnlineSize | null, size: OnlineSize | null = null, mode: "change" | "pay" = "change") =>
+    initialReceipt({ mode, size, quote: null, paidSize });
+  const paidQuote = (size: OnlineSize, paidSize: OnlineSize, addCameras: boolean) =>
+    quoteOf({ size, cameras: addCameras, paid: { size: paidSize, camerasPaid: false }, monthly: 100 });
+
+  it("with no size chosen, ticking the camera chooses the paid size: a read is owed for (paid size, camera on) and nothing is shown before it", () => {
+    const s = run(paidOpen(64), { type: "cameras", on: true });
+    expect(wantedOf(s)).toEqual({ size: 64, addCameras: true });
+    expect(readOwed(s)).toEqual({ size: 64, addCameras: true });
+    expect(shownQuote(s)).toBeNull();
+    expect(pressBody(s)).toBeNull();
+  });
+
+  it("the quote that answers it arms the camera difference at the paid size, and only that: the server's owed, addCameras sent", () => {
+    const choice: ReceiptChoice = { size: 64, addCameras: true };
+    const s = run(paidOpen(64), { type: "cameras", on: true }, { type: "read", choice, quote: paidQuote(64, 64, true) });
+    const diff = packagePrice(64, true) - packagePrice(64, false);
+    expect(diff, "premise: the camera costs something at 64").toBeGreaterThan(0);
+    expect(shownQuote(s)?.owed).toBe(diff);
+    expect(pressBody(s)).toEqual({ size: 64, expectedOwed: diff, addCameras: true });
+  });
+
+  it("unticking it with nothing else chosen gives the size back: the paid size without a camera is nothing to pay, never an armed no-op", () => {
+    const choice: ReceiptChoice = { size: 64, addCameras: true };
+    const ticked = run(paidOpen(64), { type: "cameras", on: true }, { type: "read", choice, quote: paidQuote(64, 64, true) });
+    const off = run(ticked, { type: "cameras", on: false });
+    expect(wantedOf(off)).toBeNull();
+    expect(shownQuote(off)).toBeNull();
+    expect(readOwed(off)).toBeNull();
+    expect(pressBody(off)).toBeNull();
+  });
+
+  it("with another size chosen, the camera tick leaves the size alone (a move up or down with cameras), and unticking leaves it too", () => {
+    const up = run(paidOpen(64), { type: "pick", size: 128 }, { type: "cameras", on: true });
+    expect(wantedOf(up)).toEqual({ size: 128, addCameras: true });
+    expect(wantedOf(run(up, { type: "cameras", on: false }))).toEqual({ size: 128, addCameras: false });
+    const down = run(paidOpen(64), { type: "pick", size: 32 }, { type: "cameras", on: true });
+    expect(wantedOf(down)).toEqual({ size: 32, addCameras: true });
+  });
+
+  it("picking another size after the camera tick moves off the paid size and keeps the camera", () => {
+    const s = run(paidOpen(64), { type: "cameras", on: true }, { type: "pick", size: 128 });
+    expect(wantedOf(s)).toEqual({ size: 128, addCameras: true });
+    expect(wantedOf(run(s, { type: "cameras", on: false })), "off at another size stays at that size").toEqual({ size: 128, addCameras: false });
+  });
+
+  it("only a change receipt over a PAID package does this: pay mode and an unpaid package (no paid size) keep the old behaviour", () => {
+    expect(wantedOf(run(paidOpen(null), { type: "cameras", on: true })), "no paid size: nothing to choose").toBeNull();
+    expect(wantedOf(run(paidOpen(64, null, "pay"), { type: "cameras", on: true })), "pay mode").toBeNull();
+    expect(wantedOf(run(paidOpen(null, 32, "pay"), { type: "cameras", on: true })), "pay mode keeps its size").toEqual({ size: 32, addCameras: true });
+  });
+
+  it("sweep: at every paid size the tick chooses THAT size, and the camera difference is the leaf's", () => {
+    let checked = 0;
+    for (const paidSize of SIZES) {
+      const choice: ReceiptChoice = { size: paidSize, addCameras: true };
+      const s = run(paidOpen(paidSize), { type: "cameras", on: true }, { type: "read", choice, quote: paidQuote(paidSize, paidSize, true) });
+      expect(pressBody(s), `paid ${paidSize}`).toEqual({ size: paidSize, expectedOwed: packagePrice(paidSize, true) - packagePrice(paidSize, false), addCameras: true });
+      checked += 1;
+    }
+    expect(checked).toBe(SIZES.length);
+  });
+
+  it("a confirm in flight keeps the choice: the tick while submitting is ignored", () => {
+    const choice: ReceiptChoice = { size: 64, addCameras: true };
+    const submitting = run(paidOpen(64), { type: "cameras", on: true }, { type: "read", choice, quote: paidQuote(64, 64, true) }, { type: "submit" });
+    expect(submitting.submitting).toBe(true);
+    expect(run(submitting, { type: "cameras", on: false })).toBe(submitting);
+  });
+});
