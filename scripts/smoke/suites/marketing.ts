@@ -76,6 +76,22 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /product/match-day 200", matchDayPage.status === 200);
   check("marketing: /product/match-day has its headline", matchDayHtml.replace(/<[^>]+>/g, "").includes("one screen."));
   check("marketing: /product/match-day demo opens with one court playing and two to call", matchDayHtml.includes('data-court-state="playing"') && matchDayHtml.split('data-act="call"').length - 1 === 2);
+  // The Android app's band (spec 2026-11-25 §4): on the home page and three product pages, beside the footer's badge, in
+  // the server's markup. A page outside the four has the footer's badge alone. `data-testid="` anchors on the markup:
+  // the flight payload spells the same attribute with a colon.
+  const playHref = 'href="https://play.google.com/store/apps/details?id=com.seazn.capture"';
+  const badgesIn = (page: string) => page.split('data-testid="play-badge"').length - 1;
+  for (const [path, page, headline] of [
+    ["/", html, "Your phone is the camera and the scorer"],
+    ["/product/streaming", streamingHtml, "Put the camera in your pocket"],
+    ["/product/match-day", matchDayHtml, "One phone follows the court"],
+    ["/product/remote-scoring", remoteHtml, "Score from the app too"],
+  ] as const) {
+    const band = page.match(/<section\b[^>]*\bdata-testid="app-band"[^>]*>.*?<\/section>/s)?.[0] ?? "";
+    check(`marketing: ${path} has the app band, with its headline and a Play link`, band.includes(`>${headline}<`) && band.includes(playHref));
+    check(`marketing: ${path} has two Play badges, the band's and the footer's`, badgesIn(page) === 2);
+  }
+  check("marketing: /product/format has no app band, only the footer's Play badge", !formatHtml.includes('data-testid="app-band"') && badgesIn(formatHtml) === 1);
   const sponsorPage = await fetch(`${BASE}/product/sponsoring`);
   const sponsorHtml = await sponsorPage.text();
   check("marketing: /product/sponsoring 200", sponsorPage.status === 200);

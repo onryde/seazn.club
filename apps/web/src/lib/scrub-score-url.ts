@@ -103,6 +103,12 @@
 // AND `expires` values become `[token]` / `[expires]`, plain or URL-encoded at any depth; the host, library, video and every other
 // parameter stay. A `token=` on another host is not this rule's.
 //
+// The "Open in app" links (spec 2026-11-25 §5.5) carry a live credential in their FRAGMENT: `/app/stream#<base64url of the
+// capture QR text>`, `/app/score#dl_…`, `/app/day#md_…`. The anchor sits on a signed-in page that runs analytics. The stream
+// fragment has no prefix of its own, so it is scrubbed by its ADDRESS: whatever follows `/app/(stream|score|day)#` becomes
+// `[token]`, plain or URL-encoded at any depth. An escaped `#` after a plain path counts as encoded (the credential is then
+// part of the path). A fragment with no `/app/…` address in the same string is not this rule's to find.
+//
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
 // that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
 // `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
@@ -128,6 +134,18 @@ const SCORE_PATH = /\/score\/[^/?#\s"'<>]+/g;
  * `/`, `?`, `#`, quote, angle bracket or space. The prefix is kept as it was.
  */
 const ENCODED_SCORE_PATH = /(%(?:25)*2[Ff]score%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+/** The pages under `/app/` the phone app opens (lib/open-in-app.ts); the credential is the fragment after one of them. */
+const APP_LINK_KINDS = "(?:stream|score|day)";
+/** `/app/<kind>#`, as source: MAYBE_TOKEN's trigger and the front of `APP_LINK`. */
+const APP_LINK_PREFIX = `\\/app\\/${APP_LINK_KINDS}#`;
+/** The same URL-ENCODED, at any depth, either hex case: the `#` is encoded, and each `/` is encoded or (an escaped `#` alone) plain. */
+const ENCODED_SLASH = "(?:\\/|%(?:25)*2[Ff])";
+const ENCODED_APP_LINK_PREFIX = `${ENCODED_SLASH}app${ENCODED_SLASH}${APP_LINK_KINDS}%(?:25)*23`;
+/** ANY fragment, whatever its shape: it ends where the string around it goes on (space, quote, angle bracket, or the `\` of an
+ *  escaped quote). */
+const APP_LINK = new RegExp(`(${APP_LINK_PREFIX})[^\\s"'<>\\\\]+`, "g");
+/** Encoded: the fragment also ends at its encoded delimiter (the next `%`), as `ENCODED_SCORE_PATH`'s token does. */
+const ENCODED_APP_LINK = new RegExp(`(${ENCODED_APP_LINK_PREFIX})[^%&/?#\\s"'<>\\\\]+`, "g");
 /**
  * A bare secret, e.g. in an `Authorization` header. `mintDeviceLinkSecret`
  * makes `dl_` + 43 base64url chars, and a Match Day code (MD-1 review I3,
@@ -303,6 +321,8 @@ const MAYBE_TOKEN = new RegExp(
     "dl_",
     "md_",
     "qm_",
+    APP_LINK_PREFIX,
+    ENCODED_APP_LINK_PREFIX,
     `${OVERLAY_KEY_PARAM}=`,
     `${OVERLAY_KEY_PARAM}%`,
     `${RELAY_PAGE_TOKEN_PARAM}=`,
@@ -337,7 +357,8 @@ export function scrubTokenQuery(query: string): string {
  *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, a replay CDN
  *  token after `bcdn_token=` becomes `[token]`, the replay host's embed `token` / `expires` values become `[token]` / `[expires]`
  *  (plain or encoded), the playback token after a Cloudflare Stream customer host (plain or encoded)
- *  becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
+ *  becomes `[token]`, any fragment after `/app/(stream|score|day)#` (plain or encoded) becomes `[token]`, and a bare quick
+ *  match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -354,6 +375,9 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")
     .replace(SCORE_PATH, "/score/[token]")
     .replace(ENCODED_SCORE_PATH, "$1[token]")
+    // Before BARE_TOKEN: a whole /app fragment goes, so no `dl_` / `md_` run inside it is rewritten on its own first.
+    .replace(APP_LINK, "$1[token]")
+    .replace(ENCODED_APP_LINK, "$1[token]")
     .replace(BARE_TOKEN, "$1_[token]")
     .replace(OVERLAY_KEY_QUERY, "$1[key]")
     .replace(ENCODED_OVERLAY_KEY, "$1[key]")

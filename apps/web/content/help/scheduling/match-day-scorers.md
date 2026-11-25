@@ -1,11 +1,11 @@
 ---
 title: Scorers and Match Day codes
-description: Give a scorer a link for one match, or make a Match Day code that lets the Seazn Club app list the day's matches, score them and, when you tick it, call them to courts.
+description: Give a scorer a link for one match, or make a Match Day code that lets the Seazn Club Mobile App list the day's matches, score them and, when you tick it, call them to courts.
 order: 10.2
 related: scheduling/match-day, scheduling/match-day-stream, scoring/device-links, scoring/scorer-role
 ---
 
-Two things on **Match Day** hand a match to someone who is not at your desk. A scoring link gives one phone one match. A **Match Day code** gives the Seazn Club app the day's matches for the competition, venue or courts you choose.
+Two things on **Match Day** hand a match to someone who is not at your desk. A scoring link gives one phone one match. A **Match Day code** gives the Seazn Club Mobile App the day's matches for the competition, venue or courts you choose.
 
 ## A scoring link for one match
 
@@ -19,7 +19,7 @@ On a playing or called court, **Remote scoring** gives a QR code and a link for 
 
 ## A Match Day code
 
-A Match Day code is one QR code for the Seazn Club app. Scan it in the app and the app lists the day's matches and opens their scoring. Owners and admins make codes. A Viewer does not see the **Match Day code** button.
+A Match Day code is one QR code for the Seazn Club Mobile App. Scan it in the app and the app lists the day's matches and opens their scoring. Owners and admins make codes. A Viewer does not see the **Match Day code** button.
 
 ![The Match Day code sheet with the Covers choices, the Day, the two ticks and the Make code button, above a list of three active codes.](/help/scheduling/match-day-code.webp "The Match Day code sheet and its list of active codes.")
 
@@ -39,7 +39,7 @@ The code works from 00:00 to 24:00 on its day, in your organisation's time zone,
 
 A code only reaches what it covers. A match or court outside what it covers is refused.
 
-If you open a Match Day code in a browser, it shows **Open this with the Seazn Club app**.
+If you open a Match Day code in a browser, it shows **Open this with the Seazn Club Mobile App**.
 
 ### See and withdraw codes
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "@/components/ui/console-link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
+import { AppBand } from "@/components/marketing/app-band";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { HeroVignette } from "@/components/marketing/hero-vignette";
 import { HERO_SCENES, heroSceneLabelKey, type HeroSceneKey } from "@/components/marketing/hero-scenes";
@@ -157,6 +158,8 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
         </section>
 
         <CompetitionFlow dict={d} lang={lang} currency={currency} />
+
+        {await AppBand({ lang, title: t(d, "home.app.title"), label: t(d, "home.app.label"), line: t(d, "home.app.line") })}
 
         {/* Floodlit finale — pricing + CTA in one night block */}
         <section className="relative overflow-hidden bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] py-20 text-center">

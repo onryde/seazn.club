@@ -80,6 +80,7 @@ import { aboveProRungSuite } from "./suites/aboveProRung.ts";
 import { pricingV3Suite } from "./suites/pricingV3.ts";
 import { i18nSuite } from "./suites/i18n.ts";
 import { marketingSuite } from "./suites/marketing.ts";
+import { openInAppSuite } from "./suites/openInApp.ts";
 import { funnelSuite } from "./suites/funnel.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
 import { quickMatchSuite } from "./suites/quickMatch.ts";
@@ -939,6 +940,9 @@ export async function main() {
 
   // --- PROMPT-40 marketing redesign (design/v3/12).
   await suite("marketing", () => marketingSuite());
+
+  // --- Open in app (2026-11-25): assetlinks.json and the /app fallback pages as served. Anonymous, no org.
+  await suite("openInApp", () => openInAppSuite());
 
   // --- v5 i18n: marketing [lang] routing + translated copy.
   await suite("i18n", () => i18nSuite());

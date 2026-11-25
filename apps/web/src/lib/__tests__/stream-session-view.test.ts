@@ -887,8 +887,8 @@ describe("phoneStrip — the message under the chain (Option B rev 2, T11)", () 
     });
     expect(phoneStrip(readModel(), view({ state: "completed" }))).toBeNull();
     expect(phoneStrip(readModel({ finished: true, code: ENDED_CODE }), null)).toBeNull();
-    expect(msg("stream.phone.pairFirst")).toBe("Pair a phone first: scan the code with Seazn Capture");
-    expect(msg("stream.phone.silent")).toBe("The phone stopped checking in. Open Seazn Capture on it");
+    expect(msg("stream.phone.pairFirst")).toBe("Pair a phone first: scan the code with the Seazn Club Mobile App");
+    expect(msg("stream.phone.silent")).toBe("The phone stopped checking in. Open the Seazn Club Mobile App on it");
   });
 
   it("waiting: the lead alone, slate, before a countdown; with the warming countdown, amber and its reason's sentence over `remaining` — exactly as given", () => {

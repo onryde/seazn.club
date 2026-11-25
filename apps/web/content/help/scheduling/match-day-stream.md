@@ -11,7 +11,7 @@ One phone on a tripod can stream every match on a court, one YouTube video per m
 
 1. On Match Day, select the court, then **Stream this court**.
 2. Under **YouTube channel**, pick a connected channel. If you have none, use **Connect YouTube**. A court streams to a connected YouTube channel, one video per match.
-3. The court gets a QR code. It reads **Scan with the Seazn Club app: Live Stream.** and **Works until 23:59 today**.
+3. The court gets a QR code. It reads **Scan with the Seazn Club Mobile App: Live Stream.** and **Works until 23:59 today**.
 
 The code works until the end of the day. Select **Show court QR** to bring it back. A court streams to one channel a day: **This court already streams to another channel today.**
 
@@ -21,7 +21,7 @@ Once the court is linked, its row and its panel read **No phone yet**, then the 
 
 ## Scan it on the phone
 
-In the Seazn Club app, open **Live Stream** and scan the court's QR. The court's state then changes between **No phone yet**, **Phone waiting**, **Live** and **Phone offline**.
+In the Seazn Club Mobile App, open **Live Stream** and scan the court's QR. The court's state then changes between **No phone yet**, **Phone waiting**, **Live** and **Phone offline**.
 
 ## Switch matches on
 

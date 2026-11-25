@@ -394,7 +394,7 @@ describe("PhoneStripView — the phone's message under the chain (capture QR v2 
     const html = strip({ id: "why-1", strip: { tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } }, caret: true });
     expect(html).toMatch(/^<div id="why-1" data-testid="stream-phone-strip" data-tone="slate" data-icon="phone" role="status" class="relative mt-3 rounded-md border px-3 py-2 text-sm border-slate-200 bg-slate-50 text-slate-700">/);
     expect(html).toContain('class="absolute -top-[7px] left-[34px] h-3 w-3 rotate-45 border-l border-t border-slate-200 bg-slate-50 md:left-[42px]"');
-    expect(html).toContain(">Pair a phone first: scan the code with Seazn Capture<");
+    expect(html).toContain(">Pair a phone first: scan the code with the Seazn Club Mobile App<");
   });
 
   it("amber with the lead in medium weight, and the countdown's durations in the locale, unbroken (whitespace-nowrap tabular-nums) — en and fr", () => {

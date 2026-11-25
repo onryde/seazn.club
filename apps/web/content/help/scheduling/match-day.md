@@ -55,7 +55,7 @@ A warning never stops a call. The sheet warns you when:
 
 ## Scorers, codes and streams
 
-A playing court shows **No scorer** while nobody has started scoring it, no official is assigned to it and it has no scoring link. To give a scorer a link, or to make a Match Day code for the Seazn Club app, see [scorers and Match Day codes](/help/scheduling/match-day-scorers). To stream every match on a court from one phone, see [streaming a court](/help/scheduling/match-day-stream).
+A playing court shows **No scorer** while nobody has started scoring it, no official is assigned to it and it has no scoring link. To give a scorer a link, or to make a Match Day code for the Seazn Club Mobile App, see [scorers and Match Day codes](/help/scheduling/match-day-scorers). To stream every match on a court from one phone, see [streaming a court](/help/scheduling/match-day-stream).
 
 ## Online chess rounds and boards
 

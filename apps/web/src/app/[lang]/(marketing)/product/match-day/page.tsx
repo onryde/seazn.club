@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { AppBand } from "@/components/marketing/app-band";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { MatchDayDemo } from "@/components/marketing/product/match-day-demo";
 import { matchDayDemoLabels } from "@/components/marketing/product/match-day-demo-labels";
@@ -68,6 +69,8 @@ export default async function MatchDayProductPage({ params }: { params: Promise<
             { image: "appStreamSettings", caption: s("court.fig2") },
           ]}
         />
+
+        {await AppBand({ lang, title: s("app.title"), label: s("app.label"), line: s("app.line") })}
 
         <Ticket
           title={s("ticket.title")}

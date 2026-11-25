@@ -204,7 +204,9 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
   if (!requestHostname(request).startsWith("games.")) return null;
   const { pathname } = request.nextUrl;
   if (pathname !== "/" && !GAMES_SLUG_PATH.test(pathname)) return null;
-  if (pathname === "/games") return null;
+  // Bare /app is not a game: rewritten, it renders through the root layout, analytics and all, with the URL fragment (an
+  // app link's credential) still in the address. app/app/[[...rest]]/route.ts answers it, as on every host.
+  if (pathname === "/games" || pathname === "/app") return null;
   const url = request.nextUrl.clone();
   url.pathname = pathname === "/" ? "/games" : `/games${pathname}`;
   return url;
@@ -376,9 +378,14 @@ function proxyCore(request: NextRequest): NextResponse {
   // signal for a reader that runs no script, at no rendering cost.
   const prefix = mp.split("/")[1] ?? "";
   if (hasLocale(prefix)) response.headers.set("Content-Language", prefix);
-  if (!cacheable) syncSessionHint(request, response);
+  if (!cacheable && !APP_FALLBACK_TREE.test(mp)) syncSessionHint(request, response);
   return response;
 }
+
+/** The "Open in app" fallback pages (`/app` or `/app/…`, never `/apps`). They set no cookie at all (spec 2026-11-25
+ *  §5.3), so the session hint below is neither set nor cleared there. Everything else the proxy does for a page, the
+ *  nonce, the CSP and the locale, they still need. */
+const APP_FALLBACK_TREE = /^\/app(\/|$)/;
 
 /** R2 (T16 fix round 1): keep the readable signed-in hint (lib/session-hint.ts) in step with the HttpOnly session, for
  *  a session minted before the hint existed or a hint an expired session left behind. App pages only — never on an
