@@ -191,9 +191,13 @@ describe("the app's one name in the marketing copy", () => {
     const help = join(__dirname, "../../../../content/help");
     const articles = readdirSync(help, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".md"));
     for (const file of articles) if (OLD_NAMES.test(readFileSync(join(help, file), "utf8"))) old.push(`help/${file}`);
+    const blog = join(__dirname, "../../../../content/blog");
+    const posts = readdirSync(blog).filter((f) => f.endsWith(".md"));
+    for (const file of posts) if (OLD_NAMES.test(readFileSync(join(blog, file), "utf8"))) old.push(`blog/${file}`);
     expect(old).toEqual([]);
     for (const lang of ["en", "es", "fr", "nl"]) expect(strings[lang] ?? 0, `${lang} strings read`).toBeGreaterThan(10_000);
     expect(articles.length).toBeGreaterThan(50);
+    expect(posts.length).toBeGreaterThan(30);
   });
 });
 

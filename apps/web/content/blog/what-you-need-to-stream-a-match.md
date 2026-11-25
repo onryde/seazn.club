@@ -16,7 +16,7 @@ You need four things: **an Android phone, a tripod that holds it sideways, power
 
 | What | Minimum | Better |
 | --- | --- | --- |
-| Phone | Android 12 or later, with the Seazn Club app | A spare phone that nobody needs during the match |
+| Phone | Android 12 or later, with the Seazn Club Mobile App | A spare phone that nobody needs during the match |
 | Tripod | Holds the phone sideways and stays put | Tall enough to see over people standing in front |
 | Power | A full battery and a charger | A power bank that stays connected while you stream |
 | Internet | 4G, 5G or Wi-Fi that holds steady at the spot where the tripod stands | Tested at that spot before match day |
@@ -24,7 +24,7 @@ You need four things: **an Android phone, a tripod that holds it sideways, power
 
 ## The phone
 
-Streaming uses the Seazn Club app on Android 12 or later. It does not stream from an iPhone.
+Streaming uses the Seazn Club Mobile App on Android 12 or later. It does not stream from an iPhone.
 
 Use a phone that can stay on the tripod: once it is filming, you do not want someone walking off with it to take a call. If a call is answered on that phone, the stream loses its sound until the call ends. A video call can also freeze the picture.
 
@@ -63,7 +63,7 @@ What matters is **upload** speed, at the place where the tripod stands, while pe
 
 1. Choose where the match streams to: your own YouTube channel. Connect the channel, or add a YouTube stream key once and pick it for any match. A phone that follows a court all day needs a connected channel.
 2. Make sure you have a Seazn credit. Each video uses one.
-3. Open the match's stream code, or the court's code if one phone follows a court all day. In the Seazn Club app, open **Live Stream** and scan it.
+3. Open the match's stream code, or the court's code if one phone follows a court all day. In the Seazn Club Mobile App, open **Live Stream** and scan it.
 
 ## Five-minute check at the venue
 
