@@ -225,8 +225,20 @@ describe("Online Chess credits copy: every key exists in all four locales", () =
 });
 
 describe("Online Chess credits copy: the proper names", () => {
-  it("every string that names Online Chess or the Fair-play camera in en does so in each locale's own form, and none keeps the English name", () => {
-    const keys = packageKeys();
+  /** Keys outside the `onlineChess.*` family that also name the feature: the Online play control's two labels, the pointer to where
+   *  the rules moved, and the two "not available for this club" refusals. Typed here so the sweep reaches them. */
+  const NAMED_ELSEWHERE = [
+    "divset.onlinePlay.label",
+    "divset.onlinePlay.summaryOn",
+    "divset.rulesMovedOnline",
+    "divset.err.onlineChessDisabled",
+    "runsheet.round.err.disabled",
+  ];
+  const namedKeys = (): string[] => [...packageKeys(), ...NAMED_ELSEWHERE];
+
+  it("every string that names Online Chess or the Fair-play camera in en does so in each locale's own form, in the SAME letter case, and none keeps the English name", () => {
+    // Case-sensitive on purpose: these are proper names, and a lowercased comparison let "Online Schaken" and "online chess" through.
+    const keys = namedKeys();
     let checked = 0;
     for (const loc of LOCALES) {
       let named = 0;
@@ -234,13 +246,18 @@ describe("Online Chess credits copy: the proper names", () => {
       for (const key of keys) {
         const en = UI.en[key] as string;
         const v = UI[loc][key] as string;
+        expect(typeof v, `${loc} ${key}`).toBe("string");
         if (en.includes(NAMES.en.game)) {
           named += 1;
-          expect(v.toLowerCase(), `${loc} ${key}: names the feature`).toContain(NAMES[loc].game.toLowerCase());
+          expect(v, `${loc} ${key}: names the feature, spelled ${NAMES[loc].game}`).toContain(NAMES[loc].game);
         }
         if (en.includes(NAMES.en.camera)) {
           camera += 1;
-          expect(v.toLowerCase(), `${loc} ${key}: names the camera`).toContain(NAMES[loc].camera.toLowerCase());
+          // The camera is a feature name too, but es/fr/nl write it as a common noun mid-sentence ("la caméra fair-play"): only the FIRST
+          // letter may differ in case, everything after it must be spelled as NAMES has it.
+          const cam = NAMES[loc].camera;
+          const lowerInitial = cam.charAt(0).toLowerCase() + cam.slice(1);
+          expect(v.includes(cam) || v.includes(lowerInitial), `${loc} ${key}: names the camera, spelled ${cam} (or with a lower-case initial)`).toBe(true);
         }
         if (loc !== "en") expect(v, `${loc} ${key}: the English name`).not.toMatch(/Online Chess|Fair-play camera/i);
         checked += 1;
@@ -251,11 +268,38 @@ describe("Online Chess credits copy: the proper names", () => {
     expect(checked).toBe(keys.length * LOCALES.length);
   });
 
-  it("the Online play control's label and its summary say Online Chess (spec §10.3), in every locale", () => {
+  it("no string in the named keys spells a locale's proper name in another letter case, and es/fr never say 'online' for it", () => {
+    const keys = namedKeys();
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const name = new RegExp(NAMES[loc].game.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      for (const key of keys) {
+        for (const m of (UI[loc][key] as string).matchAll(name)) {
+          expect(m[0], `${loc} ${key}: the name is ${NAMES[loc].game}`).toBe(NAMES[loc].game);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: spellings of the name checked").toBeGreaterThan(60);
+    // The older wording the dictionaries still carried: an anglicism where the locale has its own word.
+    const STALE: Partial<Record<Locale, RegExp>> = { es: /ajedrez online/i, fr: /[ée]checs online/i };
+    let swept = 0;
+    for (const [loc, bad] of Object.entries(STALE) as [Locale, RegExp][]) {
+      for (const [key, v] of Object.entries(UI[loc])) {
+        if (typeof v === "string") {
+          expect(v, `${loc} ${key}: the locale's own word, not 'online'`).not.toMatch(bad);
+          swept += 1;
+        }
+      }
+    }
+    expect(swept, "anti-vacuity: every es and fr string swept").toBeGreaterThan(2000);
+  });
+
+  it("the Online play control's label and its summary say Online Chess (spec §10.3), in every locale, spelled the same way", () => {
     let checked = 0;
     for (const loc of LOCALES) {
       for (const key of ["divset.onlinePlay.label", "divset.onlinePlay.summaryOn"]) {
-        expect((UI[loc][key] as string).toLowerCase(), `${loc} ${key}`).toContain(NAMES[loc].game.toLowerCase());
+        expect(UI[loc][key] as string, `${loc} ${key}`).toContain(NAMES[loc].game);
         checked += 1;
       }
     }
