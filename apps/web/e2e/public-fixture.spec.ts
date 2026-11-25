@@ -27,7 +27,7 @@ import { routes } from "../src/lib/routes";
 import publicEn from "../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../src/components/public-site/match-centre/seazn-video-schedule";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
-import { finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
+import { elementSaysHlsPlayable, finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
 
 const SPONSOR_HOST = "sponsor-s10.example";
 /** A realistic long title sponsor (AGENTS.md: a 43-character name is what found the last phone overflow). */
@@ -440,7 +440,8 @@ for (const [width, deviceScaleFactor] of [[320, 3], [768, 1], [1280, 3]] as cons
         await dismissCookieBanner(page);
         const video = seaznPlayer(page);
         await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
-        expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+        expect(await elementSaysHlsPlayable(page), "premise: forceHlsJs took (the element says HLS is not playable)").toBe(false);
+        expect(await playsHlsNatively(page), "premise: and the page is on the hls.js path").toBe(false);
         const address = (await video.getAttribute("data-src"))!;
         // The master is read at once; media (and so a rung) only from the first play.
         await expect.poll(() => stub.requests, { message: "hls.js read the master playlist" }).toContain(address);
@@ -639,7 +640,8 @@ test.describe("the Seazn player over time (1280)", () => {
       await dismissCookieBanner(page);
       const video = seaznPlayer(page);
       await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
-      expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+      expect(await elementSaysHlsPlayable(page), "premise: forceHlsJs took (the element says HLS is not playable)").toBe(false);
+      expect(await playsHlsNatively(page), "premise: and the page is on the hls.js path").toBe(false);
       const first = (await video.getAttribute("data-src"))!;
       expect(first, "premise: the first address is the unrefreshed one").not.toMatch(/\/refreshed-\d+\//);
       await expect.poll(() => stub.requests, { message: "hls.js loaded the manifest under the first token" }).toContain(first);

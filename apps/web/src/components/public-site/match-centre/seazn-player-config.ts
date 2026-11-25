@@ -22,14 +22,19 @@
 // cannot run in, and that plays HLS itself, still has the platform choose.
 // The live edge, from the same stg measurement (session 16939105): CF's live playlist has `#EXT-X-TARGETDURATION:4`, segments
 // 3.0-3.33 s, 8 in the window, no PROGRAM-DATE-TIME. Each key is hls.js 1.7.4's (`dist/hls.d.ts` HlsConfig; defaults in `src/config.ts`):
-//   - `liveSyncDurationCount` (default 3): start, and hold, this many TARGET durations behind the live edge. 1 = about one segment
-//     (4 s here, down from 12 s on hls.js's own default). hls.js raises the target by `liveSyncOnStallIncrease` (default 1 s, at most one
-//     target duration) per stall, so a slow link backs off by itself rather than rebuffering at 1 segment forever.
-//   - `liveMaxLatencyDurationCount` (default Infinity): past this many target durations (16 s here) behind the edge, hls.js jumps back to
-//     the sync point after a stall (stream-controller.ts `synchronizeToLiveEdge`), so a viewer never drifts to 20 s+. hls.js refuses a
-//     value at or below `liveSyncDurationCount` (config.ts `mergeConfig`), and one set without the other.
+//   - `liveSyncDurationCount` (default 3): start, and hold, this many TARGET durations behind the live edge. 1 = one target duration
+//     (4 s here, down from 12 s on hls.js's own default); it cannot sit closer than `edge - targetduration` (latency-controller.ts
+//     `liveSyncPosition` clamps there), so this is the floor, not the 3.0-3.33 s segment. Each stall raises the target by
+//     `liveSyncOnStallIncrease` (default 1 s) up to one more target duration (8 s here) and it never comes back down: a ratchet that
+//     moves the re-sync point out on a poor link, not a recovery.
+//   - `liveMaxLatencyDurationCount` (default Infinity): more than this many target durations (16 s here) behind the edge, hls.js seeks
+//     to the sync point. It is checked at EVERY live playlist update (stream-controller.ts `synchronizeToLiveEdge`), not only after a
+//     stall, and also while paused: a viewer who pauses for ~12 s or more is taken back to the sync point at the next update. hls.js
+//     refuses a value at or below `liveSyncDurationCount` (config.ts `mergeConfig`), and one set without the other.
 //   - `maxLiveSyncPlaybackRate` (default 1 = off): the fastest the element is played to close a gap to the sync point, 1.1x here, a gentle
-//     catch-up instead of a jump (latency-controller.ts `onTimeupdate`; it acts under `lowLatencyMode`, hls.js's default true).
+//     catch-up instead of a jump (latency-controller.ts `onTimeupdate`).
+//   - `lowLatencyMode` (default true): pinned, because the catch-up above only runs under it (`onTimeupdate` returns at once without it).
+//     Without EXT-X-PART / CAN-BLOCK-RELOAD in the playlist (CF's has none) it changes nothing else here.
 
 /** Config merged into the `new Hls({...})` options. Sources: see above; `capLevelToPlayerSize` default false. */
 export const SEAZN_HLS_PLAYER_CONFIG = {
@@ -37,6 +42,7 @@ export const SEAZN_HLS_PLAYER_CONFIG = {
   liveSyncDurationCount: 1,
   liveMaxLatencyDurationCount: 4,
   maxLiveSyncPlaybackRate: 1.1,
+  lowLatencyMode: true,
 } as const;
 
 /**

@@ -34,6 +34,10 @@ const hls = vi.hoisted(() => ({
   instances: [] as FakeHlsInstance[],
   supported: true,
   isSupportedCalls: 0,
+  /** Runs inside `isSupported()`: the one point between "the bundle arrived" and "the path is set" where a test can dispose the controller. */
+  duringIsSupported: null as (() => void) | null,
+  /** The constructor throws (a config hls.js refuses, a browser it cannot attach to). */
+  throwOnNew: false,
   /** hls.js's own cap rule (`CapLevelController.getMaxLevelByMediaSize`), the REAL library's, filled in by the mock factory. */
   capRule: null as unknown as (levels: unknown[], width: number, height: number) => number,
 }));
@@ -43,6 +47,7 @@ vi.mock("hls.js", async () => {
     static Events = { ERROR: "hlsError", MANIFEST_PARSED: "hlsManifestParsed" };
     static isSupported() {
       hls.isSupportedCalls++;
+      hls.duringIsSupported?.();
       return hls.supported;
     }
     config: FakeHlsInstance["config"];
@@ -63,6 +68,7 @@ vi.mock("hls.js", async () => {
       this._startLevel = n;
     }
     constructor(config: { enableWorker?: boolean; autoStartLoad?: boolean; capLevelToPlayerSize?: boolean; xhrSetup?: XhrSetup }) {
+      if (hls.throwOnNew) throw new Error("hls.js refused to start");
       this.config = { startPosition: -1, ...config };
       hls.instances.push(this);
     }
@@ -157,8 +163,9 @@ function make(opts: { native?: boolean; hlsSupported?: boolean } = {}) {
   currentVideo.native = opts.native ?? false;
   if (opts.hlsSupported !== undefined) hls.supported = opts.hlsSupported;
   const onFatal = vi.fn();
-  const playback = createPlayback(currentVideo as unknown as HTMLVideoElement, { onFatal });
-  return { video: currentVideo, onFatal, playback };
+  const onDegraded = vi.fn();
+  const playback = createPlayback(currentVideo as unknown as HTMLVideoElement, { onFatal, onDegraded });
+  return { video: currentVideo, onFatal, onDegraded, playback };
 }
 
 // The mock factory loads the real library for its cap rule; load it once up front so no test's `flush` waits on that first import.
@@ -169,6 +176,8 @@ beforeEach(() => {
   hls.instances.length = 0;
   hls.supported = true;
   hls.isSupportedCalls = 0;
+  hls.duringIsSupported = null;
+  hls.throwOnNew = false;
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -629,13 +638,14 @@ describe("createPlayback: the path is chosen by hls.js support, not by canPlayTy
     playback.dispose();
   });
 
-  it("canPlayType says maybe but hls.js is NOT supported -> the native path", async () => {
-    const { playback, video, onFatal } = make({ native: true, hlsSupported: false });
+  it("canPlayType says maybe but hls.js is NOT supported -> the native path (the plan for that browser, so no degraded report)", async () => {
+    const { playback, video, onFatal, onDegraded } = make({ native: true, hlsSupported: false });
     playback.setSource(A);
     await flush();
     expect(video.src).toBe(A);
     expect(hls.instances).toHaveLength(0);
     expect(onFatal).not.toHaveBeenCalled();
+    expect(onDegraded).not.toHaveBeenCalled();
     playback.dispose();
   });
 
@@ -711,6 +721,104 @@ describe("createPlayback: the path is chosen by hls.js support, not by canPlayTy
   });
 });
 
+// Task 52 fix round 1: guards the first build left unwitnessed, and the failure shapes the async decision opened.
+describe("createPlayback: a controller stopped mid-decision, a refused start, a tap before the source (Task 52 fix round 1)", () => {
+  it("dispose BEFORE the bundle arrives, in a browser hls.js cannot run in that plays HLS itself: no listener, no src, no report (the decide guard)", async () => {
+    const { playback, video, onFatal } = make({ native: true, hlsSupported: false });
+    playback.setSource(A);
+    playback.dispose();
+    await flush();
+    expect(video.listenerCount(), "nothing was put on an element this controller no longer owns").toBe(0);
+    expect(video.src).toBe("");
+    expect(onFatal).not.toHaveBeenCalled();
+  });
+
+  it("dispose before the bundle arrives, in a browser that plays no HLS and hls.js cannot run in: the unsupported report is not made for a stopped controller", async () => {
+    const { playback, onFatal } = make({ native: false, hlsSupported: false });
+    playback.setSource(A);
+    playback.dispose();
+    await flush();
+    expect(onFatal).not.toHaveBeenCalled();
+  });
+
+  it("dispose BETWEEN the support answer and the first apply: no instance is built for a stopped controller (the apply guard)", async () => {
+    const { playback } = make({ hlsSupported: true });
+    hls.duringIsSupported = () => playback.dispose();
+    playback.setSource(A);
+    await flush();
+    expect(hls.isSupportedCalls, "premise: the hook ran, so the dispose really came mid-decision").toBe(1);
+    expect(hls.instances, "no instance for a stopped controller").toHaveLength(0);
+  });
+
+  it("the same, on the native path: nothing is written to the element of a stopped controller", async () => {
+    const { playback, video } = make({ native: true, hlsSupported: false });
+    hls.duringIsSupported = () => playback.dispose();
+    playback.setSource(A);
+    await flush();
+    expect(hls.isSupportedCalls, "premise: the hook ran").toBe(1);
+    expect(video.src).toBe("");
+  });
+
+  it("two addresses before the decision, on the native path: the element's src is written ONCE, with the newest (the nativeSrc dedupe)", async () => {
+    const { playback, video } = make({ native: true, hlsSupported: false });
+    const writes: string[] = [];
+    let current = "";
+    Object.defineProperty(video, "src", { get: () => current, set: (v: string) => { current = v; writes.push(v); } });
+    playback.setSource(A);
+    playback.setSource(B);
+    await flush();
+    expect(writes).toEqual([B]);
+    playback.dispose();
+  });
+
+  it("two unreadable addresses before the decision: one onFatal for the newest, not one per queued apply", async () => {
+    const { playback, onFatal } = make();
+    playback.setSource("not an address");
+    playback.setSource("still not an address");
+    await flush();
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(onFatal.mock.calls[0]![0]).toMatchObject({ reason: "unsigned" });
+    playback.dispose();
+  });
+
+  it("a start hls.js refuses (the constructor throws) reaches onFatal once, as an unsupported browser, with no instance and nothing unhandled; a later address does not retry", async () => {
+    const { playback, onFatal } = make();
+    hls.throwOnNew = true;
+    playback.setSource(A);
+    await flush();
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(onFatal.mock.calls[0]![0]).toMatchObject({ reason: "unsupported" });
+    expect(hls.instances).toHaveLength(0);
+    hls.throwOnNew = false;
+    playback.setSource(B);
+    await flush();
+    expect(hls.instances, "a controller whose start was refused is not retried").toHaveLength(0);
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    playback.dispose();
+  });
+
+  it("a play tapped while the bundle is still on its way is not lost on the native fallback: the source is set, then played, once", async () => {
+    const { playback, video } = make({ native: true, hlsSupported: false });
+    playback.setSource(A);
+    video.fire("play"); // the viewer taps play on a still source-less element
+    await flush();
+    expect(video.src).toBe(A);
+    expect(video.plays, "played once the source was there").toBe(1);
+    playback.dispose();
+  });
+
+  it("and with no tap, the native fallback starts nothing", async () => {
+    const { playback, video } = make({ native: true, hlsSupported: false });
+    playback.setSource(A);
+    await flush();
+    expect(video.src).toBe(A);
+    expect(video.plays).toBe(0);
+    playback.setSource(B);
+    expect(video.plays, "a later swap of a paused element starts nothing").toBe(0);
+    playback.dispose();
+  });
+});
+
 describe("createPlayback: the hls.js bundle will not load", () => {
   it("onFatal once, nothing throws, and a later source does not retry a bundle that failed", async () => {
     vi.resetModules();
@@ -746,6 +854,36 @@ describe("createPlayback: the hls.js bundle will not load", () => {
     expect(video.src).toBe(A);
     expect(onFatal).not.toHaveBeenCalled();
     playback.dispose();
+    vi.doUnmock("hls.js");
+  });
+
+  it("that fallback is REPORTED, once, as a degraded player with the bundle's code (never an address); a stopped controller reports nothing", async () => {
+    vi.resetModules();
+    vi.doMock("hls.js", () => {
+      throw new Error("chunk failed to load");
+    });
+    const { createPlayback: freshPlayback } = await import("../seazn-playback");
+    const failing = new FakeVideo();
+    failing.native = true;
+    const onFatal = vi.fn();
+    const onDegraded = vi.fn();
+    const playback = freshPlayback(failing as unknown as HTMLVideoElement, { onFatal, onDegraded });
+    playback.setSource(A);
+    await flush();
+    playback.setSource(B);
+    await flush();
+    expect(onDegraded).toHaveBeenCalledTimes(1);
+    expect(onDegraded.mock.calls[0]![0]).toEqual({ reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null });
+    expect(onFatal).not.toHaveBeenCalled();
+    playback.dispose();
+    const stopped = new FakeVideo();
+    stopped.native = true;
+    const onDegraded2 = vi.fn();
+    const p2 = freshPlayback(stopped as unknown as HTMLVideoElement, { onFatal, onDegraded: onDegraded2 });
+    p2.setSource(A);
+    p2.dispose();
+    await flush();
+    expect(onDegraded2, "no report for a stopped controller (the catch guard)").not.toHaveBeenCalled();
     vi.doUnmock("hls.js");
   });
 });

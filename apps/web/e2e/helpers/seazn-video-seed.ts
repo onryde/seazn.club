@@ -193,6 +193,11 @@ export async function forceHlsJs(page: Page): Promise<void> {
   });
 }
 
+/** What THIS page's element answers to `canPlayType` for HLS: true when it says anything but "". `forceHlsJs` makes it false, so a spec that
+ *  forces hls.js asserts THIS (it can fail when the init script did not take), and `playsHlsNatively` for the path the player then takes. */
+export const elementSaysHlsPlayable = (page: Page): Promise<boolean> =>
+  page.evaluate(() => document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "");
+
 /** Does THIS browser take the native path (the page gives it the address through `video.src` and builds no hls.js)? Since Task 52 that is
  *  only a browser that plays HLS itself AND that hls.js cannot run in. The second half is hls.js's own `isSupported()` rule (MSE, or
  *  ManagedMediaSource, with a codec it can use: hls.js 1.7.4 is-supported.ts), restated here from the library's documentation, not read from

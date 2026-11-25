@@ -124,6 +124,8 @@ interface StageProps {
   /** A player gave up on its address: report it (once per address; codes only, never the address) and ask the route for a fresh one,
    *  and rebuild the player with it. */
   onFatal: (fatal: PlayerFatal) => void;
+  /** A player plays on the browser's own player because hls.js would not load (Task 52): report it, once per address; nothing is rebuilt. */
+  onDegraded?: (fatal: PlayerFatal) => void;
   /** The replay host's frame holds an address whose token has passed: ask the route for a fresh one (no rebuild). */
   onStale: () => void;
   /** A live is what the held box expects next (Task 33c): it keeps the delay line's row, invisible. Absent: no row. */
@@ -173,7 +175,7 @@ function HeldBox({ starting, labels, picker, liveNext }: { starting: boolean; la
 }
 
 /** Everything the island draws for one answer. Exported for its test (the wiring of its callbacks). */
-export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserve, held, picker, liveNext = false }: StageProps & { reserve: boolean; held: boolean; picker: readonly number[] }) {
+export function SeaznVideoStage({ video, epoch, labels, onFatal, onDegraded, onStale, reserve, held, picker, liveNext = false }: StageProps & { reserve: boolean; held: boolean; picker: readonly number[] }) {
   if (video !== null && showsPlayer(video)) {
     if (video.live !== null) {
       return (
@@ -185,6 +187,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
             liveLabel={labels.live}
             unavailable={labels.unavailable}
             onFatal={(failure, address) => onFatal({ address, source: "live", partNo: null, player: "hls", failure })}
+            onDegraded={(failure, address) => onDegraded?.({ address, source: "live", partNo: null, player: "hls", failure })}
           />
           {/* Gone with the live answer, and NOT held afterwards: Stop moves the page up by this one line, an accepted trade (T33c
               review m1, see the header). */}
@@ -195,7 +198,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
       );
     }
     const parts = [...video.replay].sort((a, b) => a.partNo - b.partNo);
-    return <ReplayParts parts={parts} epoch={epoch} labels={labels} onFatal={onFatal} onStale={onStale} />;
+    return <ReplayParts parts={parts} epoch={epoch} labels={labels} onFatal={onFatal} onDegraded={onDegraded} onStale={onStale} />;
   }
   // Nothing to play. A wait on (warming, or just stopped): the box holds. Before the first answer, where a player is expected (D1):
   // the box, empty. Otherwise it is nothing, and the island keeps looking. The picker's row is held only before the answer: an answer
@@ -205,7 +208,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
 }
 
 /** The replay: its picker and the picked part's player. Exported for its test (the wiring of its callbacks). */
-export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts: PublicFixtureVideo["replay"]; epoch: number; labels: SeaznVideoLabels; onFatal: (fatal: PlayerFatal) => void; onStale: () => void }) {
+export function ReplayParts({ parts, epoch, labels, onFatal, onDegraded, onStale }: { parts: PublicFixtureVideo["replay"]; epoch: number; labels: SeaznVideoLabels; onFatal: (fatal: PlayerFatal) => void; onDegraded?: (fatal: PlayerFatal) => void; onStale: () => void }) {
   const base = useId();
   // The viewer's pick is a part NUMBER, which a later read keeps stable; a part that is gone from the list falls back to the first.
   const [picked, setPicked] = useState<number | null>(null);
@@ -234,6 +237,7 @@ export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts:
         title={title}
         unavailable={labels.unavailable}
         onFatal={(failure, address) => onFatal({ address, source: "replay", partNo: active.partNo, player: "hls", failure })}
+        onDegraded={(failure, address) => onDegraded?.({ address, source: "replay", partNo: active.partNo, player: "hls", failure })}
       />
     );
   return (
@@ -360,6 +364,7 @@ export function SeaznVideoIsland({
     reporter.player(fixtureId, fatal);
     pollRef.current?.refreshSoon();
   }, [reporter, fixtureId]);
+  const degraded = useCallback((fatal: PlayerFatal) => reporter.degraded(fixtureId, fatal), [reporter, fixtureId]);
   const readSoon = useCallback(() => pollRef.current?.readSoon(), []);
-  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} onStale={readSoon} reserve={reserve} held={holdUntil !== null} picker={replayParts} liveNext={liveNext} />;
+  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} onDegraded={degraded} onStale={readSoon} reserve={reserve} held={holdUntil !== null} picker={replayParts} liveNext={liveNext} />;
 }

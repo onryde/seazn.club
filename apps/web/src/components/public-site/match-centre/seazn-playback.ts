@@ -6,7 +6,8 @@
 //     ManagedMediaSource), and never by `canPlayType`: Chrome answers "maybe" to HLS and its native player sat ~2 segments (about 6.5 s,
 //     stg 2026-11-25) behind the newest data, with none of SEAZN_HLS_PLAYER_CONFIG applying. So hls.js is used wherever it runs, loaded on
 //     demand (the bundle is not paid by the pages that play none), as a worker-less instance (`enableWorker: false`), and the browser's
-//     own player is only for a browser hls.js cannot run in that plays HLS itself (or whose hls.js bundle will not load). The decision is
+//     own player is only for a browser hls.js cannot run in that plays HLS itself (or whose hls.js bundle will not load: that one is
+//     `onDegraded`, a report with no rebuild, because the viewer is playing, just at the native player's delay). The decision is
 //     made before any `src` is written, so one element never has both an MSE source and an address of its own.
 //   - The address carries its token in the path and the token lapses (a Cloudflare HLS is not assumed to outlive it), so the island
 //     hands over a fresh address before then. On hls.js that is NOT a reload: a `loadSource` of a different address detaches and
@@ -79,7 +80,14 @@ function positionOf(video: HTMLVideoElement): number | null {
 /** How the controller reaches the element: decided once, from hls.js's own answer (see the header). `none`: neither player can run. */
 type Path = "hls" | "native" | "none";
 
-export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: (failure: PlaybackFailure) => void }): Playback {
+export interface PlaybackHandlers {
+  onFatal: (failure: PlaybackFailure) => void;
+  /** The player still plays, but not the way it was meant to: hls.js's bundle would not load, so a browser that plays HLS itself is on its
+   *  own player (and its own, longer, delay behind live). Reported by the island, never a reason to rebuild. Codes only (`PlaybackFailure`). */
+  onDegraded?: (failure: PlaybackFailure) => void;
+}
+
+export function createPlayback(video: HTMLVideoElement, { onFatal, onDegraded }: PlaybackHandlers): Playback {
   let disposed = false;
   /** The viewer has pressed play at least once: from then on a load starts by itself. */
   let started = false;
@@ -95,6 +103,8 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   let resume: { at: number | null; playing: boolean; listener: () => void } | null = null;
   /** The newest address written to `video.src` (native path). */
   let nativeSrc: string | null = null;
+  /** The newest address the hls.js path has handled: an address is handled (and an unreadable one reported) once. */
+  let handledHls: string | null = null;
 
   /** The manifest has been parsed: the rungs are known, so a load can begin. */
   let parsed = false;
@@ -146,6 +156,8 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       path = "native";
       video.removeEventListener("play", onPlay);
       video.addEventListener("error", onError);
+      // Playing on, but the viewer is on the browser's own player: say so (the island reports it; nothing is rebuilt).
+      if (why === "bundle") onDegraded?.(failure("bundle"));
       return;
     }
     path = "none";
@@ -176,6 +188,8 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   function applyHls(src: string): void {
     // The token is read from the address, so an address that has none is a signer that changed shape: say so now, not at the first
     // refresh (when the old token lapses and the picture dies an hour in).
+    if (src === handledHls) return;
+    handledHls = src;
     const signed = parseSignedAddress(src);
     if (signed === null) {
       onFatal(failure("unsigned"));
@@ -191,6 +205,7 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
 
   function loadNative(src: string): void {
     if (src === nativeSrc) return;
+    const first = nativeSrc === null;
     nativeSrc = src;
     // A swap asked for twice before the first one's metadata arrived keeps the position the viewer actually had.
     // A live source has no time to go back to: the new load's timeline is its own, so it resumes at the live edge (no seek).
@@ -206,6 +221,8 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       },
     };
     video.src = src;
+    // A play pressed while the bundle was still on its way (so before this element had a source) is not lost: start it now.
+    if (first && started) void video.play().catch(() => {});
     if (pending.at !== null || pending.playing) {
       resume = pending;
       video.addEventListener("loadedmetadata", pending.listener);
@@ -217,8 +234,14 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   /** Hands the newest address to whichever path was chosen. */
   function apply(): void {
     if (disposed || wanted === null) return;
-    if (path === "native") loadNative(wanted);
-    else if (path === "hls") applyHls(wanted);
+    try {
+      if (path === "native") loadNative(wanted);
+      else if (path === "hls") applyHls(wanted);
+    } catch {
+      // `new Hls` (a config it refuses) or `attachMedia` threw: hls.js cannot run here. Say so once, as an unsupported browser, and stop.
+      path = "none";
+      onFatal(failure("unsupported"));
+    }
   }
 
   return {
