@@ -9,15 +9,25 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+
+/**
+ * What PURGING an archived division does to its paid Online Chess package (spec 2026-11-23 §11), as the SERVER read it
+ * (`packageRefundPreview`, the refund's own split - never worked out here): unfrozen, the credits that come back and the
+ * included credits of an earlier month that do not; frozen (a round has opened), `{ frozen: true }` and no figure - it is never
+ * refunded (P7). Archive holds the package and refunds nothing; the purge is the delete door, which refunds a paid, unfrozen one
+ * in full. Null or absent: no money was paid (no package - an over-the-board division - or an unpaid one), and no money line shows.
+ */
+export type ArchivedPackageRefund = { back: number; forfeited: number; frozen?: never } | { frozen: true };
 
 export interface ArchivedDivisionLite {
   id: string;
   name: string;
   sport_key: string;
   archived_at: string;
+  packageRefund?: ArchivedPackageRefund | null;
 }
 
 const PURGE_COOL_OFF_DAYS = 30;
@@ -49,6 +59,7 @@ export function ArchivedDivisions({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +69,11 @@ export function ArchivedDivisions({
   const [now] = useState(() => Date.now());
 
   if (divisions.length === 0) return null;
+
+  // The row the dialog is open on: its package, as the server read it for a purge.
+  const packageRefund = purging?.packageRefund ?? null;
+  const purgeFrozen = packageRefund !== null && packageRefund.frozen === true;
+  const purgeRefund = packageRefund !== null && packageRefund.frozen !== true ? packageRefund : null;
 
   async function restore(id: string) {
     setBusy(true);
@@ -175,6 +191,15 @@ export function ArchivedDivisions({
         <p>
           <strong>{msg("danger.keptLabel")}</strong> {msg("archived.keptText")}
         </p>
+        {/* The purge is the delete door: a paid, unfrozen Online Chess package goes back in full, said in the delete dialog's own
+            words. A frozen one (a round has opened) is never refunded, and says so. Nothing for an over-the-board or unpaid one. */}
+        {purgeRefund !== null && (
+          <p data-online-refund>
+            <strong>{msg("danger.refundedLabel")}</strong> {plural("danger.onlineRefund", purgeRefund.back, { count: purgeRefund.back })}
+            {purgeRefund.forfeited > 0 && <> {plural("danger.onlineForfeit", purgeRefund.forfeited, { count: purgeRefund.forfeited })}</>}
+          </p>
+        )}
+        {purgeFrozen && <p data-online-frozen>{msg("danger.onlineFrozen")}</p>}
         <p>{msg("danger.cannotUndo")}</p>
       </ConfirmDialog>
     </section>

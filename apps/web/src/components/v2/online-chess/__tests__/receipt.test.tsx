@@ -9,6 +9,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { Dict } from "@/lib/i18n-constants";
 import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, packagePrice, type OnlineSize } from "@/lib/online-chess-package";
@@ -592,6 +595,10 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
     expect(checked(m)).toEqual({ yes: true, no: false });
     expect(propsOf(m.by("online-receipt-cameras")!).disabled).toBe(true);
     expect(propsOf(m.by("online-receipt-cameras-no")!).disabled).toBe(true);
+    // The disabled confirm says why it is off, in the frozen words - not "Choose a size" over a size nobody can choose - and the footer no
+    // longer offers "move up a size until the first round opens" once one has.
+    expect(confirmLabel(m)).toBe(EN["onlineChess.receipt.confirm.frozen"]);
+    expect(m.text()).not.toContain(EN["onlineChess.receipt.line.moveUp"]);
   });
 
   it("renders as markup: a fieldset named by its legend, two radios of one name, each named by its own label (anchored on `=\"`)", () => {
@@ -662,6 +669,98 @@ describe("409 ONLINE_QUOTE_CHANGED: redraw, say so, take nothing until the organ
     expect(m.has("online-receipt-changed")).toBe(false);
     expect(m.has("online-receipt-error")).toBe(true);
     expect(m.text()).toContain(EN["onlineChess.receipt.err.generic"]);
+  });
+});
+
+// A round opened in another tab while this receipt sat open: the pay door answers the SAME 409 ONLINE_QUOTE_CHANGED as a moved price, with a
+// fresh quote whose `refusal` is "frozen" (pay.ts `quoteChanged`). The receipt then says what happened - a round has opened, the size and the
+// camera can no longer change - and not "the price changed"; every size and camera choice and the confirm are off. The pay door's 409 reaches the
+// `pay` and `change` receipts (the pay line and the chip); `payAndOpen` is driven here at the component level only - it is NOT claimed that Open round
+// can answer a frozen quote, only that a receipt handed one in that mode closes its choices the same way.
+describe("409 with a frozen quote: a round opened in another tab (spec 8.7)", () => {
+  /** The label that wraps one size's radio (the row the organiser sees): its classes are what dim it. */
+  const sizeLabel = (m: ReturnType<typeof make>, size: OnlineSize) =>
+    m.els().find((e) => e.type === "label" && expandAll(propsOf(e).children as never).some((c) => propsOf(c)["data-testid"] === `online-receipt-size-${size}`));
+
+  const PAID = { size: 32 as OnlineSize, camerasPaid: false };
+  const CASES: { mode: ReceiptMode; size: OnlineSize; facts: Over["facts"]; paid?: { size: OnlineSize; camerasPaid: boolean } }[] = [
+    { mode: "pay", size: 64, facts: {} },
+    { mode: "payAndOpen", size: 64, facts: { storedSize: 64 } },
+    { mode: "change", size: 64, facts: { paid: PAID, storedSize: 32 }, paid: PAID },
+  ];
+
+  function pressedOver409(c: (typeof CASES)[number]) {
+    const first = spec({ size: c.size, monthly: 20, pack: 20, ...(c.paid ? { paid: c.paid } : {}) });
+    const frozen = spec({ size: c.size, monthly: 20, pack: 20, refusal: "frozen", ...(c.paid ? { paid: c.paid } : {}) });
+    const onConfirm = vi.fn(async (): Promise<void> => {
+      throw new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: frozen });
+    });
+    return make({ mode: c.mode, size: c.size, facts: c.facts, readQuote: vi.fn(async () => first), onConfirm });
+  }
+
+  it("says a round has opened and not that the price changed; the sizes, the camera answer and the confirm are all off", async () => {
+    let checked = 0;
+    let sizeRadios = 0;
+    for (const c of CASES) {
+      const m = pressedOver409(c);
+      await flush();
+      expect(propsOf(m.by("online-receipt-confirm")!).disabled, `${c.mode}: premise, payable before the press`).toBe(false);
+      // Premises: before the freeze the rows are live (not dimmed) and the footer offers the move up (the shared-size lines say the same in payAndOpen).
+      for (const size of ONLINE_SIZES.filter((z) => m.has(`online-receipt-size-${z}`))) {
+        expect(String(propsOf(sizeLabel(m, size)!).className), `${c.mode}: size ${size} is live before the freeze`).not.toContain("cursor-not-allowed");
+      }
+      if (c.mode !== "payAndOpen") expect(m.text(), `${c.mode}: premise, the footer offers the move up`).toContain(EN["onlineChess.receipt.line.moveUp"]);
+      await m.press("online-receipt-confirm");
+      await flush();
+      expect(m.onConfirm, `${c.mode}: the press was sent once`).toHaveBeenCalledTimes(1);
+      expect(m.onClose, `${c.mode}: still open`).not.toHaveBeenCalled();
+      expect(m.has("online-receipt-changed"), `${c.mode}: no "price changed" for a price that did not change`).toBe(false);
+      expect(m.by("online-receipt-refused") && propsOf(m.by("online-receipt-refused")!)["data-refusal"], `${c.mode}: the frozen refusal`).toBe("frozen");
+      expect(textOfAll([m.by("online-receipt-refused")!]), c.mode).toBe(EN["onlineChess.receipt.refused.frozen"]);
+      expect(propsOf(m.by("online-receipt-confirm")!).disabled, `${c.mode}: nothing to confirm`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras")!).disabled, `${c.mode}: camera group`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras-yes")!).disabled, `${c.mode}: camera yes`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras-no")!).disabled, `${c.mode}: camera no`).toBe(true);
+      for (const size of ONLINE_SIZES.filter((z) => m.has(`online-receipt-size-${z}`))) {
+        expect(propsOf(m.by(`online-receipt-size-${size}`)!).disabled, `${c.mode}: size ${size} is off`).toBe(true);
+        // ...and the row LOOKS dead, like the camera segments (a radio that is off but drawn live reads as a size you may press).
+        expect(String(propsOf(sizeLabel(m, size)!).className), `${c.mode}: size ${size} is dimmed`).toContain("cursor-not-allowed");
+        sizeRadios += 1;
+      }
+      expect(confirmLabel(m), `${c.mode}: the disabled confirm says why`).toBe(EN["onlineChess.receipt.confirm.frozen"]);
+      expect(m.text(), `${c.mode}: no offer to move up once a round has opened`).not.toContain(EN["onlineChess.receipt.line.moveUp"]);
+      checked += 1;
+    }
+    expect(checked, "pay, payAndOpen, change").toBe(3);
+    expect(sizeRadios, "payAndOpen and change list sizes: the sweep reached radios").toBeGreaterThanOrEqual(8);
+  });
+
+  it("the frozen confirm label exists in every locale, is not the 'choose a size' label, and names no round number", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries({ en: EN, es: esUi, fr: frUi, nl: nlUi }) as [string, Record<string, string>][]) {
+      const label = dict["onlineChess.receipt.confirm.frozen"];
+      expect(label, `${locale}: the key exists`).toBeTypeOf("string");
+      expect(label, `${locale}: not the choose label`).not.toBe(dict["onlineChess.receipt.confirm.choose"]);
+      expect(label, `${locale}: no round number or count`).not.toMatch(/\d|\{/);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the other pair: a 409 over a moved price keeps the price-changed line and leaves every size and the camera pickable", async () => {
+    const first = spec({ size: 64, monthly: 20, pack: 20, paid: PAID });
+    const fresh = spec({ size: 64, cameras: true, monthly: 20, pack: 20, paid: PAID });
+    const onConfirm = vi.fn(async (): Promise<void> => {
+      throw new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: fresh });
+    });
+    const m = make({ mode: "change", size: 64, facts: { paid: PAID, storedSize: 32 }, readQuote: vi.fn(async () => first), onConfirm });
+    await flush();
+    await m.press("online-receipt-confirm");
+    await flush();
+    expect(m.has("online-receipt-changed")).toBe(true);
+    expect(m.has("online-receipt-refused")).toBe(false);
+    expect(propsOf(m.by("online-receipt-size-128")!).disabled).toBe(false);
+    expect(propsOf(m.by("online-receipt-cameras-no")!).disabled).toBe(false);
   });
 });
 

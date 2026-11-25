@@ -24,6 +24,11 @@ const h = vi.hoisted(() => ({
   // W4 T21: what `openStagesOf` answers, so the wiring test below can tell a passed answer from a default.
   openStages: [] as { stageId: string; competitionId?: string }[],
   openStagesAskedFor: [] as string[],
+  // The purge dialog's Online Chess line: what `packageRefundPreview` answers per division id, who asked, whether the read fails.
+  refunds: {} as Record<string, unknown>,
+  refundAskedFor: [] as string[],
+  refundThrows: false,
+  canEdit: true,
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -31,8 +36,17 @@ vi.mock("@/server/page-auth", () => ({
     auth: { orgId: "org-1", userId: "user-1" },
     org: { id: "org-1", name: "Riverside CC", slug: "riverside", branding: null },
     competition: { id: "comp-1", name: "Summer League", slug: "summer-league" },
-    canEdit: true,
+    canEdit: h.canEdit,
   }),
+}));
+
+// What a purge of each archived division would do to its Online Chess package: the server's own read, handed to the restore surface.
+vi.mock("@/server/usecases/online-package", () => ({
+  packageRefundPreview: async (_orgId: string, divisionId: string) => {
+    h.refundAskedFor.push(divisionId);
+    if (h.refundThrows) throw new Error("the refund read failed");
+    return h.refunds[divisionId] ?? null;
+  },
 }));
 
 vi.mock("@/server/usecases/competitions", () => ({
@@ -59,12 +73,16 @@ vi.mock("@/server/usecases/competitions", () => ({
   }),
 }));
 
-// One visible division and one archived — the archived one is what competition
-// settings lists, and what a Restore click would be refused on.
+// One visible division and the archived ones — the archived rows are what competition settings lists, and what a Restore click would be
+// refused on. Four of them, in an order that tells a row's own figure from the first row's: three chess ("boardgame") divisions and one
+// of another sport, which the purge dialog's Online Chess read must never be asked about.
 vi.mock("@/server/usecases/divisions", () => ({
   listDivisions: async () => [
     { id: "d-live", name: "Open", sport_key: "generic", archived_at: null },
-    { id: "d-gone", name: "Retired", sport_key: "generic", archived_at: "2026-01-02T00:00:00.000Z" },
+    { id: "d-gone", name: "Retired", sport_key: "boardgame", archived_at: "2026-01-02T00:00:00.000Z" },
+    { id: "d-gone-2", name: "Retired Rapid", sport_key: "boardgame", archived_at: "2026-01-03T00:00:00.000Z" },
+    { id: "d-gone-3", name: "Retired Blitz", sport_key: "boardgame", archived_at: "2026-01-04T00:00:00.000Z" },
+    { id: "d-gone-other", name: "Retired Darts", sport_key: "generic", archived_at: "2026-01-05T00:00:00.000Z" },
   ],
   // The wizard page's Sport-picker history (C9 review 3, m1: moved into this module); none here.
   recentDivisionSports: async () => [],
@@ -143,6 +161,10 @@ beforeEach(() => {
   h.explain = false;
   h.openStages = [];
   h.openStagesAskedFor = [];
+  h.refunds = {};
+  h.refundAskedFor = [];
+  h.refundThrows = false;
+  h.canEdit = true;
 });
 
 // W4 T21 (X-CH-8): the warning's list is a server read handed down as a prop — and a missing prop defaults to an empty
@@ -185,5 +207,62 @@ describe("the archived-slot explanation is wired from the server on both surface
     h.explain = false;
 
     expect(propsOf(await builder()).archivedSlotsExplainRefusal).toBe(false);
+  });
+});
+
+// The purge dialog's Online Chess line is a server read handed down on each archived row; a missing field defaults to "no money
+// line", which renders a purge that quietly refunds with no word of it. So the wiring is pinned the same way as the rest.
+describe("the purge dialog's Online Chess refund is wired from the server, per archived row", () => {
+  const rowsOf = async () => propsOf(await archivedPanel()).divisions as { id: string; packageRefund?: unknown }[];
+  const byId = (rows: { id: string; packageRefund?: unknown }[], id: string) => rows.find((r) => r.id === id)!;
+
+  it("each archived row carries the figure the server read for THAT division, unchanged (row 2 is not row 1's)", async () => {
+    const first = { back: 8, forfeited: 2 };
+    const third = { frozen: true };
+    h.refunds = { "d-gone": first, "d-gone-3": third };
+    const rows = await rowsOf();
+    expect(rows.map((r) => r.id), "every archived row, in the list's order").toEqual(["d-gone", "d-gone-2", "d-gone-3", "d-gone-other"]);
+    expect(byId(rows, "d-gone").packageRefund).toBe(first);
+    expect(byId(rows, "d-gone-2").packageRefund, "the middle row has no paid package: null, not the first row's figure").toBeNull();
+    expect(byId(rows, "d-gone-3").packageRefund, "the third row has ITS figure, not the first's").toBe(third);
+    // And with the figures the other way round: the page indexes by row, so a swap shows.
+    h.refunds = { "d-gone-2": { back: 3, forfeited: 0 }, "d-gone-3": first };
+    h.refundAskedFor = [];
+    const swapped = await rowsOf();
+    expect(byId(swapped, "d-gone").packageRefund).toBeNull();
+    expect(byId(swapped, "d-gone-2").packageRefund).toEqual({ back: 3, forfeited: 0 });
+    expect(byId(swapped, "d-gone-3").packageRefund).toBe(first);
+  });
+
+  it("only chess divisions are asked about, like the competition page: never the live row, never another sport", async () => {
+    // A figure sits behind the darts row: were the page to ask, it would hand it down.
+    h.refunds = { "d-gone": { back: 8, forfeited: 0 }, "d-gone-other": { back: 99, forfeited: 0 } };
+    const rows = await rowsOf();
+    expect(h.refundAskedFor).toEqual(["d-gone", "d-gone-2", "d-gone-3"]);
+    expect(byId(rows, "d-gone-other").packageRefund, "another sport has no package to refund").toBeNull();
+  });
+
+  it("a frozen package reaches the row as frozen, and a division with no paid package as null", async () => {
+    h.refunds = { "d-gone": { frozen: true } };
+    expect(byId(await rowsOf(), "d-gone").packageRefund).toEqual({ frozen: true });
+    h.refunds = {};
+    expect(byId(await rowsOf(), "d-gone").packageRefund, "nothing paid: the server read null").toBeNull();
+  });
+
+  it("a viewer who cannot purge costs no read at all", async () => {
+    h.canEdit = false;
+    h.refunds = { "d-gone": { back: 8, forfeited: 0 } };
+    const rows = await rowsOf();
+    expect(rows).toHaveLength(4);
+    expect(h.refundAskedFor).toEqual([]);
+    for (const r of rows) expect(r.packageRefund, r.id).toBeNull();
+  });
+
+  it("a read that throws is a courtesy lost, not a page lost: the rows render with no money line", async () => {
+    h.refundThrows = true;
+    const rows = await rowsOf();
+    expect(h.refundAskedFor, "the read was attempted for each chess row").toEqual(["d-gone", "d-gone-2", "d-gone-3"]);
+    expect(rows).toHaveLength(4);
+    for (const r of rows) expect(r.packageRefund, r.id).toBeNull();
   });
 });

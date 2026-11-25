@@ -4959,6 +4959,7 @@ export type DictionaryKey =
   | "onlineChess.receipt.confirm.change"
   | "onlineChess.receipt.confirm.checking"
   | "onlineChess.receipt.confirm.choose"
+  | "onlineChess.receipt.confirm.frozen"
   | "onlineChess.receipt.confirm.moveDown.none"
   | "onlineChess.receipt.confirm.moveDown.one"
   | "onlineChess.receipt.confirm.moveDown.other"

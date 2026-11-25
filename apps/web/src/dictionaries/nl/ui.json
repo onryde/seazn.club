@@ -3788,6 +3788,7 @@
   "onlineChess.receipt.confirm.buy": "Credits kopen",
   "onlineChess.receipt.confirm.checking": "Controleren…",
   "onlineChess.receipt.confirm.choose": "Kies een formaat",
+  "onlineChess.receipt.confirm.frozen": "Formaat en camera vast",
   "onlineChess.receipt.short.one": "Hiervoor zijn {owed} credits nodig en je hebt er {balance}. Je komt {count} credit tekort.",
   "onlineChess.receipt.short.other": "Hiervoor zijn {owed} credits nodig en je hebt er {balance}. Je komt {count} credits tekort.",
   "onlineChess.receipt.noInvitable": "Nog geen speler heeft Lichess gekoppeld. Je betaalt nu en kunt de ronde gratis heropenen zodra ze koppelen.",

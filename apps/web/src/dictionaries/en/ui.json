@@ -3841,6 +3841,7 @@
   "onlineChess.receipt.confirm.buy": "Buy credits",
   "onlineChess.receipt.confirm.checking": "Checking…",
   "onlineChess.receipt.confirm.choose": "Choose a size",
+  "onlineChess.receipt.confirm.frozen": "Size and camera fixed",
   "onlineChess.receipt.short.one": "This needs {owed} credits and you have {balance}. You are {count} credit short.",
   "onlineChess.receipt.short.other": "This needs {owed} credits and you have {balance}. You are {count} credits short.",
   "onlineChess.receipt.noInvitable": "No player has linked Lichess yet. You'll pay now and can re-open the round for free once they link.",

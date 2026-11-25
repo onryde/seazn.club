@@ -7,6 +7,8 @@ import { listDivisions } from "@/server/usecases/divisions";
 import { CompetitionSettings } from "@/components/v2/competition-settings";
 import { ArchivedDivisions } from "@/components/v2/archived-divisions";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
+import { packageRefundPreview } from "@/server/usecases/online-package";
+import { log } from "@/server/logger";
 import { CompetitionPassEntry } from "@/components/competition-pass-entry";
 import { formatMinor } from "@/lib/currency";
 import { lowestPassRung, passActiveLabels, passEndedReasons } from "@/lib/pass-ladder";
@@ -75,6 +77,25 @@ export default async function CompetitionSettingsPage({
     ]);
   const viewerPlan = viewerPlanFrom(planKey);
   const archivedDivisions = allDivisions.filter((d) => d.archived_at !== null);
+  // What a PURGE of each archived division does to its Online Chess package (spec 2026-11-23 §11): archive holds the package and
+  // refunds nothing, the purge is the delete door and refunds a paid, unfrozen one in full, so the purge dialog says what comes
+  // back - off the refund's own split, read here, never worked out in the client. Only an editor can purge, so only an editor
+  // pays for the read, and only for a chess division (the only sport with a package - the competition page's own rule); null where no
+  // money was paid (an over-the-board division, an unpaid package). A courtesy beside the confirm: a read that throws is logged and that
+  // row's dialog renders without the line - the purge still refunds.
+  const purgeRefunds = canEdit
+    ? await Promise.all(
+        archivedDivisions.map(async (d) => {
+          if (d.sport_key !== "boardgame") return null;
+          try {
+            return await packageRefundPreview(auth.orgId, d.id);
+          } catch (err) {
+            log.error({ err, divisionId: d.id }, "online chess package: reading the purge dialog's refund failed; the dialog renders without it");
+            return null;
+          }
+        }),
+      )
+    : archivedDivisions.map(() => null);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
 
   // Youth flag (v3/11 gap 8): any live division with a U-age eligibility
@@ -174,11 +195,12 @@ export default async function CompetitionSettingsPage({
           archivedPanel={
             /* v3/09 §4 — restore/purge surface for archived divisions. */
             <ArchivedDivisions
-              divisions={archivedDivisions.map((d) => ({
+              divisions={archivedDivisions.map((d, i) => ({
                 id: d.id,
                 name: d.name,
                 sport_key: d.sport_key,
                 archived_at: d.archived_at as string,
+                packageRefund: purgeRefunds[i] ?? null,
               }))}
               canEdit={canEdit}
               archivedSlotsExplainRefusal={explainArchivedSlots}
