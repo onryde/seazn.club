@@ -36,7 +36,7 @@ One tap decides the game, so a wrong tap matters. Press **Take back** on the rib
 
 ## Online Chess: sizes and credits
 
-Online Chess plays your division's games on Lichess, on a Seazn board. You pay for it once, before the first round, with [Seazn credits](/help/billing/match-credits). Players never see a price or a credit.
+Online Chess plays your division's games on Lichess, on a Seazn board. You pay for it once, before the first Online Chess round opens, with [Seazn credits](/help/billing/match-credits). Players never see a price or a credit.
 
 ### Turn it on and choose a size
 
@@ -54,7 +54,7 @@ Each size includes the Swiss rounds shown, so you do not count rounds yourself. 
 
 The **Fair-play camera** doubles the price. It is charged when the camera setting that applies to any stage of the division is optional or required. The nearest setting that is set wins: a stage that sets nothing takes the division's, and a division that sets nothing takes the competition's, so a division set to off has no camera even when the competition requires one. Before the division has a stage, its own setting counts. Knockout, play-off and tie-break games are always included. If the division plays more Swiss rounds than its size includes, choose the next size up. The largest size is {{online:largest}} players, and it includes up to {{online:row:5:rounds}} Swiss rounds.
 
-Under the menu, a line shows the price and says **Nothing is spent here. It is paid for before round 1 opens.** Your plan can limit which sizes you can pick, and a size that is too small for the players already entered is marked in the menu.
+Under the menu, a line shows the price and says **Nothing is spent here. It is paid for before the first Online Chess round opens.** Your plan can limit which sizes you can pick, and a size that is too small for the players already entered is marked in the menu.
 
 ### Swiss and knockout only
 
@@ -62,15 +62,15 @@ Online Chess runs Swiss and knockout events, including play-offs, double elimina
 
 ### Pay for it
 
-Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt that asks first about the **Fair-play camera**: **Yes** or **No**, set to what the division's camera setting says now. The price follows your answer. Below it are the size, what comes from this month's credits and what comes from bought credits, and the total. Paying also sets **Camera during online play** in the division's settings to your answer: **Yes** sets it to **Required** unless the division already uses the camera, and **No** sets it to **Off**. With **Required**, players need a live camera to take their seat, and the receipt says so before you pay. If you are short, the receipt offers **Buy credits**, and comes back when you do.
+Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that no Online Chess round can open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt that asks first about the **Fair-play camera**: **Yes** or **No**, set to what the division's camera setting says now. The price follows your answer. Below it are the size, what comes from this month's credits and what comes from bought credits, and the total. Paying also sets **Camera during online play** in the division's settings to your answer: **Yes** sets it to **Required** unless the division already uses the camera, and **No** sets it to **Off**. With **Required**, players need a live camera to take their seat, and the receipt says so before you pay. If you are short, the receipt offers **Buy credits**, and comes back when you do.
 
-You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If the round cannot open, for example because the division has not been started or a board in the round is not paired, nothing is charged and you see the reason. A board whose player has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits. If no player has linked yet, the receipt says so, and you can open round 1 again for free once they link.
+You can also pay when you open the first Online Chess round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open the round**. Pay it, and the round opens in the same step. If the round cannot open, for example because the division has not been started or a board in the round is not paired, nothing is charged and you see the reason. A board whose player has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits. If no player has linked yet, the receipt says so, and you can open the round again for free once they link.
 
 This month's included Seazn credits are spent first, then bought credits. Included credits that are not used by the end of the month expire. Bought credits never expire.
 
 An unpaid division can still be started and scored by hand. Only opening an online round needs the payment.
 
-### Change the size until round 1
+### Change the size before the first Online Chess round
 
 Until a round of the division opens, you can change the size from the amber line, or from the line that shows the size once it is paid.
 
@@ -81,7 +81,7 @@ Until a round of the division opens, you can change the size from the amber line
 - Turning the camera off in the division's settings instead returns nothing, and turning it back on there costs nothing more.
 - The receipt always opens at the division's camera setting. If you turned the camera off in the division's settings after paying for it, the receipt opens at **No**, and paying it returns the camera's difference. To keep the camera instead, choose **Yes** and press **Turn camera on**: nothing is charged, and the setting goes back to **Required**.
 
-Once any round of the division has opened, the size and the camera are fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after round 1 stays free.
+Once any round of the division has opened, the size and the camera are fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after that stays free.
 
 ### Refunds
 

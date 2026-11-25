@@ -61,8 +61,9 @@ export function initialReceipt(a: {
   paid?: { size: OnlineSize; camerasPaid: boolean } | null;
   /** The camera answer the receipt opens on (R6): the division's camera setting (every mode), or a checkout return's. */
   cameras: boolean;
-  /** The division's camera setting (`facts.cameras`); when not given, the answer the receipt opens on - which is the setting, bar a checkout return. */
-  setting?: boolean;
+  /** The division's camera setting (`facts.cameras`). Required, never the opening answer: a checkout return opens on ITS answer, which need not be
+   *  the setting (fix round 4). */
+  setting: boolean;
 }): ReceiptState {
   const paid = a.mode === "change" ? (a.paid ?? null) : null;
   const s: ReceiptState = {
@@ -71,7 +72,7 @@ export function initialReceipt(a: {
     paidCameras: paid?.camerasPaid ?? null,
     size: a.size,
     cameras: a.cameras,
-    setting: a.setting ?? a.cameras,
+    setting: a.setting,
     quote: a.quote,
     quoteFor: null,
     readFailedFor: null,

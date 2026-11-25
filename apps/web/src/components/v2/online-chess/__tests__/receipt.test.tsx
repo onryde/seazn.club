@@ -143,7 +143,7 @@ describe("payAndOpen: Open round 1 on an unpaid division (spec 8.5, decision 15)
     expect(m.has("online-receipt-size-64-why")).toBe(false); // the chosen size has no consequence
     expect(m.has("online-receipt-size-128-why")).toBe(false); // a larger one has none
     expect(m.text()).toContain(EN["onlineChess.receipt.size.yours"]);
-    expect(confirmLabel(m)).toBe("Pay 4 credits and open round 1");
+    expect(confirmLabel(m)).toBe("Pay 4 credits and open the round");
     expect(m.text()).toContain(EN["onlineChess.receipt.line.fixed"]);
   });
 
@@ -157,7 +157,7 @@ describe("payAndOpen: Open round 1 on an unpaid division (spec 8.5, decision 15)
     expect(m.readQuote).toHaveBeenCalledWith({ size: 128, cameras: false });
     await flush();
     expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${packagePrice(128, false)} credits`);
-    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(128, false)} credits and open round 1`);
+    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(128, false)} credits and open the round`);
   });
 
   it("a greyed size is never picked, even by a hand-made event", () => {
@@ -175,12 +175,12 @@ describe("payAndOpen: Open round 1 on an unpaid division (spec 8.5, decision 15)
   it("the server's refusal of the stored size opens on the size it offered, which is confirmed by its own price", async () => {
     const m = make({ mode: "payAndOpen", size: 32, quote: spec({ size: 32, monthly: 20, held: 30 }), facts: { ...FACT, storedSize: 16 } });
     expect(root(m)["data-size"]).toBe("32");
-    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(32, false)} credits and open round 1`);
+    expect(confirmLabel(m)).toBe(`Pay ${packagePrice(32, false)} credits and open the round`);
   });
 
   it("warns when nobody can be invited yet: pay now, re-open free once they link", () => {
     const m = make({ mode: "payAndOpen", size: 64, quote: spec({ size: 64, monthly: 20 }), warnings: { noInvitable: true } });
-    expect(m.text()).toContain("No player has linked Lichess yet. You'll pay now and can re-open round 1 for free once they link.");
+    expect(m.text()).toContain("No player has linked Lichess yet. You'll pay now and can re-open the round for free once they link.");
     const quiet = make({ mode: "payAndOpen", size: 64, quote: spec({ size: 64, monthly: 20 }) });
     expect(quiet.has("online-receipt-no-invitable")).toBe(false);
   });
@@ -192,7 +192,7 @@ describe("payAndOpen: Open round 1 on an unpaid division (spec 8.5, decision 15)
     m.pick(64);
     await flush();
     expect(m.has("online-receipt-late-entrants")).toBe(true);
-    expect(textOfAll([m.by("online-receipt-late-entrants")!])).toBe("Anyone promoted from the waiting list joins as a late entrant and misses round 1.");
+    expect(textOfAll([m.by("online-receipt-late-entrants")!])).toBe("Anyone promoted from the waiting list joins as a late entrant and misses this round.");
     m.pick(128);
     await flush();
     expect(m.has("online-receipt-late-entrants")).toBe(true);
@@ -350,6 +350,19 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
     expect(EN["onlineChess.receipt.confirm.camerasOn"], "premise: the copy exists").toBeTruthy();
   });
 
+  it("a checkout return that opens on its OWN answer still compares against the division's SETTING, not that answer (fix round 4)", async () => {
+    // Paid WITH the camera, Off in Division settings; the receipt comes back from buying credits with the answer Yes. Yes at the paid size is the
+    // setting written back (0 owed), exactly as when the organiser taps Yes - the answer the receipt opened on is not the setting.
+    const read = readAt(PAID_WITH);
+    const m = make({ mode: "change", size: null, cameras: true, facts: { ...CH_WITH, cameras: false }, readQuote: read });
+    expect(checked(m), "premise: opens on the return's answer").toEqual({ yes: true, no: false });
+    expect(read).toHaveBeenLastCalledWith({ size: 64, cameras: true });
+    await flush();
+    expect(confirmLabel(m)).toBe(EN["onlineChess.receipt.confirm.camerasOn"]);
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: 0, cameras: true });
+  });
+
   it("the Yes note is shown only when the Yes can be confirmed (fix round 3 m1): no size chosen yet says nothing, the size picked says it", async () => {
     const NOTE = "online-receipt-cameras-note";
     let checked = 0;
@@ -364,7 +377,7 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
       if (mode === "payAndOpen") {
         m.pick(32);
         await flush();
-        expect(confirmLabel(m), "premise: now confirmable").toBe(`Pay ${packagePrice(32, true)} credits and open round 1`);
+        expect(confirmLabel(m), "premise: now confirmable").toBe(`Pay ${packagePrice(32, true)} credits and open the round`);
         expect(m.has(NOTE), "a size picked: the Yes is confirmable, so it says what it means").toBe(true);
         checked += 1;
       }
@@ -884,7 +897,7 @@ describe("refused sizes and view states", () => {
   });
 
   it("the modes title the receipt in the organiser's words", () => {
-    const titles: Record<ReceiptMode, string> = { pay: "Pay for Online Chess", payAndOpen: "Pay and open round 1", change: "Change the Online Chess size" };
+    const titles: Record<ReceiptMode, string> = { pay: "Pay for Online Chess", payAndOpen: "Pay and open the round", change: "Change the Online Chess size" };
     for (const mode of Object.keys(titles) as ReceiptMode[]) {
       const m = make({ mode, size: mode === "change" ? null : 64, quote: mode === "payAndOpen" ? spec({ size: 64, monthly: 20 }) : null, facts: mode === "change" ? { paid: { size: 64, camerasPaid: false }, storedSize: 64 } : {} });
       expect(propsOf(m.els()[0]!).title, mode).toBe(titles[mode]);
@@ -910,7 +923,7 @@ describe("refused sizes and view states", () => {
     expect(markup).toContain('data-mode="payAndOpen"');
     expect(markup).toContain('data-confirm="pay"');
     expect(markup).toContain('data-testid="online-receipt-confirm"');
-    expect(clean(markup)).toContain("Pay 8 credits and open round 1");
+    expect(clean(markup)).toContain("Pay 8 credits and open the round");
     expect(clean(markup)).toContain("From this month's credits expire 30 Nov 3");
     expect(markup).toMatch(/min-h-11/);
   });

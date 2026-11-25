@@ -12,7 +12,9 @@ import "server-only";
 //         The second of two tabs confirming the same receipt lands here, whatever total it confirmed. A camera answer the division's
 //         setting does not say is still written (fix round 3: a camera paid for and then turned off in Division settings, answered
 //         Yes, goes back to Required) - on the locks already held, the division row last as on every payment - unless the quote is
-//         refused (a round has opened: the camera is fixed, like the size).
+//         refused (a round has opened: the camera is fixed, like the size). A refused answer that MEANT a write (it is not what the
+//         setting says) is item 2's 409, so the receipt redraws with the refusal; one the setting already says is still `applied: false`
+//         (fix round 4).
 //      2. the fresh quote is refused, or its owed is not the `expectedOwed` the organiser confirmed, or (a move down) its forfeit
 //         is not the `expectedForfeited` they confirmed → 409 ONLINE_QUOTE_CHANGED carrying the fresh quote, nothing written; the
 //         receipt redraws. A refusal is a changed quote here: the route is session-only and the receipt offers a confirm only on
@@ -162,8 +164,14 @@ export async function payOnlinePackageInTx(
   // 1. Already at the target: no money to move, whatever was confirmed. The answer is still the organiser's: written when the setting
   //    does not say it, while the quote stands (fix round 3). The locks are the ones a payment takes, in its order: nothing new.
   if (row.paidAt !== null && row.size === a.size && row.camerasPaid === quote.cameras) {
-    const cameraPolicy = quote.refusal === null ? await writeCameraAnswer(tx, a, row.id) : null;
-    return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy };
+    if (quote.refusal !== null) {
+      // Refused (a round opened in another tab between the receipt and the press): an answer the setting does not say was a press that
+      // meant a write ("Turn camera on"), so it is the 409 the paying path gives, never a silent close that leaves the organiser believing
+      // the camera is on (fix round 4). The answer the setting already says asked for nothing: still nothing to do.
+      if (a.cameras !== undefined && a.cameras !== facts.cameras) throw quoteChanged(quote);
+      return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy: null };
+    }
+    return { applied: false, quote, package: row, capacityLoweredTo: null, cameraPolicy: await writeCameraAnswer(tx, a, row.id) };
   }
   if (quote.owed > 0) money.beforeCharge?.();
   // 2. The quote the organiser confirmed is not the quote the server holds now.

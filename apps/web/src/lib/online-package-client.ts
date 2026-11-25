@@ -11,7 +11,8 @@ import type { ReceiptChoice } from "@/lib/online-receipt-state";
 
 /** What the pay door answers (`OnlinePackagePayResult`): whether it moved anything, the registration capacity a size change lowered, and the
  *  division camera setting the camera answer wrote (`cameraPolicy.to`; null when the setting already said it). Only the fields the page acts on are
- *  read; `applied: false` is "already at that size" (another tab paid), which is not a failure. */
+ *  read; `applied: false` is "already at that size and camera" (another tab paid, or the paid answer written back to the setting: no credits
+ *  moved, `cameraPolicySetTo` says whether the setting was written), which is not a failure. */
 export interface PackagePayResult {
   applied: boolean;
   capacityLoweredTo: number | null;

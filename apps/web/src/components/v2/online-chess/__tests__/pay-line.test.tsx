@@ -22,10 +22,10 @@ const clean = (markup: string) => markup.replace(/<[^>]+>/g, " ").replace(/&#x27
 
 const LINE: OnlinePayLineProps = { held: 41, size: 64, owed: packagePrice(64, true), onChangeSize: () => {}, onPay: () => {} };
 
-describe("OnlinePayLine: 'Online Chess not paid. {held} registered, up to {size}. Round 1 can't open until it's paid.'", () => {
+describe("OnlinePayLine: 'Online Chess not paid. {held} registered, up to {size}. No Online Chess round can open until it's paid.'", () => {
   it("says the sentence the spec gives, with the held count and the stored size", () => {
     const markup = render(<OnlinePayLine {...LINE} />);
-    expect(clean(markup)).toContain("Online Chess not paid. 41 registered, up to 64. Round 1 can't open until it's paid.");
+    expect(clean(markup)).toContain("Online Chess not paid. 41 registered, up to 64. No Online Chess round can open until it's paid.");
     expect(markup).toContain('data-testid="online-pay-line"');
   });
 

@@ -12,7 +12,7 @@ import { ONLINE_SIZES } from "../src/lib/online-chess-package";
 // in English and Spanish at 1280, 768 and 320 (the new row is the one that carries a division name and a size, and the Spanish
 // sentence is the longest of the four locales' - exactly where a page would push sideways).
 //
-// The row is made the way the product makes it: a division paid at "Pay and open round 1" (the open-round route, 402 then pay),
+// The row is made the way the product makes it: a division paid at "Pay and open the round" (the open-round route, 402 then pay),
 // not seeded into the ledger - so the row photographed is the one a customer's own payment leaves behind.
 //
 // Own blank session and a brand-new org (freshOrg), so the ledger holds this payment and nothing else of a shared org's.

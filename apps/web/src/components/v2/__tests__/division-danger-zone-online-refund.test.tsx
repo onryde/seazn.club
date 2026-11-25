@@ -223,4 +223,43 @@ describe("the way out the copy names is the screen's own words, in every locale"
     }
     expect(checked, "4 locales x (2 keys + the frozen line)").toBe(12);
   });
+
+  // P8/P20: the package is paid and frozen at the first ONLINE open, whatever its number - round 1 may be scored by hand and round 2 opened
+  // online. So no line that names the money moment (when it is paid, when the size and camera are fixed, what a pay-and-open opens) names a
+  // round number (fix round 4). The frozen line above is one of them; these are the rest, in every locale.
+  it("no money-moment line names a round number, in any locale; and nothing under Online Chess says 'round 1'", () => {
+    const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    const MONEY_MOMENT = [
+      "danger.onlineFrozen",
+      "onlineChess.price.later",
+      "onlineChess.review.value.one",
+      "onlineChess.review.value.other",
+      "onlineChess.payLine.text",
+      "onlineChess.receipt.title.payAndOpen",
+      "onlineChess.receipt.line.moveUp",
+      "onlineChess.receipt.line.fixed",
+      "onlineChess.receipt.confirm.payOpen.one",
+      "onlineChess.receipt.confirm.payOpen.other",
+      "onlineChess.receipt.noInvitable",
+      "onlineChess.receipt.lateEntrants",
+    ];
+    let checked = 0;
+    let swept = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const key of MONEY_MOMENT) {
+        const copy = dict[key];
+        expect(copy, `${locale} ${key}`).toBeTypeOf("string");
+        expect(copy, `${locale} ${key} names no round number`).not.toMatch(/\d/);
+        checked += 1;
+      }
+      // The sweep by behaviour, not by list: every Online Chess and danger-zone online line, a round word next to a digit is refused.
+      for (const [key, copy] of Object.entries(dict)) {
+        if (!key.startsWith("onlineChess.") && !key.startsWith("danger.online")) continue;
+        expect(copy, `${locale} ${key}`).not.toMatch(/\b(?:round|ronda|ronde)\s*\d/i);
+        swept += 1;
+      }
+    }
+    expect(checked, "4 locales x 12 money-moment keys").toBe(48);
+    expect(swept, "anti-vacuity: the namespace sweep read every locale's Online Chess lines").toBeGreaterThanOrEqual(4 * 100);
+  });
 });

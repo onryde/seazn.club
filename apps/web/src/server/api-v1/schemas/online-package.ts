@@ -98,7 +98,8 @@ export const OnlineSaveResultS = z.object({
   refunded: ReturnPlanS.nullable(),
 });
 
-/** `applied` false: the package was already at the target and nothing was written. `quote`: the quote the server acted on.
+/** `applied` false: the package was already at the target, so no credits moved and the package row is unchanged - a camera answer the
+ *  division's setting does not say is still written (`cameraPolicy`). `quote`: the quote the server acted on.
  *  `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered to it. `cameraPolicy`: the division's own
  *  camera policy the payment's camera answer wrote (`from`, null = it inherited the competition's; `to`), or null when the division
  *  already said the answer (or no answer was sent). */

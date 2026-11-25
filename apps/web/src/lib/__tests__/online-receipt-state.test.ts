@@ -14,7 +14,7 @@ const read = (size: OnlineSize, cameras = false, monthly = 50): ReceiptAction =>
   choice: { size, cameras },
   quote: quoteOf({ size, cameras, monthly }),
 });
-const open = (size: OnlineSize | null = 32, cameras = false) => initialReceipt({ mode: "pay", size, quote: null, cameras });
+const open = (size: OnlineSize | null = 32, cameras = false) => initialReceipt({ mode: "pay", size, quote: null, cameras, setting: cameras });
 
 describe("R1: a quote is on screen only for the choice it was read for", () => {
   it("the first read draws the receipt; before it, nothing is shown and a read is owed", () => {
@@ -61,7 +61,7 @@ describe("R1: a quote is on screen only for the choice it was read for", () => {
   });
 
   it("a change-mode receipt opens with no size chosen: nothing to read, nothing to press", () => {
-    const s = initialReceipt({ mode: "change", size: null, quote: null, cameras: false });
+    const s = initialReceipt({ mode: "change", size: null, quote: null, cameras: false, setting: false });
     expect(wantedOf(s)).toBeNull();
     expect(readOwed(s)).toBeNull();
     expect(pressBody(s)).toBeNull();
@@ -70,10 +70,10 @@ describe("R1: a quote is on screen only for the choice it was read for", () => {
 
   it("an initial quote (the 402's) is shown at once for its own size and camera answer, and not for another", () => {
     const q = quoteOf({ size: 32, monthly: 50 });
-    expect(shownQuote(initialReceipt({ mode: "payAndOpen", size: 32, quote: q, cameras: false }))).toBe(q);
-    expect(shownQuote(initialReceipt({ mode: "payAndOpen", size: 64, quote: q, cameras: false }))).toBeNull();
+    expect(shownQuote(initialReceipt({ mode: "payAndOpen", size: 32, quote: q, cameras: false, setting: false }))).toBe(q);
+    expect(shownQuote(initialReceipt({ mode: "payAndOpen", size: 64, quote: q, cameras: false, setting: false }))).toBeNull();
     // the receipt opened on the camera answer Yes: a quote priced without it is not its figure, and a read is owed instead
-    const yes = initialReceipt({ mode: "payAndOpen", size: 32, quote: q, cameras: true });
+    const yes = initialReceipt({ mode: "payAndOpen", size: 32, quote: q, cameras: true, setting: true });
     expect(shownQuote(yes)).toBeNull();
     expect(readOwed(yes)).toEqual({ size: 32, cameras: true });
   });
@@ -238,7 +238,7 @@ describe("R6: the Fair-play camera answer, on every receipt", () => {
   const SIZES = [16, 32, 64, 128, 256] as const;
   type Paid = { size: OnlineSize; camerasPaid: boolean };
   const change = (paid: Paid, cameras = paid.camerasPaid, size: OnlineSize | null = null) =>
-    initialReceipt({ mode: "change", size, quote: null, paid, cameras });
+    initialReceipt({ mode: "change", size, quote: null, paid, cameras, setting: cameras });
   const answer = (size: OnlineSize, cameras: boolean, paid?: Paid): ReceiptAction => ({
     type: "read",
     choice: { size, cameras },
@@ -250,7 +250,7 @@ describe("R6: the Fair-play camera answer, on every receipt", () => {
     let checked = 0;
     for (const mode of ["pay", "payAndOpen"] as const) {
       for (const cameras of [false, true]) {
-        expect(wantedOf(initialReceipt({ mode, size: 32, quote: null, cameras })), `${mode}/${cameras}`).toEqual({ size: 32, cameras });
+        expect(wantedOf(initialReceipt({ mode, size: 32, quote: null, cameras, setting: cameras })), `${mode}/${cameras}`).toEqual({ size: 32, cameras });
         checked += 1;
       }
     }
@@ -395,7 +395,7 @@ describe("R6: the Fair-play camera answer, on every receipt", () => {
     const inFlight = [
       run(change(paid), { type: "cameras", on: true }, answer(64, true, paid), { type: "submit" }),
       run(open(32), read(32), { type: "submit" }),
-      run(initialReceipt({ mode: "payAndOpen", size: 32, quote: null, cameras: true }), read(32, true), { type: "submit" }),
+      run(initialReceipt({ mode: "payAndOpen", size: 32, quote: null, cameras: true, setting: true }), read(32, true), { type: "submit" }),
     ];
     for (const s of inFlight) {
       expect(s.submitting).toBe(true);
@@ -412,15 +412,15 @@ describe("R6: the Fair-play camera answer, on every receipt", () => {
     expect(wantedOf(noOverYes)).toEqual({ size: 64, cameras: false });
     const withSize = change({ size: 64, camerasPaid: false }, true, 128);
     expect(wantedOf(withSize)).toEqual({ size: 128, cameras: true });
-    expect(wantedOf(initialReceipt({ mode: "pay", size: 32, quote: null, cameras: false }))).toEqual({ size: 32, cameras: false });
-    expect(wantedOf(initialReceipt({ mode: "pay", size: 32, quote: null, cameras: true }))).toEqual({ size: 32, cameras: true });
+    expect(wantedOf(initialReceipt({ mode: "pay", size: 32, quote: null, cameras: false, setting: false }))).toEqual({ size: 32, cameras: false });
+    expect(wantedOf(initialReceipt({ mode: "pay", size: 32, quote: null, cameras: true, setting: true }))).toEqual({ size: 32, cameras: true });
   });
 
   it("the paid facts mean nothing outside a change receipt: pay mode with a paid package still wants its own size", () => {
-    const s = initialReceipt({ mode: "pay", size: 64, quote: null, paid: { size: 64, camerasPaid: false }, cameras: false });
+    const s = initialReceipt({ mode: "pay", size: 64, quote: null, paid: { size: 64, camerasPaid: false }, cameras: false, setting: false });
     expect(s.paidSize).toBeNull();
     expect(wantedOf(s)).toEqual({ size: 64, cameras: false });
-    expect(wantedOf(initialReceipt({ mode: "pay", size: null, quote: null, cameras: true })), "no size: nothing to read").toBeNull();
+    expect(wantedOf(initialReceipt({ mode: "pay", size: null, quote: null, cameras: true, setting: true })), "no size: nothing to read").toBeNull();
   });
 
   it("sweep: at every paid size and held answer, the other answer alone is a change at that size by the leaf's difference", () => {

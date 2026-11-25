@@ -759,7 +759,7 @@ export function DivisionBuilder({
             // m6: only an online division, and only a picked policy - untouched, the server's default (inherit) stands.
             ...(lichess && cameraChoice !== CAMERA_INHERIT ? { camera_policy: cameraChoice } : {}),
             // Online Chess credits: the size the select shows (the default covers the drafted Swiss rounds), so the stages sent next are
-            // never refused for rounds the size does not include. Nothing is paid here: the package is paid before round 1.
+            // never refused for rounds the size does not include. Nothing is paid here: the package is paid before the first Online Chess round.
             ...(onlineSize !== null ? { online_size: onlineSize } : {}),
             ...eligibilityPatch({ maxAge, cutoffMonth, cutoffDay, category, customNote }),
           },
@@ -891,7 +891,7 @@ export function DivisionBuilder({
         .join(" · "),
       later: msg("divBuilder.review.later.rules"),
     },
-    // Online Chess credits (§8.1): the size and what it costs, paid before round 1 - the line says so and the row has no pay control.
+    // Online Chess credits (§8.1): the size and what it costs, paid before the first Online Chess round - the line says so and the row has no pay control.
     ...(onlineSize !== null
       ? [
           {

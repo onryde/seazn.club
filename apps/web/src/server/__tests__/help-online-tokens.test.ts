@@ -116,17 +116,20 @@ describe("the chess help page's Online Chess section", () => {
     });
   });
 
-  it("says the things an organiser has to know: Swiss and knockout only, change until round 1, what a refund returns, nothing for players", () => {
+  it("says the things an organiser has to know: Swiss and knockout only, change before the first Online Chess round, what a refund returns, nothing for players", () => {
     const text = helpPlainText(section);
     for (const phrase of [
       /Swiss and knockout/,
-      /before round 1/i,
+      // P8: the package is paid and frozen at the first ONLINE open, whatever its number (round 1 may be scored by hand) - fix round 4.
+      /before the first Online Chess round/i,
       /refund/i,
       /league|group/i,
       /Seazn credits/,
       /Fair.play camera/, // helpPlainText turns a hyphen into a space
       /Players, up to/,
     ]) expect(text, String(phrase)).toMatch(phrase);
+    // ...and never names round 1 as the moment the package is paid or fixed (the first online open can be round 2).
+    expect(text, "no round number as the money moment").not.toMatch(/(?:before|until|after) round 1|round 1 (?:opens|cannot open|can't open)/i);
     expect(section, "no 'External Play' to an organiser").not.toMatch(/external[ -]play/i);
   });
 
@@ -134,12 +137,12 @@ describe("the chess help page's Online Chess section", () => {
     const text = helpPlainText(section);
     // The product's own words, read from its dictionary: the receipt promises a free re-open (the help repeats it), and the two refusals
     // the help names are real answers of the open (open-round.ts: division_not_started, not_paired).
-    expect(en["onlineChess.receipt.noInvitable"], "the receipt's own promise").toMatch(/re-open round 1 for free/i);
+    expect(en["onlineChess.receipt.noInvitable"], "the receipt's own promise").toMatch(/re-open the round for free/i);
     expect(en["externalPlay.openRound.divisionNotStarted"], "a refusal the open answers").toMatch(/Start the division/);
     expect(en["externalPlay.openRound.notPaired"], "a refusal the open answers").toMatch(/Pair every board/);
     expect(text, "a refused open charges nothing, and names real refusals").toMatch(/cannot open[^.]*division has not been started[^.]*not paired[^.]*nothing is charged/i);
     expect(text, "a board waiting on a link does not stop the open").toMatch(/has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits/);
-    expect(text, "the free re-open").toMatch(/open round 1 again for free once they link/i);
+    expect(text, "the free re-open").toMatch(/open the round again for free once they link/i);
     // The false claim this replaced: a board waiting on a Lichess link is NOT a refusal.
     expect(text, "a link-waiting board is not listed as a refusal").not.toMatch(/cannot open[^.]*(?:waiting on a|Lichess link)[^.]*nothing is charged/i);
   });

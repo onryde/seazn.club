@@ -1083,7 +1083,9 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15
     expect(checked).toBe(2);
   });
 
-  it("AT the target on a FROZEN package the answer is not written - the camera is fixed from round 1, like the size (fix round 3)", async () => {
+  it("AT the target on a FROZEN package: an answer the setting does not say is the paying path's 409 (the receipt redraws), nothing written; one it says is nothing to do (fix round 4)", async () => {
+    // "Turn camera on" pressed after a round opened in another tab: the press meant a write the freeze now refuses. A silent `applied: false`
+    // closed the receipt and left the organiser believing the camera was on.
     const r = await rig({ size: 32, pack: 10, monthly: 0 });
     await confirm(r, 32, { cameras: true });
     await patchDivision(r.auth, r.divisionId, { camera_policy: "off" });
@@ -1091,12 +1093,20 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15
     const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId), audits: (await cameraAudits(r)).length };
     const shown = await quote(r, 32, true);
     expect([shown.refusal, shown.owed], "premise: the frozen quote at the target").toEqual(["frozen", 0]);
-    const result = await payOnlinePackage(r.auth, r.divisionId, { size: 32, cameras: true, expectedOwed: shown.owed });
-    expect([result.applied, result.cameraPolicy]).toEqual([false, null]);
+    const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 32, cameras: true, expectedOwed: shown.owed }));
+    expect([err.status, err.code]).toEqual([409, "ONLINE_QUOTE_CHANGED"]);
+    expect((err.extra as { quote: PackageQuote }).quote.refusal, "the fresh quote carries the refusal the receipt redraws with").toBe("frozen");
     expect(await divisionPolicy(r), "the setting is untouched").toBe("off");
     expect((await cameraAudits(r)).length).toBe(before.audits);
     expect(await orgLedgerCount(r.orgId)).toBe(before.ledger);
     expect(await packageRow(r.packageId)).toEqual(before.row);
+    // The same frozen target with the answer the setting already says (a second tab after the open): nothing was asked, nothing refused.
+    const says = await rig({ size: 32, pack: 10, monthly: 0 });
+    await confirm(says, 32, { cameras: true });
+    await sql`update division_online_packages set frozen_at = now() where id = ${says.packageId}`;
+    expect(await divisionPolicy(says), "premise: the setting says Yes").toBe("required");
+    const again = await payOnlinePackage(says.auth, says.divisionId, { size: 32, cameras: true, expectedOwed: (await quote(says, 32, true)).owed });
+    expect([again.applied, again.cameraPolicy, again.quote.refusal]).toEqual([false, null, "frozen"]);
   });
 
   it("a size AND a camera change in one receipt are ONE payment: one ledger row, the net of both - up with Yes, down with No, and a net of nothing", async () => {

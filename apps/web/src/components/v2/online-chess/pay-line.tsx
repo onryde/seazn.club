@@ -1,7 +1,7 @@
 "use client";
 
 // The amber line an unpaid Online Chess division wears on its Fixtures tab (spec 2026-11-23-online-chess-credits-design.md §8.3; plan Task 12):
-// "Online Chess not paid. 41 registered, up to 64. Round 1 can't open until it's paid." with Change size and Pay {owed} credits.
+// "Online Chess not paid. 41 registered, up to 64. No Online Chess round can open until it's paid." with Change size and Pay {owed} credits.
 // In `LockLine`'s style (a small status sentence in the strip) with a tone and two actions, which `LockLine` has no place for.
 //
 // It decides nothing and spends nothing. `owed` is the leaf's price for the size the row stores (the host passes it), the buttons are the

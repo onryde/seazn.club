@@ -1,7 +1,7 @@
 "use client";
 
 // The receipt an Open on an UNPAID package stands up on Match Day (spec 2026-11-23-online-chess-credits-design.md §7.6, §8.4; plan Task 12): "Pay N
-// credits and open round 1". The server answered the open with 402 ONLINE_CHESS_UNPAID { quote, next } (`unpaidOf`); this receipt opens on the STORED
+// credits and open the round". The server answered the open with 402 ONLINE_CHESS_UNPAID { quote, next } (`unpaidOf`); this receipt opens on the STORED
 // size the quote is for (decision 15: the organiser's own choice, never the smallest that fits), or, when the server refused that size for this
 // division, on the smallest it offered (`next`), which the organiser still confirms by its own price. Everything else - the other sizes with their
 // price and consequence, a 409 redraw, a short balance, the late-entrant line - is the division page's own receipt (`OnlineReceipt`); this wrapper only

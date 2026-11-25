@@ -5,7 +5,7 @@
 //      the club's balance), and Create sends `online_size` - the size the select SHOWS, which follows the rounds until a pick is made.
 //   2. No stage-less online division: the combination that would leave one is refused BEFORE the division exists - a format Online
 //      Chess does not run with online play on (from either side), and more Swiss rounds than any size includes.
-//   3. Review says what the choice is and what it costs ("Online Chess · up to 64 players · 8 credits, paid before round 1") and spends
+//   3. Review says what the choice is and what it costs ("Online Chess · up to 64 players · 8 credits, paid before the first Online Chess round") and spends
 //      nothing: no pay control, no request before Create.
 //
 // Expected values come from the spec's table (Global Constraints: 16/32/64/128/256 players include 6/7/8/9/10 rounds and cost
@@ -316,7 +316,7 @@ describe("no stage-less online division: the combination is refused before the d
 });
 
 describe("Review says what the choice is and what it costs, and spends nothing", () => {
-  it("\"Online Chess · up to 32 players · 2 credits, paid before round 1\" for 7 rounds; the plural for 16 players' 1 credit", () => {
+  it("\"Online Chess · up to 32 players · 2 credits, paid before the first Online Chess round\" for 7 rounds; the plural for 16 players' 1 credit", () => {
     const h = mount();
     swiss(h, 7);
     lichessOn(h);

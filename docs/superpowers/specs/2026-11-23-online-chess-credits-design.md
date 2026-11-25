@@ -314,7 +314,7 @@ So:
 | Write | Where it runs |
 |---|---|
 | Pay, upgrade | Its own usecase on the privileged `sql.begin`, as every ledger writer does. Never inside `withTenant`. Locks, in order: `division:`, the org money lock, the package row `for update`, then - when the camera answer writes the setting (Task 15) - the division row `for no key update` (the tail). |
-| Pay and open round 1 | Inside `openRound`'s existing privileged transaction (§7.6). Locks, in order: `division:`, the bridge rows it reads and holds, the org money lock, the package row `for update`, the division row `for no key update` (the tail); the invites' bridge rows are written after those, still under `division:` (every other taker of the money lock that reaches them - a delete's cascade - holds `division:` first). |
+| Pay and open the round | Inside `openRound`'s existing privileged transaction (§7.6). Locks, in order: `division:`, the bridge rows it reads and holds, the org money lock, the package row `for update`, the division row `for no key update` (the tail); the invites' bridge rows are written after those, still under `division:` (every other taker of the money lock that reaches them - a delete's cascade - holds `division:` first). |
 | Choose or change an unpaid size; delete an unpaid row | The division save's `privilegedEpilogue`. The checks run in the tenant callback, under the division lock the prelude took. |
 | Refund on division delete, competition delete, online switched off | The same transaction's `privilegedEpilogue`, so the refund commits or rolls back with the delete. The prelude reads and locks first (below). |
 
@@ -442,7 +442,7 @@ Online Chess: 8 credits · You have 11 · Buy more
 The builder's Review list gains one line beside the existing Lichess and camera lines (`components/v2/division-builder.tsx:852`):
 
 ```
-Online Chess · up to 64 players · 8 credits, paid before round 1
+Online Chess · up to 64 players · 8 credits, paid before the first Online Chess round
 ```
 
 There is no spend on this step. The Create button creates the division with its size chosen and unpaid. (The mockup's "Create · spend" button is superseded.)
@@ -453,7 +453,7 @@ In the Fixtures tab's rules strip, an unpaid online division shows an amber line
 
 ```
 ! Online Chess not paid. 41 registered, up to 64.
-  Round 1 can't open until it's paid.
+  No Online Chess round can open until it's paid.
   [ Change size ]  [ Pay 8 credits ]
 ```
 
@@ -476,7 +476,7 @@ From bought credits                    5
 Total                                  8 credits
 
 Knockout, play-off and tie-break games are included.
-You can move up a size until round 1 opens.
+You can move up a size until the first Online Chess round opens.
                           [ Cancel ]  [ Pay 8 credits ]
 ```
 
@@ -486,9 +486,9 @@ You can move up a size until round 1 opens.
 - Phone: the confirm is a bottom sheet, rows full width. Desktop: the centred confirm dialog.
 - **Short balance.** The confirm button reads "Buy credits". It opens the existing credits chooser (`creditsCard`, `components/v2/fixture-stream-panel.tsx:1562`; `components/buy-stream-credits.tsx:42`), renamed to Seazn credits, with the shortfall preselected: the smallest pack that covers it. After checkout it returns to the division page with the receipt reopened (the checkout route's new `returnTo: "division"`, §7.6). The size needs no keeping on the client for a first payment, because it is stored on the unpaid row; an upgrade's target size rides in the return address, and so does the camera answer (`cameras=1` or `cameras=0`), so the receipt reopens at the answer the organiser gave, in either direction.
 
-### 8.5 "Open round 1" on an unpaid division
+### 8.5 "Open round" on an unpaid division
 
-Pressing Open round 1 opens the same receipt inline, with the confirm button **"Pay 8 credits and open round 1"**.
+Pressing Open round on an unpaid division opens the same receipt inline, with the confirm button **"Pay 8 credits and open the round"**. That is the division's first Online Chess round, whatever its number: round 1 may have been scored by hand (P20), and the package is paid and frozen at the first ONLINE open (P8). So no receipt line names "round 1" as the moment it is paid or fixed (fix round 4).
 
 - **Preselect (owner decision 15): the size the organiser chose.** It is the stored size on the unpaid row. That size already holds the places held and covers the counted rounds, because every door that grows either one checks it (§7.6).
 - **They can change it in the receipt.** The other sizes are listed, each with its price. A smaller one that still fits shows what it saves and what it costs them:
@@ -501,7 +501,7 @@ Pressing Open round 1 opens the same receipt inline, with the confirm button **"
 
   A size that does not hold the places held, or does not cover the rounds, is listed disabled with its reason.
 - **One confirm pays and opens.** They commit together (§7.6). If the round does not open, for any reason, nothing is paid, and the organiser sees the round's own reason (not paired, a board waiting on a Lichess link, and so on).
-- Paying freezes the limit for the whole event, and the receipt says so in one line: "The size is fixed once round 1 opens."
+- Paying freezes the limit for the whole event, and the receipt says so in one line: "The size and the camera are fixed once the first Online Chess round opens."
 
 ### 8.6 Once paid
 
@@ -528,7 +528,7 @@ Not returned                           0
 
 ### 8.7 After round 1 opens
 
-The chip stays, without the Change size link: "Online Chess · up to 64 · paid". The select is read-only, and so is the Fair-play camera answer: a receipt whose quote is refused `frozen` shows it disabled, beside "The size and the camera are fixed once round 1 opens." There is no price and no prompt anywhere on Match Day.
+The chip stays, without the Change size link: "Online Chess · up to 64 · paid". The select is read-only, and so is the Fair-play camera answer: a receipt whose quote is refused `frozen` shows it disabled, beside "The size and the camera are fixed once the first Online Chess round opens." There is no price and no prompt anywhere on Match Day.
 
 ### 8.8 Credit history
 

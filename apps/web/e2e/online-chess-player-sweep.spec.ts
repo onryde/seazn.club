@@ -374,7 +374,7 @@ test.describe("online chess: the player sweep", () => {
       receipts++;
       expect(countBy(hits, "credit"), `${locale}: the organiser's receipt says credit`).toBeGreaterThan(0);
       expect(countBy(hits, "price"), `${locale}: the organiser's receipt says the price`).toBeGreaterThan(0);
-      // The receipt's "you can move up a size until round 1 opens" line (receipt.tsx) carries the size word, so the positive scan has it too.
+      // The receipt's "you can move up a size until the first Online Chess round opens" line (receipt.tsx) carries the size word, so the positive scan has it too.
       expect(countBy(hits, "size"), `${locale}: the organiser's receipt says the size`).toBeGreaterThan(0);
     }
     expect(scanned, "4 locales x 4 pages scanned").toBe(16);
