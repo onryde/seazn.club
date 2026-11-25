@@ -24,6 +24,11 @@ const h = vi.hoisted(() => ({
   // W4 T21: what `openStagesOf` answers, so the wiring test below can tell a passed answer from a default.
   openStages: [] as { stageId: string; competitionId?: string }[],
   openStagesAskedFor: [] as string[],
+  // The purge dialog's Online Chess line: what `packageRefundPreview` answers per division id, who asked, whether the read fails.
+  refunds: {} as Record<string, unknown>,
+  refundAskedFor: [] as string[],
+  refundThrows: false,
+  canEdit: true,
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -31,8 +36,17 @@ vi.mock("@/server/page-auth", () => ({
     auth: { orgId: "org-1", userId: "user-1" },
     org: { id: "org-1", name: "Riverside CC", slug: "riverside", branding: null },
     competition: { id: "comp-1", name: "Summer League", slug: "summer-league" },
-    canEdit: true,
+    canEdit: h.canEdit,
   }),
+}));
+
+// What a purge of each archived division would do to its Online Chess package: the server's own read, handed to the restore surface.
+vi.mock("@/server/usecases/online-package", () => ({
+  packageRefundPreview: async (_orgId: string, divisionId: string) => {
+    h.refundAskedFor.push(divisionId);
+    if (h.refundThrows) throw new Error("the refund read failed");
+    return h.refunds[divisionId] ?? null;
+  },
 }));
 
 vi.mock("@/server/usecases/competitions", () => ({
@@ -143,6 +157,10 @@ beforeEach(() => {
   h.explain = false;
   h.openStages = [];
   h.openStagesAskedFor = [];
+  h.refunds = {};
+  h.refundAskedFor = [];
+  h.refundThrows = false;
+  h.canEdit = true;
 });
 
 // W4 T21 (X-CH-8): the warning's list is a server read handed down as a prop — and a missing prop defaults to an empty
@@ -185,5 +203,44 @@ describe("the archived-slot explanation is wired from the server on both surface
     h.explain = false;
 
     expect(propsOf(await builder()).archivedSlotsExplainRefusal).toBe(false);
+  });
+});
+
+// The purge dialog's Online Chess line is a server read handed down on each archived row; a missing field defaults to "no money
+// line", which renders a purge that quietly refunds with no word of it. So the wiring is pinned the same way as the rest.
+describe("the purge dialog's Online Chess refund is wired from the server, per archived row", () => {
+  const rowsOf = async () => propsOf(await archivedPanel()).divisions as { id: string; packageRefund?: unknown }[];
+
+  it("each archived row carries the figure the server read for THAT division, unchanged", async () => {
+    const figure = { back: 8, forfeited: 2 };
+    h.refunds = { "d-gone": figure };
+    const rows = await rowsOf();
+    expect(rows.map((r) => r.id)).toEqual(["d-gone"]);
+    expect(h.refundAskedFor, "asked for the archived division only, never the live one").toEqual(["d-gone"]);
+    expect(rows[0]!.packageRefund).toBe(figure);
+  });
+
+  it("a frozen package reaches the row as frozen, and a division with no paid package as null", async () => {
+    h.refunds = { "d-gone": { frozen: true } };
+    expect((await rowsOf())[0]!.packageRefund).toEqual({ frozen: true });
+    h.refunds = {};
+    expect((await rowsOf())[0]!.packageRefund, "nothing paid: the server read null").toBeNull();
+  });
+
+  it("a viewer who cannot purge costs no read at all", async () => {
+    h.canEdit = false;
+    h.refunds = { "d-gone": { back: 8, forfeited: 0 } };
+    const rows = await rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(h.refundAskedFor).toEqual([]);
+    expect(rows[0]!.packageRefund).toBeNull();
+  });
+
+  it("a read that throws is a courtesy lost, not a page lost: the row renders with no money line", async () => {
+    h.refundThrows = true;
+    const rows = await rowsOf();
+    expect(h.refundAskedFor, "the read was attempted").toEqual(["d-gone"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.packageRefund).toBeNull();
   });
 });
