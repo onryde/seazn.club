@@ -38,7 +38,7 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, SAMPLE_RETENTION_DAYS, relayEnvironment, seaznHostedReplay } from "@/server/relay/config";
+import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, SAMPLE_BEAT_SPAN_MAX_SECONDS, SAMPLE_RETENTION_DAYS, relayEnvironment, seaznHostedReplay } from "@/server/relay/config";
 import { retentionPlan, type RetainedInput, type RetainedVideo } from "@/server/relay/domain/retention";
 import { machineNameFor, type RunnerState } from "@/server/relay/domain/runner";
 import type { DbEndReason } from "@/server/relay/domain/end-reason";
@@ -736,14 +736,42 @@ export async function sweepStreamSessions(
   }
 
   // 6. per-session sample SUMMARIES — once per ended session (they survive sample retention).
+  //    T44 part 2 (the C2 review): the averages are TIME-WEIGHTED. Beats are not evenly spaced (an edge beat comes at the compositor's
+  //    least gap around an incident, then the 5 s cadence resumes), so a per-sample mean lets a burst of beats at one reading outvote the
+  //    long stretch at another. THE RULE: a sample's reading holds from its own instant until the NEXT sample of the SAME source (a poll
+  //    never cuts a beat's span; its fps is null anyway), and the last one of a source until the session's `ended_at`; a HEARTBEAT's span
+  //    is at most SAMPLE_BEAT_SPAN_MAX_SECONDS (three missed beats: a Machine that went quiet is not measured by its last word), never
+  //    negative (a sample after `ended_at` holds 0). Each average is sum(value x span) / sum(span) over the samples that HAVE the value,
+  //    and a figure with no time under it at all (one reading at the session's last instant) falls back to the plain mean of what
+  //    there is. `count`, the min and the max are not weighted. `stalls` still COUNTS stalled samples (it counts events, which time
+  //    cannot weight); `stallSeconds` is the time the stalled HEARTBEAT readings held (the relay's own series, so concurrent sources
+  //    do not double-count the same seconds).
   const summarised = await sql<{ id: string }[]>`
     update fixture_stream_sessions s
        set sample_summary = agg.summary
-      from (select session_id,
-                   jsonb_build_object('count', count(*), 'fpsMin', min(fps), 'fpsAvg', avg(fps), 'fpsMax', max(fps),
-                                      'bitrateMin', min(bitrate_kbps), 'bitrateAvg', avg(bitrate_kbps), 'bitrateMax', max(bitrate_kbps),
-                                      'stalls', count(*) filter (where ingest_state is not null and ingest_state not in ('connected','playing'))) as summary
-              from fixture_stream_samples group by session_id) agg
+      from (select w.session_id,
+                   jsonb_build_object('count', count(*),
+                                      'fpsMin', min(w.fps),
+                                      'fpsAvg', case when coalesce(sum(w.span_s) filter (where w.fps is not null), 0) > 0
+                                                     then sum(w.fps::float8 * w.span_s) filter (where w.fps is not null) / sum(w.span_s) filter (where w.fps is not null)
+                                                     else avg(w.fps) end,
+                                      'fpsMax', max(w.fps),
+                                      'bitrateMin', min(w.bitrate_kbps),
+                                      'bitrateAvg', case when coalesce(sum(w.span_s) filter (where w.bitrate_kbps is not null), 0) > 0
+                                                         then sum(w.bitrate_kbps::float8 * w.span_s) filter (where w.bitrate_kbps is not null) / sum(w.span_s) filter (where w.bitrate_kbps is not null)
+                                                         else avg(w.bitrate_kbps) end,
+                                      'bitrateMax', max(w.bitrate_kbps),
+                                      'stalls', count(*) filter (where w.ingest_state is not null and w.ingest_state not in ('connected','playing')),
+                                      'stallSeconds', coalesce(sum(w.span_s) filter (where w.source = 'heartbeat' and w.ingest_state is not null and w.ingest_state not in ('connected','playing')), 0)) as summary
+              from (select p.session_id, p.source, p.fps, p.bitrate_kbps, p.ingest_state,
+                           greatest(0, extract(epoch from (
+                             least(coalesce(lead(p.sampled_at) over (partition by p.session_id, p.source order by p.sampled_at, p.id), e.ended_at),
+                                   case when p.source = 'heartbeat' then p.sampled_at + make_interval(secs => ${SAMPLE_BEAT_SPAN_MAX_SECONDS}::float8) else 'infinity'::timestamptz end)
+                             - p.sampled_at)))::float8 as span_s
+                      from fixture_stream_samples p
+                      join fixture_stream_sessions e on e.id = p.session_id
+                     where e.sample_summary is null and e.ended_at is not null) w
+             group by w.session_id) agg
      where agg.session_id = s.id and s.sample_summary is null and s.ended_at is not null and s.state in ${sql([...TERMINAL_STATES])} ${inScopeS()}
      returning s.id`;
   out.summariesWritten = summarised.length;

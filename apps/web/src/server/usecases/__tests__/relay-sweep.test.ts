@@ -32,7 +32,7 @@ import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
   AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
-  PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
+  PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS, RELAY_HEARTBEAT_INTERVAL_MS, SAMPLE_BEAT_SPAN_MAX_SECONDS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
   relayEnvironment, seaznHostedReplay,
 } from "@/server/relay/config";
@@ -1256,6 +1256,94 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(pruned.samplesDeleted).toBe(4);
     const [after] = await sql<{ sample_summary: unknown; n: number }[]>`select sample_summary, (select count(*)::int from fixture_stream_samples where session_id = ${r.sessionId}) as n from fixture_stream_sessions where id = ${r.sessionId}`;
     expect(after!.sample_summary).toBeTruthy(); expect(after!.n).toBe(0);
+  });
+
+  // T44 part 2 (the C2 review): the summary's averages and stall figure used to weigh every sample equally, but beats are not evenly
+  // spaced (an edge beat comes at the compositor's least gap around an incident, then the 5 s cadence), so a burst of beats at one
+  // reading outvoted the long stretch at another. The rule (relay-sweep.ts, summary phase): a sample's reading holds until the NEXT
+  // sample of the SAME source (or the session's end), at most `SAMPLE_BEAT_SPAN_MAX_SECONDS` for a heartbeat (3 missed beats and the
+  // runner is lost: a silent Machine's last reading is not a measurement of the silence), and every average is weighted by that span.
+  // The expected figures below are worked by hand from the seeded times, never read off the sweep.
+  describe("T44: the session summary is time-weighted", () => {
+    const T0 = Date.parse("2026-06-01T10:00:00.000Z");
+    const CAP_S = (3 * RELAY_HEARTBEAT_INTERVAL_MS) / 1000;   // three missed beats: the declaration the cap is derived from
+    type Seed = { at: number; source?: "heartbeat" | "poll" | "notification"; fps?: number | null; kbps?: number | null; state?: string | null };
+    /** A terminal session ended `endAt` seconds after T0 whose samples are exactly `seeds` (seconds after T0), then ONE sweep. */
+    async function summarise(seeds: Seed[], endAt: number, written = 1): Promise<Record<string, number>> {
+      const r = await rig();
+      await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+      await sql`delete from fixture_stream_samples where session_id = ${r.sessionId}`;
+      for (const x of seeds) {
+        await sql`insert into fixture_stream_samples (session_id, sampled_at, source, fps, bitrate_kbps, ingest_state)
+                  values (${r.sessionId}, ${new Date(T0 + x.at * 1000)}, ${x.source ?? "heartbeat"}, ${x.fps ?? null}, ${x.kbps ?? null}, ${x.state ?? "playing"})`;
+      }
+      await sql`update fixture_stream_sessions set ended_at = ${new Date(T0 + endAt * 1000)}, sample_summary = null where id = ${r.sessionId}`;
+      expect((await sweep(r, { sampleRetentionDays: null })).summariesWritten).toBe(written);
+      const [row] = await sql<{ sample_summary: Record<string, number> }[]>`select sample_summary from fixture_stream_sessions where id = ${r.sessionId}`;
+      return row!.sample_summary;
+    }
+
+    it("the cap is three missed beats of the cadence the compositor is served", () => {
+      expect(SAMPLE_BEAT_SPAN_MAX_SECONDS).toBe(15);
+      expect(SAMPLE_BEAT_SPAN_MAX_SECONDS).toBe(CAP_S);
+    });
+
+    it("an uneven burst: four beats at 60 fps in the first 3 s, then one at 30 fps held 5 s to the end — fpsAvg and bitrateAvg are the TIME-weighted means, not the per-sample ones", async () => {
+      // 60 fps / 6000 kbps held 0-13 s (1 + 1 + 1 + 10 s: the fourth beat holds until the 13 s beat), 30 fps / 3000 kbps held 13-18 s.
+      const sum = await summarise([
+        { at: 0, fps: 60, kbps: 6000 }, { at: 1, fps: 60, kbps: 6000 }, { at: 2, fps: 60, kbps: 6000 }, { at: 3, fps: 60, kbps: 6000 },
+        { at: 13, fps: 30, kbps: 3000, state: "stalled" },
+      ], 18);
+      const fps = (60 * 13 + 30 * 5) / 18, kbps = (6000 * 13 + 3000 * 5) / 18;
+      expect(sum.fpsAvg).toBeCloseTo(fps, 9);
+      expect(sum.bitrateAvg).toBeCloseTo(kbps, 9);
+      // The differential: the per-sample mean is 54, and it is NOT what is written.
+      expect(sum.fpsAvg).not.toBeCloseTo((60 * 4 + 30) / 5, 3);
+      expect(sum.bitrateAvg).not.toBeCloseTo((6000 * 4 + 3000) / 5, 3);
+      // Min, max and the sample count are not weighted: they are what they were.
+      expect(sum).toMatchObject({ count: 5, fpsMin: 30, fpsMax: 60, bitrateMin: 3000, bitrateMax: 6000 });
+      // `stalls` still counts the stalled SAMPLES (1); `stallSeconds` is the time the stalled reading held (13 s to the 18 s end).
+      expect(sum.stalls).toBe(1);
+      expect(sum.stallSeconds).toBeCloseTo(5, 9);
+    });
+
+    it("a silent gap is not a measurement: a beat is held at most 3 missed beats, so a 100 s hole after a 60 fps beat weighs 15 s, not 100", async () => {
+      const sum = await summarise([{ at: 0, fps: 60, kbps: 6000 }, { at: 100, fps: 30, kbps: 3000 }], 110);
+      // 60 fps holds CAP_S (of the 100 s to the next beat); 30 fps holds min(10 s to the end, CAP_S) = 10 s.
+      expect(sum.fpsAvg).toBeCloseTo((60 * CAP_S + 30 * 10) / (CAP_S + 10), 9);
+      expect(sum.fpsAvg, "not the uncapped 100:10 weighting").not.toBeCloseTo((60 * 100 + 30 * 10) / 110, 3);
+      expect(sum.fpsAvg, "not the per-sample mean").not.toBeCloseTo(45, 3);
+    });
+
+    it("a poll between two beats neither cuts their span nor weighs its null fps; its own stalled word counts as a stalled sample but adds no beat time", async () => {
+      const sum = await summarise([
+        { at: 0, fps: 60, kbps: 6000 }, { at: 2, source: "poll", state: "disconnected" }, { at: 10, fps: 30, kbps: 3000 },
+      ], 14);
+      // Beats: 60 fps holds 10 s (to the next BEAT, the poll between does not cut it), 30 fps holds 4 s to the end.
+      expect(sum.fpsAvg).toBeCloseTo((60 * 10 + 30 * 4) / 14, 9);
+      expect(sum.count).toBe(3);
+      expect(sum.stalls, "the poll's disconnected word").toBe(1);
+      expect(sum.stallSeconds, "no heartbeat was stalled").toBe(0);
+    });
+
+    it("a sample stamped AFTER the session's end holds no time (never a negative weight): its reading does not move the average", async () => {
+      // The 60 fps beat holds the 15 s to the next beat (the cap); the 30 fps one is 10 s past the end, so it holds 0.
+      const sum = await summarise([{ at: 5, fps: 60, kbps: 6000 }, { at: 5 + CAP_S, fps: 30, kbps: 3000 }], 5 + CAP_S - 5);
+      expect(sum.fpsAvg).toBe(60);
+      expect(sum.bitrateAvg).toBe(6000);
+      expect(sum).toMatchObject({ count: 2, fpsMin: 30, fpsMax: 60 });
+    });
+
+    it("a lone reading with no time under it (it is the session's last instant) is its own average — never a division by zero or a null", async () => {
+      const sum = await summarise([{ at: 5, fps: 24, kbps: 2400 }], 5);
+      expect(sum.fpsAvg).toBe(24);
+      expect(sum.bitrateAvg).toBe(2400);
+      expect(sum.count).toBe(1);
+    });
+
+    it("the empty case, unchanged: a terminal session with NO samples gets no summary (nothing to summarise), and the sweep says so", async () => {
+      expect(await summarise([], 5, 0)).toBeNull();
+    });
   });
 
   it("video facts: listed recordings land on the session by input uid — video_uids (distinct, ordered) and recording_seconds — and the sweep lists videos ONCE", async () => {

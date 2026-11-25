@@ -260,6 +260,11 @@ export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS
  *  beats ... is omitted, not reported stale-as-fresh" — defined from the cadence the compositor is served, never a literal. A
  *  stored beat exactly this old is still told; a millisecond older is not. */
 export const DELIVERY_RELAY_FRESH_MS = 3 * RELAY_HEARTBEAT_INTERVAL_MS;
+/** T44 part 2: the longest a single HEARTBEAT sample counts for in the session's time-weighted summary (relay-sweep.ts, summary phase), in
+ *  seconds: a beat's reading holds until the next beat, but only for the three missed beats after which the runner is `lost`
+ *  (`STALE_HEARTBEAT_SECONDS_COMPOSED`), so a Machine that went quiet for ten minutes does not have its last fps stand for ten minutes.
+ *  The same product as `DELIVERY_RELAY_FRESH_MS` (a relay fact older than three beats is not reported fresh), by definition. */
+export const SAMPLE_BEAT_SPAN_MAX_SECONDS = DELIVERY_RELAY_FRESH_MS / 1000;
 /** Compositor plan Global Constraints "Exit codes" (`78`: unauthorized or not found), whose final beat says
  *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A
  *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry
@@ -622,12 +627,38 @@ export const SEAZN_LIVE_MEASURE_BREAKER_FAILURES = 3;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
-/** Ruling 13 (capture everything) has one cost line: fixture_stream_samples.
- *  3 h (MAX_DURATION_MINUTES) at one heartbeat AND one poll every 5 s is 4,320
- *  rows; the cap sits above that so a legitimate session never hits it, and a
- *  runaway client (a poll loop at 100 ms) cannot write 180,000. The writer
- *  returns "capped" and the usecase records ONE `samples_capped` event. */
-export const SAMPLES_PER_SESSION_CAP = 8000;
+/** T44 part 2 (the C2 review): the LEAST gap between two heartbeats from a composed Machine, in ms. Beyond the 5 s cadence
+ *  (`RELAY_HEARTBEAT_INTERVAL_MS`) the compositor sends an "edge beat" when its programme phase changes, and spaces any two beats at
+ *  least `phase_beat_gap_ms` apart: `resume_after_ms`, 1 000 ms today ("one beat a second at most, against the cadence's one in five",
+ *  compositor crates/domain/src/config.rs `Thresholds::phase_beat_gap_ms`, read at origin/main 73c9c2ff). Defined here and pinned in
+ *  config.test.ts to that figure; a compositor change to the gap is a change here, which moves `SAMPLES_PER_SESSION_CAP` with it. */
+export const RELAY_EDGE_BEAT_MIN_GAP_MS = 1_000;
+/** T44 part 2: the FASTEST period of the stream tick, in seconds (prod's cron fires every minute; stg's every five, so
+ *  `STREAM_TICK_PERIOD_SECONDS` above is the slowest). The tick writes one `poll` sample per live session per firing, so this is the
+ *  densest the polls come. config.test.ts reads it back off apps/cron-worker/wrangler.json. */
+export const STREAM_TICK_FASTEST_PERIOD_SECONDS = 60;
+/** T44 part 2: the room kept above a session's worst-case samples for what the two rates do not count: a webhook notification, a
+ *  boot beat, the last beats of an ending, a session that outlives its nominal hard cap by its grace. A quarter, which is 2 745
+ *  rows at the figures below. */
+const SAMPLES_HEADROOM = 1.25;
+
+/** Ruling 13 (capture everything) has one cost line: fixture_stream_samples. What the cap protects is that table's ROW COUNT per
+ *  session (and so the daily summary's scan and the 90-day retention's storage): a legitimate session must never hit it, and a runaway
+ *  client (a poll loop at 100 ms) must not write 180,000. The writer returns "capped" and the usecase records ONE `samples_capped` event.
+ *
+ *  DERIVED, never a literal (T44 part 2; the old 8 000 assumed a beat and a poll per 5 s, 4,320 rows, and lost the last ~45 min of a
+ *  session whose edge beats came at the compositor's least gap): the worst session runs the hard cap (`MAX_DURATION_MINUTES`, 3 h) with
+ *  a beat at every `RELAY_EDGE_BEAT_MIN_GAP_MS` (10,800 rows; the 5 s cadence beats are subsumed, an edge beat restarts the gap) and a
+ *  poll at every `STREAM_TICK_FASTEST_PERIOD_SECONDS` (180 rows), times `SAMPLES_HEADROOM`: 13,725.
+ *
+ *  What the new number COSTS: a session that hits it holds 13,725 rows instead of 8,000 (+5,725, +72%): a full beat's row measures about
+ *  920 bytes (pg_column_size of its columns with the 784-byte raw of heartbeat-full plus the camera's six), so about 12.6 MB at the new
+ *  cap against 7.4 MB at the old, for the rare session that fills it, kept 90 days (`SAMPLE_RETENTION_DAYS`) and summarised once at the end. An ordinary session is untouched: a
+ *  beat per 5 s cadence for 3 h is 2,160 rows, a fifth of the cap. The runaway ceiling is 13,725 rows instead of 180,000 (a 100 ms loop
+ *  for 3 h), so the guard against a loop is as good as it was. */
+export const SAMPLES_PER_SESSION_CAP = Math.ceil(
+  (Math.ceil((MAX_DURATION_MINUTES * 60 * 1000) / RELAY_EDGE_BEAT_MIN_GAP_MS) + Math.ceil((MAX_DURATION_MINUTES * 60) / STREAM_TICK_FASTEST_PERIOD_SECONDS)) * SAMPLES_HEADROOM,
+);
 /** RULED by the owner at Task 0 ("2 is ok"; plan §"Data captured"): the daily
  *  sweep (Task 12) deletes raw samples older than this, and ONLY for sessions
  *  whose `sample_summary` is already written — an unsummarised session keeps

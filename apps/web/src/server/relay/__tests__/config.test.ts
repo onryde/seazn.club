@@ -929,3 +929,42 @@ describe("T44 — relayInputBeat, the flag that asks the compositor for the came
     expect(files.filter((f) => readFileSync(f, "utf8").includes("RELAY_INPUT_BEAT"))).toEqual([]);
   });
 });
+
+// T44 part 2 (the C2 review): the per-session sample cap protects the table from a runaway client, and must not cut a LEGITIMATE
+// session. Its inputs are declared, not typed into the cap.
+describe("T44 — SAMPLES_PER_SESSION_CAP holds a full session at the edge beat's fastest rate", () => {
+  type Wrangler = { env: Record<string, { triggers: { crons: string[] } }> };
+  const wrangler = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../cron-worker/wrangler.json"), "utf8")) as Wrangler;
+
+  it("the edge beat's least gap is the compositor's `phase_beat_gap_ms` = `resume_after_ms`, 1 000 ms (compositor crates/domain config.rs: \"one beat a second at most\"), and is under the cadence", () => {
+    expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS).toBe(1_000);
+    expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS, "an edge beat comes before the cadence's").toBeLessThan(config.RELAY_HEARTBEAT_INTERVAL_MS);
+  });
+
+  it("the fastest tick is the smallest period the Worker is deployed with (read off wrangler.json)", () => {
+    const every = (cron: string): number | null => {
+      const [minute, ...rest] = cron.trim().split(/\s+/);
+      if (rest.length !== 4 || rest.some((f) => f !== "*")) return null;
+      if (minute === "*") return 60;
+      const m = /^\*\/(\d+)$/.exec(minute!);
+      return m === null ? null : Number(m[1]) * 60;
+    };
+    const periods = Object.values(wrangler.env).flatMap((e) => e.triggers.crons.map(every).filter((p): p is number => p !== null));
+    expect(periods.length, "anti-vacuity: both deployments' fast triggers were read").toBe(2);
+    expect(config.STREAM_TICK_FASTEST_PERIOD_SECONDS).toBe(Math.min(...periods));
+  });
+
+  it("the cap holds every sample of a session that runs its hard cap with a beat at the least gap the whole time, plus a poll at every fastest tick, with headroom; and it is not the old 8 000", () => {
+    // The brief's own arithmetic: 3 h at 1 beat/s is 10 800 samples (C2 review), the figure the old cap of 8 000 lost the last ~45 min to.
+    const beats = (config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_EDGE_BEAT_MIN_GAP_MS;
+    expect(beats, "3 h at one beat a second").toBe(10_800);
+    const polls = (config.MAX_DURATION_MINUTES * 60) / config.STREAM_TICK_FASTEST_PERIOD_SECONDS;
+    expect(polls, "3 h at one poll a minute").toBe(180);
+    expect(config.SAMPLES_PER_SESSION_CAP, "every beat and poll fits").toBeGreaterThanOrEqual(beats + polls);
+    expect(config.SAMPLES_PER_SESSION_CAP, "headroom beyond them: a webhook notification, a boot beat, an ending's last beats").toBeGreaterThan(beats + polls);
+    expect(config.SAMPLES_PER_SESSION_CAP, "headroom is bounded: a runaway client at 100 ms (180 000 rows) is still cut at a tenth of that").toBeLessThan(18_000);
+    expect(config.SAMPLES_PER_SESSION_CAP, "a whole number").toBe(Math.floor(config.SAMPLES_PER_SESSION_CAP));
+    // The ordinary session is nowhere near it: a beat per 5 s cadence for 3 h is 2 160, a fifth of the cap.
+    expect((config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_HEARTBEAT_INTERVAL_MS).toBe(2_160);
+  });
+});
