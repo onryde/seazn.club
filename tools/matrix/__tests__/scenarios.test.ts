@@ -336,7 +336,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     //    rule-locks.ts emitted, not a literal in divisions.ts).
     //    Final review M2: the details may add `match_edits` beside `refused` (`cond ? { refused } : { refused, ... }`).
     const door = /throw new HttpError\(\s*RULE_ERROR_STATUS\[(\w+)\.code\],[^;]*?\b\1\.code,[^;]*?\{\s*refused\s*[,}]/.exec(divisions);
-    expect(door, "divisions.ts no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
+    expect(door, "usecases/divisions/ no longer throws the first refusal's own code with its RULE_ERROR_STATUS").not.toBeNull();
     // 2. The code rule-locks.ts emits for a key that is NOT a table rule: the false arm of `table ? TABLE : FORMAT`.
     const picks = [...locks.matchAll(/code:\s*table\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/g)];
     expect(picks, "rule-locks.ts no longer picks a code by table-vs-format").toHaveLength(1);
@@ -348,7 +348,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect({ status: Number(status), code: formatCode }).toEqual({ ...FORMAT_LOCK });
     // 4. The paired negative: the old division-wide literal is gone from this door. If it returns, FORMAT_LOCK has to
     //    be re-read against it, not silently stay on the new code.
-    expect([...divisions.matchAll(/"FORMAT_LOCKED"/g)], "divisions.ts mentions the old FORMAT_LOCKED again").toHaveLength(0);
+    expect([...divisions.matchAll(/"FORMAT_LOCKED"/g)], "usecases/divisions/ mentions the old FORMAT_LOCKED again").toHaveLength(0);
   });
 
   it("loopBounded (I-1): only a loop that ran dry AND left every fixture finished passes", () => {
@@ -433,7 +433,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     await runOn(driver, "LIFECYCLE");
     expect((bodies.filter((b) => b.entrants !== undefined)[0]!.entrants as { kinds: string[] }).kinds).toEqual([entrantKindFor("generic", resolveSportCfg("generic", "score"))]);
   });
-  it("T12-R1: the fake's guard is the product's — divisions.ts still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
+  it("T12-R1: the fake's guard is the product's — usecases/divisions/ still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
     const src = divisionsSource(REPO);
     expect(src).toContain("select distinct kind from entrants");
     expect(src).toContain("status not in ('withdrawn', 'disqualified')");

@@ -261,7 +261,7 @@ export const TEMPLATE_ENDS_ON = "2030-12-31";
  *  that the organiser never registered and cannot withdraw. A predicted
  *  product finding, written as a note: the signature words are verbatim, for
  *  Task 15's triage rule. */
-export const MINTED_PAIRS_KIND_ROUTE = routeTo("W7", "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) (divisions.ts:857-871)");
+export const MINTED_PAIRS_KIND_ROUTE = routeTo("W7", "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) (divisions/patch.ts:725-741)");
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */

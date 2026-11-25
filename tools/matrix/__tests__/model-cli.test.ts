@@ -927,7 +927,7 @@ describe("the per-competition division cap (T15 fix round 1)", () => {
   };
 
   it("the premise: the model reads the key the product's division gate reads", () => {
-    expect(PRODUCT_KEY, "divisions.ts no longer reads its cap as getLimit(auth.orgId, \"<key>\", competitionId)").toBeDefined();
+    expect(PRODUCT_KEY, "usecases/divisions/ no longer reads its cap as getLimit(auth.orgId, \"<key>\", competitionId)").toBeDefined();
     expect(DIVISION_CAP_KEY).toBe(PRODUCT_KEY);
   });
 
