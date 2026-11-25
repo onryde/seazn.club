@@ -302,6 +302,18 @@ const click = (el: ReactElement | undefined): void => {
   onClick();
 };
 
+/** Task 49: the Phone tab's score editor is ONE closed row until the organiser opens it (or the match has a choice of its own).
+ *  This returns the editor's tree with the row OPEN, opening it through the real "Change for this match" button when closed —
+ *  and again after a save that closed it (a Reset leaves a match with nothing of its own). `court`: the court session's editor. */
+const openScoreEditor = (island: { tree: () => ReactElement[] }, court = false): ReactElement[] => {
+  const editorOf = (): ReactElement[] => {
+    const sc = propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    return walk((court ? sc.courtEditor : sc.editor) as ReactElement);
+  };
+  if (!byTestId(editorOf(), "stream-club-override")) click(byTestId(editorOf(), "stream-club-change"));
+  return editorOf();
+};
+
 /** A click event whose `currentTarget` resolves `closest(root marker)` → a root whose `querySelector(opener)` → `found`,
  *  recording every selector asked — so a handler that looks up the wrong element reads null, not a lucky match. */
 function fakeClick(found: { focus: () => void } | null) {
@@ -5950,10 +5962,9 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
 
   it("D1 (court stream device check 3): a court-streamed match's Score timing shows a COURT session's default (0 s); any other match's the 3.1 s", async () => {
     const island = openPanel({ relayEntitled: true, composedAvailable: true, courtOverlayDelayDefaultMs: 0 });
-    const score = propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
-    const defaultOf = (editor: PhoneScore["editor"]) => (propsOf(walk(editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0]).defaultMs;
-    expect(defaultOf(score.editor), "a match's own code").toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
-    expect(defaultOf(score.courtEditor), "a court-streamed match").toBe(0);
+    const defaultOf = (court: boolean) => (propsOf(openScoreEditor(island, court).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0]).defaultMs;
+    expect(defaultOf(false), "a match's own code").toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect(defaultOf(true), "a court-streamed match").toBe(0);
     // The body shows the court's editor exactly while the read model names the match's court.
     const COURT_EDITOR = <span data-testid="court-editor-marker" />;
     const EDITOR = <span data-testid="score-editor-marker" />;
@@ -5970,11 +5981,7 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
   it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {
     answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: 1500 }, [2, 3]);
     const island = openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: null, overlayDelayMs: 1500, revision: 1 } } });
-    const timingOf = () => {
-      const tab = island.tree().find((el) => el.type === PhoneTab)!;
-      const editor = (propsOf(tab).score as PhoneScore).editor as ReactElement;
-      return propsOf(walk(editor).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
-    };
+    const timingOf = () => propsOf(openScoreEditor(island).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
     expect(timingOf().storedMs, "seeded from the stored preference").toBe(1500);
     expect(timingOf().defaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
     timingOf().onSave(2500);
@@ -6029,8 +6036,8 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
 
   it("the Phone tab's score card holds the SAME picker the OBS tab shows (one stored style), and only one is ever mounted", () => {
     const island = openPanel({ relayEntitled: true, composedAvailable: true });
-    const editor = scoreOf(island).editor as ReactElement;
-    const inCard = walk(editor).filter((el) => el.type === StreamTemplatePicker);
+    expect(walk(scoreOf(island).editor as ReactElement).filter((el) => el.type === StreamTemplatePicker), "closed: no picker at all").toHaveLength(0);
+    const inCard = openScoreEditor(island).filter((el) => el.type === StreamTemplatePicker);
     expect(inCard).toHaveLength(1);
     expect(island.tree().filter((el) => el.type === StreamTemplatePicker), "the OBS picker is not mounted beside it").toHaveLength(0);
     click(byTestId(island.tree(), "stream-tab-obs"));
@@ -6116,7 +6123,7 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     const held = deferSettings();
     const island = openPanel({ relayEntitled: true, composedAvailable: true });
     const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
-    const timingOf = () => propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    const timingOf = () => propsOf(openScoreEditor(island).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
     timingOf().onSave(1000);
     timingOf().onSave(2000);
     scoreOf().onMode("passthrough"); // a save of ANOTHER field, in flight beside them
@@ -6137,7 +6144,7 @@ describe("PR #989 review: useStreamPrefs — the newest save lands (I2), a newer
     const props = (p: StreamPanelContext["streamPrefs"][string]) => ({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctxWith(p) });
     const island = renderIsland(FixtureStreamPanel, props(first));
     const scoreOf = () => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
-    const timingOf = () => propsOf(walk(scoreOf().editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+    const timingOf = () => propsOf(openScoreEditor(island).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
     return { reread: (p: StreamPanelContext["streamPrefs"][string]) => island.rerender(props(p)), scoreOf, timingOf };
   };
   const row = (over: Partial<StreamPanelContext["streamPrefs"][string]>, revision: number) =>
@@ -6386,8 +6393,7 @@ describe("PR #989 review m1: while a composed session is open, the OBS tab's gri
     expect(checked).toBe(4);
     provided.view = session({ mode: "composed", state: "live" });
     const phone = openPanel({ relayEntitled: true, composedAvailable: true });
-    const editor = (propsOf(phone.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore).editor as ReactElement;
-    const inCard = walk(editor).find((el) => el.type === StreamTemplatePicker)!;
+    const inCard = openScoreEditor(phone).find((el) => el.type === StreamTemplatePicker)!;
     expect((propsOf(inCard) as { note?: string | null }).note ?? null, "the Phone tab's picker").toBeNull();
   });
 
@@ -7355,10 +7361,28 @@ describe("Owner direction 2026-11-14: the live YouTube status line", () => {
 // assignments and mints short codes (P3); an organiser opening this panel must not — `?preview=1` is the route's
 // read-only door (server/overlay/__tests__/load-sponsor-plan.test.ts proves the route writes nothing on it).
 describe("the preview's fetch is the read-only door", () => {
-  it("asks for the fixture's overlay answer with preview set, once, on mount", () => {
-    openPanel();
+  it("asks for the fixture's overlay answer with preview set, once, when a picker's thumbnails can show (the OBS tab)", () => {
+    open();
     expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
     expect(fetchOverlayFixture).toHaveBeenCalledWith(FIXTURE.id, undefined, { preview: true });
+  });
+
+  // Task 49: the fetch feeds the previews and nothing else, so a closed Score style row loads nothing at all.
+  it("Task 49: the Phone tab's closed Score style row fetches nothing; opening it fetches once, closing it again does not fetch again", () => {
+    const island = openPanel({ relayEntitled: true, composedAvailable: true });
+    expect(fetchOverlayFixture, "closed: nothing loaded").not.toHaveBeenCalled();
+    openScoreEditor(island);
+    expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
+    expect(fetchOverlayFixture).toHaveBeenCalledWith(FIXTURE.id, undefined, { preview: true });
+    click(byTestId(openScoreEditor(island), "stream-club-change")); // Keep the default: closed again
+    const score = propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    expect(byTestId(walk(score.editor as ReactElement), "stream-club-override"), "closed again").toBeUndefined();
+    expect(fetchOverlayFixture, "closing re-fetches nothing").toHaveBeenCalledTimes(1);
+  });
+
+  it("Task 49: a match with its OWN style opens the row at once, so it does fetch", () => {
+    openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: "bar", overlayDelayMs: null, revision: 1 } } });
+    expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -7368,6 +7392,7 @@ describe("the preview's fetch is the read-only door", () => {
 describe("Task 38: the match panel's club row, the override box and Use club style", () => {
   const OTHER = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
   const OTHER_LABEL = m(resolveTemplate(OTHER.id, "football").labelKey as MessageKey);
+  const DEFAULT_LABEL = m(resolveTemplate(defaultTemplateFor("football"), "football").labelKey as MessageKey);
   const CLUB = { overlayTemplate: OTHER.id, overlayDelayMs: 4500 };
   const NONE = { overlayTemplate: null, overlayDelayMs: null };
   const scoreOf = (island: ReturnType<typeof openPanel>) => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
@@ -7410,30 +7435,92 @@ describe("Task 38: the match panel's club row, the override box and Use club sty
     expect(apiV1, "opening and closing saves nothing").not.toHaveBeenCalled();
   });
 
-  it("a COURT-streamed match: the row names the club's STYLE alone and its timing default is the court's own 0 s, never the club's; a club with timing only shows a court the plain controls", () => {
+  it("a COURT-streamed match: the row names the club's STYLE alone and its timing default is the court's own 0 s, never the club's; a club with timing only still names the sport's style and the court's timing", () => {
     const island = withClub(CLUB);
     expect(textAt(editor(island, true), "stream-club-text")).toBe(m("stream.club.rowStyle", { style: OTHER_LABEL }));
     click(byTestId(editor(island, true), "stream-club-change"));
     const t = editor(island, true);
     expect(timingProps(t).defaultMs, "a court keeps 0 s").toBe(0);
     expect(timingProps(t).clubDefault, "and says nothing of the club").toBeFalsy();
-    // Timing only: it names the club's timing on a match of its own, and nothing at all applies to a court.
+    // Timing only: it names the club's timing on a match of its own; a court takes none of it, so its row is the default's.
     const timingOnly = withClub({ overlayTemplate: null, overlayDelayMs: 4500 });
     expect(textAt(editor(timingOnly), "stream-club-text")).toBe(m("stream.club.rowTiming", { seconds: "4.5" }));
     const courtTiming = editor(timingOnly, true);
-    expect(byTestId(courtTiming, "stream-club"), "nothing of the club's reaches a court").toBeUndefined();
-    expect(courtTiming.find((el) => el.type === StreamTemplatePicker), "the plain controls").toBeDefined();
-    expect(timingProps(courtTiming).defaultMs).toBe(0);
+    expect(textAt(courtTiming, "stream-club-text"), "nothing of the club's reaches a court: the sport's style, the court's 0 s").toBe(
+      m("stream.club.rowDefault", { style: DEFAULT_LABEL, seconds: "0.0" }),
+    );
+    expect(courtTiming.find((el) => el.type === StreamTemplatePicker), "closed: no picker").toBeUndefined();
+    click(byTestId(courtTiming, "stream-club-change"));
+    expect(timingProps(editor(timingOnly, true)).defaultMs).toBe(0);
+    expect(timingProps(editor(timingOnly, true)).clubDefault).toBeFalsy();
   });
 
-  it("no club default: today's controls, no row (the empty case)", () => {
+  // Task 49: no club default is no longer "the controls, open" — it is the same closed row, naming what the next stream uses.
+  it.each(["football", "cricket", "badminton"])(
+    "Task 49 (%s): no club default — ONE closed row naming the sport's own style and the default timing; no picker, no timing field, no preview until Change for this match; a court names the court's 0 s",
+    (sportKey) => {
+      const island = openPanel({ relayEntitled: true, composedAvailable: true, sportKey, clubStyle: NONE });
+      const styleLabel = m(resolveTemplate(defaultTemplateFor(sportKey), sportKey).labelKey as MessageKey);
+      for (const [court, seconds] of [[false, (RELAY_OVERLAY_DELAY_DEFAULT_MS / 1000).toFixed(1)], [true, "0.0"]] as const) {
+        const t = editor(island, court);
+        expect(byTestId(t, "stream-club"), `${sportKey} court ${court}`).toBeDefined();
+        expect(textAt(t, "stream-club-text"), `${sportKey} court ${court}`).toBe(m("stream.club.rowDefault", { style: styleLabel, seconds }));
+        expect(textAt(t, "stream-club-change")).toBe(m("stream.club.change"));
+        expect(byTestId(t, "stream-club-override"), "closed").toBeUndefined();
+        expect(t.find((el) => el.type === StreamTemplatePicker), "no picker while closed").toBeUndefined();
+        expect(t.find((el) => el.type === ScoreTiming), "no timing while closed").toBeUndefined();
+      }
+      expect(scoreOf(island).template, "the match has no style of its own to send").toBeNull();
+    },
+  );
+
+  it("Task 49: the rendered MARKUP of the closed row holds no picker, no thumbnail, no image, no iframe; open, it holds the picker and one real thumbnail per option", () => {
     const island = withClub(NONE);
-    for (const court of [false, true]) {
-      const t = editor(island, court);
-      expect(byTestId(t, "stream-club"), `court ${court}`).toBeUndefined();
-      expect(t.find((el) => el.type === StreamTemplatePicker), `court ${court}`).toBeDefined();
-      expect(timingProps(t).clubDefault, `court ${court}`).toBeFalsy();
+    const html = (tree: ReactElement) => renderToStaticMarkup(tree);
+    const closed = html(scoreOf(island).editor as ReactElement);
+    expect(closed, "the row is there").toContain('data-testid="stream-club-row"');
+    for (const needle of ["stream-template-picker", "ovl-preview", "<img", "<iframe", "stream-timing"]) {
+      expect(closed, `closed row holds no ${needle}`).not.toContain(needle);
     }
+    click(byTestId(editor(island), "stream-club-change"));
+    const opened = html(scoreOf(island).editor as ReactElement);
+    expect(opened).toContain('data-testid="stream-template-picker"');
+    expect(opened.split('data-testid="ovl-preview"').length - 1, "one thumbnail per option the sport offers").toBe(templatesForSport("football").length);
+    expect(opened).toContain('data-testid="stream-timing"');
+  });
+
+  it("Task 49: with no club default, Change for this match opens the picker on the sport's default and the timing on its default, in words that name no club; Keep the default closes it with nothing saved", () => {
+    const island = withClub(NONE);
+    apiV1.mockClear();
+    click(byTestId(editor(island), "stream-club-change"));
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override")).toBeDefined();
+    expect(propsOf(t.find((el) => el.type === StreamTemplatePicker)!).selected).toBe(defaultTemplateFor("football"));
+    expect(timingProps(t).defaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect(timingProps(t).clubDefault).toBeFalsy();
+    expect(textAt(t, "stream-club-change")).toBe(m("stream.club.keepDefault"));
+    expect(textOf(byTestId(t, "stream-club-override")!), "the note names no club").toContain(m("stream.club.overrideNoteDefault"));
+    click(byTestId(t, "stream-club-change"));
+    expect(byTestId(editor(island), "stream-club-override"), "closed again").toBeUndefined();
+    expect(apiV1, "opening and closing saves nothing").not.toHaveBeenCalled();
+  });
+
+  it("Task 49: a match with its own choice and NO club default opens at once, with Override and the way back worded without a club; Use the default writes null for both fields in ONE save", () => {
+    const mine = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: mine.id, overlayDelayMs: 2500 }, [2]);
+    const island = withClub(NONE, { overlayTemplate: mine.id, overlayDelayMs: 2500 });
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override-tag")).toBeDefined();
+    expect(textAt(t, "stream-club-text"), "the row names what the way back returns to").toBe(
+      m("stream.club.rowDefault", { style: DEFAULT_LABEL, seconds: (RELAY_OVERLAY_DELAY_DEFAULT_MS / 1000).toFixed(1) }),
+    );
+    expect(textAt(t, "stream-club-use")).toBe(m("stream.club.useDefault"));
+    apiV1.mockClear();
+    click(byTestId(t, "stream-club-use"));
+    const puts = apiV1.mock.calls.filter(([url, o]) => url.endsWith("/stream-settings") && o?.method === "PUT");
+    expect(puts).toHaveLength(1);
+    expect(puts[0]![1]!.json).toEqual({ overlayTemplate: null, overlayDelayMs: null });
+    expect(byTestId(editor(island), "stream-club-override"), "the row alone again").toBeUndefined();
   });
 
   it("the picker's pick is the MATCH's own: PUT { overlayTemplate } alone, the box opens as an override, and Go live now carries that style", () => {
