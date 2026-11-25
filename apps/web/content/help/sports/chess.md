@@ -62,7 +62,7 @@ Online Chess runs Swiss and knockout events, including play-offs, double elimina
 
 ### Pay for it
 
-Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt with the size, the camera, what comes from this month's credits and what comes from bought credits, and the total. If you are short, the receipt offers **Buy credits**, and comes back when you do.
+Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt that asks first about the **Fair-play camera**: **Yes** or **No**, set to what the division's camera setting says now. The price follows your answer. Below it are the size, what comes from this month's credits and what comes from bought credits, and the total. Paying also sets **Camera during online play** in the division's settings to your answer: **Yes** sets it to **Required** unless the division already uses the camera, and **No** sets it to **Off**. If you are short, the receipt offers **Buy credits**, and comes back when you do.
 
 You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If the round cannot open, for example because the division has not been started or a board in the round is not paired, nothing is charged and you see the reason. A board whose player has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits. If no player has linked yet, the receipt says so, and you can open round 1 again for free once they link.
 
@@ -76,9 +76,11 @@ Until a round of the division opens, you can change the size from the amber line
 
 - Moving up charges the difference. Anyone on the waiting list is promoted into the room the new size makes.
 - Moving down returns the difference. Bought credits come back in full. Included credits come back only if their month has not ended. The receipt shows what is returned and what is **Not returned**.
-- Adding the camera charges the difference. Turning the camera off later returns nothing, and turning it back on costs nothing more.
+- Choosing **Yes** for the **Fair-play camera** on a package paid without it charges the difference. Choosing **No** on a package paid with it returns the difference, the same way as moving down, and the receipt shows what is **Not returned**.
+- A change of size and of camera in the same receipt is one payment of the difference between the two.
+- Turning the camera off in the division's settings instead returns nothing, and turning it back on there costs nothing more.
 
-Once any round of the division has opened, the size is fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after round 1 stays free.
+Once any round of the division has opened, the size and the camera are fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after round 1 stays free.
 
 ### Refunds
 
