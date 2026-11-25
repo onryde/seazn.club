@@ -422,11 +422,13 @@ export interface RoundPlayKey {
  * Is this round already under way (task 51, owner 2026-11-25)? One of the lines the round bar counts (`countsAsMatch`: a bye is no match)
  * has a result or is in play - `stageCounts`' played and inPlay buckets, the SAME reading the bar's "N of M done" and the stage card
  * use, so there is no second definition of "started". A round with no counted line is not under way: the empty set has started nothing.
- * `held` is the page's awaiting-settle ids (default none); a held row's status is already a played or open one, so the default never
- * hides a started round.
+ * It reads STATUS only and takes no `held` set, on purpose (fix round 1): a row awaiting its settle already has a played or open status
+ * (`needs_decision`, or a recorded `abandoned`), and `stageCounts` would only move it from "played" to "inPlay" - still under way - so
+ * a held id can never change this verdict. Taking none keeps the loaded section (which has no held ids) and the folded tally (which
+ * has) one reading, by construction; the test "held changes nothing" pins it for every status.
  */
-export function roundUnderWay(fixtures: readonly MatchLineRow[], held: ReadonlySet<string> = new Set()): boolean {
-  const { played, inPlay } = stageCounts(fixtures.filter(countsAsMatch), held);
+export function roundUnderWay(fixtures: readonly MatchLineRow[]): boolean {
+  const { played, inPlay } = stageCounts(fixtures.filter(countsAsMatch));
   return played + inPlay > 0;
 }
 
@@ -501,11 +503,11 @@ const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
  * One NON-BRACKET stage's rows as a single list - for a kind whose rounds are not worth a bar (the ladder, which stores each challenge
  * as a round of its own). The same reading order as inside a round: time order, the rows with no time last in the order the draw gave
  * them. A one-element list (round 0, the stage as a whole) so the caller draws it with the code that draws a round, minus the bar;
- * an empty list when the stage has no rows here.
+ * an empty list when the stage has no rows here. It carries no `underWay`: one section has no round order to place.
  */
-export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
+export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): Omit<StageRoundSection, "underWay">[] {
   const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder(NO_POOL_ORDER));
-  return fixtures.length === 0 ? [] : [{ round: 0, fixtures, underWay: roundUnderWay(fixtures) }];
+  return fixtures.length === 0 ? [] : [{ round: 0, fixtures }];
 }
 
 /** A stage's rows out of the division's non-bracket blocks, in no particular order. */

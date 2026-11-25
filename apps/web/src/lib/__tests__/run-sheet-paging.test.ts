@@ -5,7 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { foldedRoundOf, foldedRoundShows, foldedTally, windowRunSheet, withFoldedRounds, type PagedRunSheetRow } from "../run-sheet-paging";
 import { ROUND_PAGING_MIN_FIXTURES } from "../round-paging";
-import { buildRunSheet, roundDone, stageRoundSections, type RunSheetFixture } from "../run-sheet-groups";
+import { FIXTURE_STATUSES } from "../fixture-status";
+import { buildRunSheet, roundDone, roundUnderWay, stageRoundSections, type RunSheetFixture } from "../run-sheet-groups";
 import { stageCounts } from "../stage-card/summaries";
 
 const NOW = Date.UTC(2026, 10, 23, 12, 0);
@@ -196,15 +197,35 @@ describe("task 51: a folded or loaded round under way keeps its place with no ki
 
   it("foldedRoundOf: under way exactly when a counted line has a result or is in play - every status swept, a bye alone is not", () => {
     let checked = 0;
-    for (const status of ["scheduled", "in_play", "needs_decision", "decided", "finalized", "forfeited", "abandoned", "cancelled"]) {
+    let underWay = 0;
+    for (const status of FIXTURE_STATUSES) {
       expect(foldedOf(1, status, null).underWay, status).toBe(status !== "scheduled");
       checked++;
+      if (status !== "scheduled") underWay++;
     }
-    expect(checked, "every status swept").toBe(8);
+    expect(checked, "every status swept").toBe(FIXTURE_STATUSES.length);
+    expect(underWay, "anti-vacuity: both answers are reached").toBeGreaterThan(0);
+    expect(underWay).toBeLessThan(FIXTURE_STATUSES.length);
     const award = { kind: "award", winner: "h1", loser: null, reason: "bye" };
     const byeOnly = foldedRoundOf("lg", 1, [row("lg", null, 1, 1, "forfeited", null, { away_entrant_id: null, outcome: award })], none);
     expect(byeOnly.underWay, "a bye settled at the draw is no match started").toBe(false);
     expect(foldedRoundOf("lg", 1, [], none).underWay, "no rows, nothing started").toBe(false);
+  });
+
+  // Fix round 1 (M3). INTENDED: a held (awaiting-settle) id never changes whether a round is under way, so the loaded section (no held ids)
+  // and the folded tally (which has them) are one reading. Held ids only move a settled row from "played" to "inPlay" in the tally's counts.
+  it("held changes nothing: the folded verdict is the same with every row held, with none held, and as the loaded reading, for every status", () => {
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const rows = [full(1, status, null)];
+      const held = new Set(rows.map((r) => r.id));
+      const loaded = roundUnderWay(rows);
+      expect(foldedRoundOf("lg", 1, rows as unknown as PagedRunSheetRow[], held).underWay, `${status}: held`).toBe(loaded);
+      expect(foldedRoundOf("lg", 1, rows as unknown as PagedRunSheetRow[], none).underWay, `${status}: not held`).toBe(loaded);
+      expect(loaded, status).toBe(status !== "scheduled");
+      checked++;
+    }
+    expect(checked, "every status swept").toBe(FIXTURE_STATUSES.length);
   });
 
   it("folded untimed Round 1 with results sits first, ahead of a loaded timed Round 2 and a folded timed Round 3; with nothing started it goes last", () => {

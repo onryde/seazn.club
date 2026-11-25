@@ -97,7 +97,7 @@ export function foldedRoundOf(stageId: string, round: number, rows: readonly Pag
     played: rows.filter((f) => fixtureBucket(f.status) !== "upcoming").length,
     firstAt: times[0] ?? null,
     lastAt: times.at(-1) ?? null,
-    underWay: roundUnderWay(rows.map(asLine), held),
+    underWay: roundUnderWay(rows.map(asLine)),
     catchUp: rows.some((f) => isCatchUpRoundExtKey(f.ext_key ?? null)),
   };
 }
