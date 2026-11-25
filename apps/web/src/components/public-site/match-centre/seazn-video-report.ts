@@ -54,26 +54,21 @@ export function routeFailureOf(err: unknown): { reason: RouteFailureReason; http
 
 export interface VideoReporter {
   player: (fixtureId: string, fatal: PlayerFatal) => void;
-  /** A player that still plays, but on the browser's own player (hls.js's bundle would not load, Task 52): the same report, once per address,
-   *  with a key of its own so a later give-up on that address is still reported. */
-  degraded: (fixtureId: string, fatal: PlayerFatal) => void;
   route: (fixtureId: string, err: unknown) => void;
 }
 
 export function createVideoReporter(send: (report: VideoFailureReport) => void): VideoReporter {
   const addresses = new Set<string>();
   const routeKinds = new Set<string>();
-  const sendPlayer = (key: string, fixtureId: string, { source, partNo, player, failure }: PlayerFatal): void => {
-    if (addresses.has(key)) return;
-    addresses.add(key);
-    send({
-      stage: "player", fixtureId, source, partNo, player,
-      reason: failure.reason, hlsType: failure.hlsType, hlsDetails: failure.hlsDetails, httpStatus: failure.httpStatus, mediaCode: failure.mediaCode,
-    });
-  };
   return {
-    player: (fixtureId, fatal) => sendPlayer(fatal.address, fixtureId, fatal),
-    degraded: (fixtureId, fatal) => sendPlayer(`degraded:${fatal.address}`, fixtureId, fatal),
+    player(fixtureId, { address, source, partNo, player, failure }) {
+      if (addresses.has(address)) return;
+      addresses.add(address);
+      send({
+        stage: "player", fixtureId, source, partNo, player,
+        reason: failure.reason, hlsType: failure.hlsType, hlsDetails: failure.hlsDetails, httpStatus: failure.httpStatus, mediaCode: failure.mediaCode,
+      });
+    },
     route(fixtureId, err) {
       const { reason, httpStatus } = routeFailureOf(err);
       const kind = `${reason}:${httpStatus ?? ""}`;

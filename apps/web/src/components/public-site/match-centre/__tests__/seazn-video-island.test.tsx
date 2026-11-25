@@ -826,7 +826,7 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
   const MIN = 60_000;
   const embeds = answer({ replay: [part(1, "embed"), part(2, "embed")] });
   const route = () => vi.fn(async () => new Response(JSON.stringify({ ok: true, data: embeds }), { status: 200, headers: { "content-type": "application/json" } }));
-  type StageEl = { props: { onStale: () => void; onFatal: (fatal: PlayerFatal) => void; onDegraded: (fatal: PlayerFatal) => void; epoch: number } };
+  type StageEl = { props: { onStale: () => void; onFatal: (fatal: PlayerFatal) => void; epoch: number } };
   const fatalOn = (address: string): PlayerFatal => ({
     address, source: "replay", partNo: 2, player: "hls",
     failure: { reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
@@ -870,41 +870,12 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
     }
   });
 
-  it("Task 52: the island hands the stage an onDegraded that REPORTS (once per address, with the bundle's code) and rebuilds nothing, reads nothing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    try {
-      const fetchMock = route();
-      vi.stubGlobal("fetch", fetchMock);
-      const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, settledAt: new Date(NOW - MIN).toISOString() });
-      await vi.advanceTimersByTimeAsync(4 * MIN);
-      const reads = fetchMock.mock.calls.length;
-      const stage = () => island.tree()[0] as unknown as StageEl;
-      beaconsSent();
-      const degraded = { ...fatalOn(embeds.replay[1]!.src), failure: { reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null } } as PlayerFatal;
-      stage().props.onDegraded(degraded);
-      stage().props.onDegraded(degraded);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(beacons.sent).toEqual([{
-        url: CLIENT_REPORTS_PATH,
-        body: { kind: "video", stage: "player", fixtureId: "f1", source: "replay", partNo: 2, player: "hls", reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null },
-      }]);
-      expect(stage().props.epoch, "a degraded player keeps playing: not rebuilt").toBe(0);
-      expect(fetchMock.mock.calls.length, "and no read is asked for").toBe(reads);
-      expect(JSON.stringify(beacons.sent)).not.toMatch(/tok-|fake\.invalid|manifest\/|m3u8|expires|\?/);
-      island.unmount();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("the stage hands onStale and onFatal on to the parts, and the parts hand them to the frame and the player", () => {
     const onStale = vi.fn();
     const onFatal = vi.fn();
-    const onDegraded = vi.fn();
-    const el = SeaznVideoStage({ video: embeds, epoch: 0, labels, onFatal, onDegraded, onStale, reserve: false, held: false, picker: [] }) as unknown as { type: unknown; props: { onStale: unknown; onFatal: unknown; onDegraded: unknown } };
+    const el = SeaznVideoStage({ video: embeds, epoch: 0, labels, onFatal, onStale, reserve: false, held: false, picker: [] }) as unknown as { type: unknown; props: { onStale: unknown; onFatal: unknown } };
     expect(el.type).toBe(ReplayParts);
-    expect([el.props.onStale, el.props.onFatal, el.props.onDegraded]).toEqual([onStale, onFatal, onDegraded]);
+    expect([el.props.onStale, el.props.onFatal]).toEqual([onStale, onFatal]);
     const r = renderIsland(ReplayParts, { parts: [...embeds.replay], epoch: 0, labels, onFatal, onStale });
     const frames = r.tree().filter((e) => e.type === SeaznReplayFrame);
     expect(frames, "one frame").toHaveLength(1);
@@ -932,32 +903,6 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
       expect(players, `premise: one <video> player (${expected.source})`).toHaveLength(1);
       (players[0]!.props as { onFatal: (f: typeof failure, address: string) => void }).onFatal(failure, "the-address");
       expect(onFatal).toHaveBeenCalledWith({ address: "the-address", ...expected, player: "hls", failure });
-      checked++;
-    }
-    expect(checked).toBe(2);
-  });
-
-  it("Task 52: a player's degraded report (hls.js would not load, the browser's own player plays) reaches the stage's onDegraded as the island knows it, live and replay, and never onFatal", () => {
-    const failure = { reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null } as const;
-    const liveDegraded = vi.fn();
-    const liveFatal = vi.fn();
-    const live = renderIsland(SeaznVideoStage, { video: answer({ live: signed("live"), replay: [part(1)] }), epoch: 0, labels, onFatal: liveFatal, onDegraded: liveDegraded, onStale: () => {}, reserve: false, held: false, picker: [] });
-    const replayDegraded = vi.fn();
-    const replayFatal = vi.fn();
-    const replay = renderIsland(ReplayParts, { parts: [...answer({ replay: [part(1, "embed"), part(4)] }).replay], epoch: 0, labels, onFatal: replayFatal, onDegraded: replayDegraded, onStale: () => {} });
-    const tab = replay.tree().find((e) => e.type === "button" && String((e.props as { id?: string }).id).endsWith("-tab-4"));
-    expect(tab, "premise: Part 4's tab").toBeDefined();
-    (tab!.props as { onClick: () => void }).onClick();
-    let checked = 0;
-    for (const [island, onDegraded, onFatal, expected] of [
-      [replay, replayDegraded, replayFatal, { source: "replay", partNo: 4 }],
-      [live, liveDegraded, liveFatal, { source: "live", partNo: null }],
-    ] as const) {
-      const players = island.tree().filter((e) => e.type === SeaznPlayer);
-      expect(players, `premise: one <video> player (${expected.source})`).toHaveLength(1);
-      (players[0]!.props as { onDegraded: (f: typeof failure, address: string) => void }).onDegraded(failure, "the-address");
-      expect(onDegraded).toHaveBeenCalledWith({ address: "the-address", ...expected, player: "hls", failure });
-      expect(onFatal, "a degraded player is not given up on: nothing is rebuilt").not.toHaveBeenCalled();
       checked++;
     }
     expect(checked).toBe(2);

@@ -180,10 +180,9 @@ export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean; l
   return { requests, healthy: (on) => void (up = on) };
 }
 
-/** Makes THIS page's browser say it cannot play HLS itself (`canPlayType` answers "" for the HLS types). Since Task 52 the player takes the
- *  hls.js path wherever hls.js runs (MSE), whatever `canPlayType` says, so Chromium is on hls.js with or without this; the specs that prove
- *  the hls.js path keep calling it so that they hold on a browser that would otherwise choose the native one. Call it BEFORE `page.goto`
- *  (an init script). */
+/** Makes THIS page's browser say it cannot play HLS itself (`canPlayType` answers "" for the HLS types), so the player takes the hls.js
+ *  path whatever the Chromium build does. Call it BEFORE `page.goto` (an init script). The pinned Playwright Chromium answers "maybe", which
+ *  puts every case that does not force this on the native path, where hls.js, its config and the token rewrite never run. */
 export async function forceHlsJs(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const real = HTMLMediaElement.prototype.canPlayType;
@@ -193,25 +192,10 @@ export async function forceHlsJs(page: Page): Promise<void> {
   });
 }
 
-/** What THIS page's element answers to `canPlayType` for HLS: true when it says anything but "". `forceHlsJs` makes it false, so a spec that
- *  forces hls.js asserts THIS (it can fail when the init script did not take), and `playsHlsNatively` for the path the player then takes. */
-export const elementSaysHlsPlayable = (page: Page): Promise<boolean> =>
-  page.evaluate(() => document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "");
-
-/** Does THIS browser take the native path (the page gives it the address through `video.src` and builds no hls.js)? Since Task 52 that is
- *  only a browser that plays HLS itself AND that hls.js cannot run in. The second half is hls.js's own `isSupported()` rule (MSE, or
- *  ManagedMediaSource, with a codec it can use: hls.js 1.7.4 is-supported.ts), restated here from the library's documentation, not read from
- *  the player. The pinned Chromium answers "maybe" to HLS and has MSE, so it is on hls.js. */
+/** Does THIS browser play HLS itself (so the page gives it the address through `video.src` and loads no hls.js)? Chromium's answer
+ *  depends on its build, so the specs assert both paths rather than assume one. */
 export const playsHlsNatively = (page: Page): Promise<boolean> =>
-  page.evaluate(() => {
-    const w = window as unknown as { ManagedMediaSource?: typeof MediaSource; MediaSource?: typeof MediaSource; WebKitMediaSource?: typeof MediaSource };
-    const ms = w.ManagedMediaSource ?? w.MediaSource ?? w.WebKitMediaSource;
-    const hlsJsRuns =
-      !!ms &&
-      typeof ms.isTypeSupported === "function" &&
-      ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4;codecs="av01.0.01M.08"', 'video/mp4;codecs="vp09.00.50.08"', 'audio/mp4;codecs="mp4a.40.2"'].some((t) => ms.isTypeSupported(t));
-    return !hlsJsRuns && document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "";
-  });
+  page.evaluate(() => document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "");
 
 /** Task 25: the replay move's PLAYABLE copy of each locked recording (`lockRecordings`), as the move leaves it (V542's
  *  `fixture_video_replays` row: the recording's uid, a Bunny video, verified, the fake's length), parts 1..n in the order given (the
