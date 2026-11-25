@@ -11,7 +11,7 @@ export const ONLINE_SIZES = [16, 32, 64, 128, 256] as const;
 export type OnlineSize = (typeof ONLINE_SIZES)[number];
 
 /** Whether `n` is a size on the ladder. A size read back from the database is asserted with this before anything prices it
- *  (server/usecases/online-package/read.ts): V556's CHECK guarantees it, and the assertion turns that "cannot happen" into a
+ *  (server/usecases/online-package/read.ts): V560's CHECK guarantees it, and the assertion turns that "cannot happen" into a
  *  named refusal, so a corrupt row can never be quoted at packagePrice(0) = 0 or packagePrice(48) = 3. */
 export function isOnlineSize(n: number): n is OnlineSize {
   return (ONLINE_SIZES as readonly number[]).includes(n);

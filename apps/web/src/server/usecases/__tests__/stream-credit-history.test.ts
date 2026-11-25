@@ -353,7 +353,7 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     async function story(orgId: string, auth: AuthCtx) {
       const seen = new Set<string>();
       const expected = new Map<string, { kind: StreamHistoryKind; site: string | null; reason: string; size: number | null }>();
-      /** `size` is the package's size AT THE TIME of the row (V557 package_size), typed from the story, never read back. */
+      /** `size` is the package's size AT THE TIME of the row (V561 package_size), typed from the story, never read back. */
       type Want = [reason: string, bucket: string, delta: number, kind: StreamHistoryKind, site?: string, size?: number];
       const step = async (name: string, want: Want[]) => {
         const rows = await sql<{ id: string; reason: string; bucket: string; delta: number }[]>`
@@ -500,7 +500,7 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const bDiv = await ocDivision(b, await ocCompetition(b), { name: "Rival Open Of B" });
     await pay(b, bDiv.id, 16);
     const [bPkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${bDiv.id}`;
-    // V556/V557 do not make the package's org the ledger row's: only the reader's join stands between A's page and B's division.
+    // V560/V561 do not make the package's org the ledger row's: only the reader's join stands between A's page and B's division.
     await sql`
       insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
       values (${a.orgId}, -1, 'consume', 'monthly', ${bPkg!.id}, 0)`;

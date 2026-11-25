@@ -62,9 +62,9 @@ export interface HistoryClassifyInput {
   byStaff: boolean;
   sessionId: string | null;
   idempotencyKey: string | null;
-  /** The `online_package_id` the row names (V557): an Online Chess package's debit or return. Only the presence leaves SQL. */
+  /** The `online_package_id` the row names (V561): an Online Chess package's debit or return. Only the presence leaves SQL. */
   packageId: string | null;
-  /** The package row it names was found AND belongs to the ledger row's own org (V556 does not make them the same org). A row naming a
+  /** The package row it names was found AND belongs to the ledger row's own org (V560 does not make them the same org). A row naming a
    *  package that did not resolve is not shown as a division's: it is `other`, reported. */
   packageFound: boolean;
   /** SQL-derived, meaningful for a package row: this row was written by the package's FIRST payment (`c.created_at = p.paid_at`:
@@ -152,7 +152,7 @@ export interface StreamHistoryFixture {
 }
 
 /** The Online Chess package a row moved for: the division as the organiser knows it (its live name, else the name the package
- *  kept when the division was deleted), the size the package had AT THE TIME OF THE ROW (V557 `package_size`, written at insert by
+ *  kept when the division was deleted), the size the package had AT THE TIME OF THE ROW (V561 `package_size`, written at insert by
  *  the package writer; the package's size now only for a row written before the column), and the competition when the division
  *  still exists. The UI formats the label — the words around the names are dictionary copy. */
 export interface StreamHistoryPackage {
@@ -283,7 +283,7 @@ interface HistoryDbRow {
  * Tenancy is the WHERE clause plus join guards: the ledger row's org, and — for the match link — that the
  * session and the competition behind it belong to that SAME org; for an Online Chess package row, that the package and
  * its division's competition do. The ledger's `online_package_id` is a plain foreign key to a table whose own `org_id` may
- * differ from the ledger row's (V556 only checks the package's), so the join is where a corrupt row would otherwise name
+ * differ from the ledger row's (V560 only checks the package's), so the join is where a corrupt row would otherwise name
  * another club's division.
  */
 export async function listStreamCreditHistory(

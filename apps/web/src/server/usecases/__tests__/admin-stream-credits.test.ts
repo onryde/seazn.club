@@ -151,7 +151,7 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     for (const r of all) expect(r.divisionName, `${r.reason} after the delete`).toBe("Staff Look Open");
     expect(all.find((r) => r.reason === "refund")!.packageSize, "the refund gives back the package as it stood: 32").toBe(32);
 
-    // a ledger row of org A that names org B's package (V556 does not forbid it): staff see the id to chase, never B's division name
+    // a ledger row of org A that names org B's package (V560 does not forbid it): staff see the id to chase, never B's division name
     const other = await ocOrg();
     const otherComp = await ocCompetition(other);
     const od = await ocDivision(other, otherComp, { name: "Somebody Else Open" });

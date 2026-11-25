@@ -7,10 +7,10 @@ import "server-only";
 //
 //  * Rows: a debit is a `consume`, a return a `refund`. Each names the package (`online_package_id`) and no stream session,
 //    has no staff author (`created_by` null: how the stream code tells a platform refund from staff) and no key; the ledger's
-//    reason CHECK is unchanged (V557 pins this shape: org_stream_credits_package_row_check). One row per bucket the credits
+//    reason CHECK is unchanged (V561 pins this shape: org_stream_credits_package_row_check). One row per bucket the credits
 //    move in, never a zero row (V410: delta <> 0). `balance_after` is the running ORG total, row by row. Readers net a
 //    package's rows by `online_package_id`, never `session_id` (it is null on every one of them).
-//  * Each package row carries `package_size` (V557): the package's size AT THE TIME of the row, written at insert and never
+//  * Each package row carries `package_size` (V561): the package's size AT THE TIME of the row, written at insert and never
 //    updated (the ledger is append-only). The callers pass the TARGET size — the size a payment or a move down leaves the package
 //    at, the size a full refund gives back — because the package row itself is only rewritten after the credits move. The credit
 //    history reads it, so "up to 32" stays true of an earlier row when the package is resized later. A size is not derivable from

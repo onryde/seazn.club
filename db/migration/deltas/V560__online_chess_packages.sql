@@ -1,4 +1,4 @@
--- V556, Online Chess credits (spec docs/superpowers/specs/2026-11-23-online-chess-credits-design.md §7.1): the package table.
+-- V560, Online Chess credits (spec docs/superpowers/specs/2026-11-23-online-chess-credits-design.md §7.1): the package table.
 --
 -- division_online_packages: one row per online chess division, the size the organiser chose (the division's entrant limit)
 -- and what was paid for it in Seazn credits. Four states and nothing else (§7.1):
@@ -9,7 +9,7 @@
 -- Written ONLY on the privileged pool (sql.begin, openRound's transaction, withTenant's privilegedEpilogue); the tenant role
 -- READS it (the cap doors and the rules strip run as app_user), so it gets one org-scoped select policy and no write grant.
 --
--- The rest of §7.1 is V557 (online_chess_stream_credits): the ledger's link to this table and the sealed
+-- The rest of §7.1 is V561 (online_chess_stream_credits): the ledger's link to this table and the sealed
 -- stream_pack_reversals. It is its own delta because it changes the stream credit ledger, and every delta that changes a
 -- stream table belongs to the relay suite's stream fold (relay/__tests__/rls-static.test.ts), whose scans refuse any
 -- policy or grant; this table's tenant read policy keeps THIS delta out of the fold, as V492's tenant tables are kept.

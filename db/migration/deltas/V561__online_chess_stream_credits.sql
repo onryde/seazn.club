@@ -1,5 +1,5 @@
--- V557, Online Chess credits (spec docs/superpowers/specs/2026-11-23-online-chess-credits-design.md §7.1, §7.5): the stream
--- credit ledger's side. V556 created division_online_packages; this delta is apart from it only because it changes the
+-- V561, Online Chess credits (spec docs/superpowers/specs/2026-11-23-online-chess-credits-design.md §7.1, §7.5): the stream
+-- credit ledger's side. V560 created division_online_packages; this delta is apart from it only because it changes the
 -- ledger, so it belongs to the relay suite's stream fold (its name says `stream`), whose scans hold every folded table to
 -- V410's pattern: RLS enabled AND forced, no policy, no grant to app_user (relay/__tests__/rls-static.test.ts,
 -- migration-shape.test.ts).

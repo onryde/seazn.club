@@ -44,7 +44,7 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "fixture_stream_sessions",
   // Stream credit ledger (money); superuser client only, zero policies.
   "org_stream_credits",
-  // Online Chess credits (V557, spec §7.5): the record that a pack's card payment was refunded or disputed. Money state,
+  // Online Chess credits (V561, spec §7.5): the record that a pack's card payment was refunded or disputed. Money state,
   // sealed exactly as org_stream_credits is: RLS FORCEd, ZERO policies, no app_user grant; the claw-back and the package
   // refund read and write it on the privileged client only. online-package/__tests__/schema.test.ts asserts all of it.
   "stream_pack_reversals",

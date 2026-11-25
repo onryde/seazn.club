@@ -378,7 +378,7 @@ async function expectBalance(orgId: string, want: number, step: string): Promise
   expect(parts.monthly + parts.pack, `${step}: the buckets sum to the total`).toBe(total);
 }
 
-/** What Tasks 5 and 6 write on the package row after a step, in ONE statement (the V556 CHECKs hold per statement). */
+/** What Tasks 5 and 6 write on the package row after a step, in ONE statement (the V560 CHECKs hold per statement). */
 const settlePackage = (id: string, s: { size: number; paid: number; refunded: number; forfeited: number; refundedAt?: Date | null }) => sql`
   update division_online_packages
      set size = ${s.size}, cameras_paid = false, credits_paid = ${s.paid}, credits_refunded = ${s.refunded},
@@ -606,7 +606,7 @@ describe.skipIf(!HAS_DB)("returnableFor and refundForPackage", () => {
     expect(await rowsSince(r.orgId, before)).toEqual([["refund", "pack", 1, 2]]);
   });
 
-  // I1 (Task 10 review): the size a row was written at is on the row (V557 package_size), the size the caller passed — never the
+  // I1 (Task 10 review): the size a row was written at is on the row (V561 package_size), the size the caller passed — never the
   // package's size read later — and only on the package's own rows. A rollover grant or expire the debit runs first is no package row.
   it("every package row carries the size its writer was given (a debit's target, a return's), and the rollover's rows carry none", async () => {
     const r = await rig({ monthly: 3, pack: 5, lastMonth: true });
@@ -782,7 +782,7 @@ describe.skipIf(!HAS_DB)("sequences", () => {
 
     // The full refund (the division deleted before round 1): the value left is 2, and the caller nets the 1 already
     // forfeited off last month's 3, so both are forfeited and nothing is written. refunded_at, credits_refunded and
-    // credits_forfeited are set in ONE statement (V556: refunded ⇒ refunded + forfeited = paid) AFTER the return, which
+    // credits_forfeited are set in ONE statement (V560: refunded ⇒ refunded + forfeited = paid) AFTER the return, which
     // refuses a refunded row.
     const full = planReturn({ ...left, monthlyExpired: left.monthlyExpired - 1 /* the row's credits_forfeited */ }, PRICE_32);
     expect(full).toEqual({ pack: 0, monthly: 0, forfeited: 2 });

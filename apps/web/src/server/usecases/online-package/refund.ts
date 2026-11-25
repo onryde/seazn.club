@@ -7,7 +7,7 @@ import "server-only";
 //    returned: every bought credit, and the included credits debited in the current UTC month (P6); included credits of an
 //    earlier month are forfeited (counted, never written). The return is written FIRST (`refundForPackage`, which refuses a
 //    refunded or frozen row before any write), then the row in ONE statement (`refunded_at`, `credits_refunded` and
-//    `credits_forfeited` together: V556 holds refunded ⇒ refunded + forfeited = paid per statement), then the settle step of a
+//    `credits_forfeited` together: V560 holds refunded ⇒ refunded + forfeited = paid per statement), then the settle step of a
 //    reversed pack (§7.5) on the same transaction. A second call writes nothing. One clock, the database's: no `now` is taken.
 //  * A FROZEN row (a round has opened, P7, P8) is never refunded: the doors leave it, and a direct call is refused by name.
 //  * THE DOORS (§7.3): the delete and the switch-off run as the tenant role inside `withTenant`; the sealed rows are written in its privileged
@@ -90,7 +90,7 @@ export async function applyPackageDelete(
       throw new HttpError(500, `Online Chess package ${row.id} does not belong to organisation ${orgId}; nothing was refunded`, "online_package_not_of_org");
     }
     const r = await refundOnlinePackageLocked(etx, row);
-    // A paid package always holds its size's price in value (V556 and the pay door's books), so a real refund returns or forfeits
+    // A paid package always holds its size's price in value (V560 and the pay door's books), so a real refund returns or forfeits
     // something: an all-zero answer is `refundOnlinePackageLocked`'s no-op on a row already refunded, which is no event.
     if (refunded !== undefined && r.pack + r.monthly + r.forfeited > 0) refunded.push({ size: row.size, cameras: row.camerasPaid === true, back: r });
     total.pack += r.pack;

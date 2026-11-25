@@ -147,7 +147,7 @@ export async function quoteLocked(
   const cameras = facts.cameras || a.addCameras === true || row?.camerasPaid === true;
   const price = packagePrice(a.size, cameras);
   const paid = row !== null && row.paidAt !== null ? row : null;
-  // Paid: the difference to what the row's own size and camera state cost (P13, P19). V556's CHECK ties `cameras_paid` to
+  // Paid: the difference to what the row's own size and camera state cost (P13, P19). V560's CHECK ties `cameras_paid` to
   // `paid_at`: a paid row always says whether its cameras were paid.
   const owed = paid === null ? price : price - packagePrice(paid.size, paid.camerasPaid === true);
 

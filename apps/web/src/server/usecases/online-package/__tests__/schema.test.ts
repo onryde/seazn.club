@@ -1,5 +1,5 @@
-// V556 + V557, Online Chess credits (spec 2026-11-23 §7.1, §7.5): the package table (V556), the ledger's link to it and the
-// durable record of a reversed card payment (V557, in the relay suite's stream fold because it changes the ledger). Money state, so every constraint here is driven to its refusal AND to its accepted twin, against
+// V560 + V561, Online Chess credits (spec 2026-11-23 §7.1, §7.5): the package table (V560), the ledger's link to it and the
+// durable record of a reversed card payment (V561, in the relay suite's stream fold because it changes the ledger). Money state, so every constraint here is driven to its refusal AND to its accepted twin, against
 // a real migrated database (AGENTS.md class 3: a constraint is only real if something tries to violate it).
 //
 // single-sport: online play exists for boardgame only (online-play.ts supportsOnlinePlay); the backfill case below sweeps every
@@ -123,7 +123,7 @@ afterAll(async () => {
   await sql.end({ timeout: 2 }).catch(() => undefined);
 });
 
-describe.skipIf(!HAS_DB)("V556 + V557 online chess packages: schema", () => {
+describe.skipIf(!HAS_DB)("V560 + V561 online chess packages: schema", () => {
   // ─── RLS and sealing ──────────────────────────────────────────────────────────────────────────────────────────────────
   describe("who can reach the rows", () => {
     it("app_user can read its own org's package and no other's", async () => {
@@ -438,7 +438,7 @@ describe.skipIf(!HAS_DB)("V556 + V557 online chess packages: schema", () => {
         .toEqual({ accepted: true });
     });
 
-    it("a ledger row's package_size is on the ladder and only on a package row (V557: org_stream_credits_package_size_check)", async () => {
+    it("a ledger row's package_size is on the ladder and only on a package row (V561: org_stream_credits_package_size_check)", async () => {
       const r = await ledgerRig();
       const SIZE = { accepted: false, code: CHECK_VIOLATION, constraint: "org_stream_credits_package_size_check" };
       // Refused: a size that is not on the ladder (the ladder is typed in LADDER, never read from the migration), on a package row…
@@ -690,7 +690,7 @@ describe.skipIf(!HAS_DB)("V556 + V557 online chess packages: schema", () => {
       const statement = backfillStatement();
       const { rows, now, checks } = await runBackfill(statement, [...seeded.map((s) => s.d.id), ...notOnline.map((d) => d.id)]);
 
-      // 12 named CHECKs in V556 (size, 3 counters, paid/credits, paid/cameras, returned, refunded/paid, payer, refund in full,
+      // 12 named CHECKs in V560 (size, 3 counters, paid/credits, paid/cameras, returned, refunded/paid, payer, refund in full,
       // frozen/refunded, frozen/unpaid): the copy holds every one, so each backfill row passed all of them.
       expect(checks.real.length, "the real table's CHECKs").toBe(12);
       expect(checks.temp, "the temp copy holds the same CHECKs").toEqual(checks.real);

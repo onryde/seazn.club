@@ -544,7 +544,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
     const r = await rig({ size: 16, pack: 20, monthly: 0 });
     await confirm(r, 16);
     const first = await packageRow(r.packageId);
-    // The upgrade is confirmed by ANOTHER organiser of the org: paid_at and paid_by keep the first payment (V556 sets them together).
+    // The upgrade is confirmed by ANOTHER organiser of the org: paid_at and paid_by keep the first payment (V560 sets them together).
     const admin: Rig = { ...r, auth: { ...r.auth, userId: randomUUID(), role: "admin" } };
     const up = await confirm(admin, 64);
     expect(up.shown.owed, "64 − 16 without cameras").toBe(4 - 1);

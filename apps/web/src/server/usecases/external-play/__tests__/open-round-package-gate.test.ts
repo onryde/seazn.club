@@ -850,7 +850,7 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
 
   it("held above 256 (a backfilled 256 that is full): the refusal says so plainly, and offers no size", async () => {
     const s = await seedOnlineChessRound({ fixtures: 1, onlinePackage: "unpaid" });
-    // The backfill's shape (V556): a division already over the online cap was given 256 and reads as full.
+    // The backfill's shape (V560): a division already over the online cap was given 256 and reads as full.
     await sql`update division_online_packages set size = ${LARGEST} where division_id = ${s.divisionId} and refunded_at is null`;
     expect(Math.max(...ONLINE_SIZES), "premise: 256 is the largest size").toBe(LARGEST);
     const held = LARGEST + 44;
