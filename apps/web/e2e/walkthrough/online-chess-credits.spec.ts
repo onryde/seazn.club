@@ -131,6 +131,11 @@ const answerCamera = async (page: Page, yes: boolean): Promise<void> => {
 /** The division's own camera setting ("Camera during online play"), as the database holds it. */
 const divisionCameraPolicy = (divisionId: string) =>
   withDb(async (sql) => (await sql<{ p: string | null }[]>`select camera_policy as p from divisions where id = ${divisionId}`)[0]!.p);
+/** The stage's round stamps' stored `staggered` flags (spec §3.2.1: decided once, at the round's first open, from the camera policy of that moment). */
+const staggeredOf = (stageId: string) =>
+  withDb(async (sql) => (await sql<{ staggered: boolean }[]>`select staggered from stage_round_opens where stage_id = ${stageId} order by round_no`).map((r) => r.staggered));
+/** The note under the camera answer when Yes turns the camera on (fix m4). */
+const yesNote = (page: Page) => page.getByTestId("online-receipt-cameras-note");
 /** The pay door's request bodies, recorded as the browser sends them. */
 const recordPays = (page: Page, divisionId: string): Record<string, unknown>[] => {
   const bodies: Record<string, unknown>[] = [];
@@ -308,6 +313,52 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect((await packageRow(r.divisionId)).frozen_at, "paid and opened: frozen").not.toBeNull();
   });
 
+  test("B2: pay and open answered Yes on a division whose camera is off - the round opens UNDER the answer: the setting Required, its check-in in timed batches (fix I1)", async ({ page }) => {
+    test.setTimeout(budget(16));
+    const r = await unpaidDivision(page, "ocpayopenyes");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const stored = ONLINE_SIZES[0]!;
+    const withCamera = packagePrice(stored, true);
+    await fundOnlinePayment(r.divisionId, withCamera);
+    const before = await balanceOf(page, r.divisionId);
+    expect(await divisionCameraPolicy(r.divisionId), "premise: the division inherits the competition's camera setting (off)").toBeNull();
+
+    const posts: Record<string, unknown>[] = [];
+    page.on("request", (q) => {
+      if (q.method() === "POST" && q.url().includes(`/stages/${r.stageId}/open-round`)) posts.push((q.postDataJSON() ?? {}) as Record<string, unknown>);
+    });
+    await openRoundPanel(page, r, "before");
+    const first = page.waitForResponse((res) => res.request().method() === "POST" && res.url().includes(`/stages/${r.stageId}/open-round`));
+    await page.getByTestId("md-round-open-cta").click();
+    await page.getByTestId("md-round-confirm-confirm").click();
+    expect((await first).status(), "the gate is live: 402 unpaid").toBe(402);
+
+    await expect(receipt(page)).toBeVisible({ timeout: 30_000 });
+    await expect(receipt(page)).toHaveAttribute("data-mode", "payAndOpen");
+    await expect(cameraRadio(page, false), "the receipt opens at the division's setting: No").toBeChecked();
+    await expect(yesNote(page), "No says nothing about seats").toHaveCount(0);
+    await answerCamera(page, true);
+    // m4: before the confirm, the Yes that turns the camera on says what it means for players.
+    await expect(yesNote(page)).toHaveText(uiEn["onlineChess.receipt.cameras.yesNote"]!);
+    await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(withCamera));
+    await expect(confirm(page)).toHaveText(fill(withCamera === 1 ? "onlineChess.receipt.confirm.payOpen.one" : "onlineChess.receipt.confirm.payOpen.other", { count: withCamera }));
+
+    const second = openRoundSent(page, r.stageId);
+    await confirm(page).click();
+    const opened = await second;
+    // I1: the Yes used to be written after the round's own stamp, meet it, and be refused 409 POLICY_LOCKED on every press.
+    expect(opened.status(), "the confirm's open went through").toBeLessThan(300);
+    const answer = ((await opened.json()) as { data: { opened: boolean; payment: { applied: boolean; credits: number; size: number } | null } }).data;
+    expect(answer.opened).toBe(true);
+    expect(answer.payment, "the camera price, applied").toMatchObject({ applied: true, credits: withCamera, size: stored });
+    expect(posts[1]!.pay, "the open carried the Yes").toMatchObject({ size: stored, expectedOwed: withCamera, cameras: true });
+    expect(await divisionCameraPolicy(r.divisionId), "P19: the Yes wrote Required").toBe("required");
+    expect(await staggeredOf(r.stageId), "§3.2.1: decided under the answer - a Required round's check-in is in timed batches").toEqual([true]);
+    expect((await packageRow(r.divisionId)).cameras_paid, "the package holds the camera").toBe(true);
+    expect(await balanceOf(page, r.divisionId)).toBe(before - withCamera);
+    await expect(focus(page)).toHaveAttribute("data-state", "checkin", { timeout: 30_000 });
+  });
+
   test("C: pay early WITHOUT the camera, move up from the chip, move down - the credits are shown, then really back - then the camera on at the paid size, and off again with its price back", async ({ page }) => {
     test.setTimeout(budget(44));
     const r = await unpaidDivision(page, "ocmove");
@@ -364,7 +415,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect(await balanceOf(page, r.divisionId), "the credits the receipt promised are back").toBe(afterUp + backTotal);
     expect((await packageRow(r.divisionId)).size).toBe(small);
 
-    // The Fair-play camera ON at the SAME paid size (spec 8.6, Task 15): the chip opens the change receipt at what was paid (No, no size chosen), and the
+    // The Fair-play camera ON at the SAME paid size (spec 8.6, Task 15): the chip opens the change receipt at the division's setting (off: No, no size
+    // chosen; fix I2), and the
     // Yes alone must be enough to get a quote - the camera difference at this size, as the server prices it (the receipt's total is the server's).
     expect((await packageRow(r.divisionId)).cameras_paid, "premise: paid without cameras").toBe(false);
     const camera = await quoteOf(page, r.divisionId, small, true);
@@ -374,9 +426,10 @@ test.describe("Online Chess credits: the organiser pays", () => {
     const beforeCamera = await balanceOf(page, r.divisionId);
     await page.getByTestId("online-paid-chip-change").click();
     await expect(receipt(page)).toHaveAttribute("data-mode", "change");
-    await expect(cameraRadio(page, false), "the change receipt opens at what was paid: No").toBeChecked();
+    await expect(cameraRadio(page, false), "the change receipt opens at the division's setting: No").toBeChecked();
     await expect(confirm(page), "nothing chosen yet").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
     await answerCamera(page, true);
+    await expect(yesNote(page), "m4: the Yes that turns the camera on says so before the confirm").toHaveText(uiEn["onlineChess.receipt.cameras.yesNote"]!);
     await expect(receipt(page), "the camera is quoted AT the paid size").toHaveAttribute("data-size", String(small));
     await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(camera.owed));
     await expect(confirm(page)).toHaveText(fill(camera.owed === 1 ? "onlineChess.payLine.pay.one" : "onlineChess.payLine.pay.other", { count: camera.owed }));
@@ -391,7 +444,7 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
     expect(await balanceOf(page, r.divisionId), "exactly the camera difference left the balance").toBe(beforeCamera - camera.owed);
 
-    // ...and OFF again before round 1 (Task 15): the change receipt opens at Yes (what was paid); No is a move down at the same size, and the camera
+    // ...and OFF again before round 1 (Task 15): the change receipt opens at Yes (the setting the Yes wrote); No is a move down at the same size, and the camera
     // price comes back, as the server's quote splits it.
     const off = await quoteOf(page, r.divisionId, small, false);
     expect(off.back, "premise: the quote offers the camera price back").not.toBeNull();
@@ -399,7 +452,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect(offBack + off.back!.forfeited, "the leaf: the camera difference is what comes back, less what is forfeited").toBe(cameraDiff);
     await page.getByTestId("online-paid-chip-change").click();
     await expect(receipt(page)).toHaveAttribute("data-mode", "change");
-    await expect(cameraRadio(page, true), "the change receipt opens at what was paid: Yes").toBeChecked();
+    await expect(cameraRadio(page, true), "the change receipt opens at the setting: Yes (Required)").toBeChecked();
+    await expect(yesNote(page), "the camera is already on: nothing to say").toHaveCount(0);
     await answerCamera(page, false);
     // The next size up WITHOUT the camera costs what this one WITH it did: its row nets nothing and says so - never "paid" (it was never bought).
     expect(packagePrice(mid, false), "premise: the next size without the camera is priced as the paid one with it").toBe(packagePrice(small, true));
@@ -418,8 +472,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.off"]! }));
   });
 
-  test("E: the first receipt answered Yes pays WITH the Fair-play camera, and the division's camera setting reads Required", async ({ page }) => {
-    test.setTimeout(budget(10));
+  test("E: the first receipt answered Yes pays WITH the Fair-play camera, and the division's camera setting reads Required; turned Off in settings, the next receipt opens at No (fix I2)", async ({ page }) => {
+    test.setTimeout(budget(18));
     const r = await unpaidDivision(page, "occamyes");
     await page.setViewportSize({ width: 1280, height: 900 });
     const small = ONLINE_SIZES[0]!;
@@ -444,6 +498,28 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect((await packageRow(r.divisionId)).cameras_paid, "the package holds the camera").toBe(true);
     expect(await divisionCameraPolicy(r.divisionId), "the division's camera setting is written with the payment").toBe("required");
     await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
+
+    // Fix I2: the camera turned OFF in Division settings (the settings door: free, nothing returned, P19). The next receipt opens at the SETTING -
+    // No - and quotes against what was paid: the camera price back. Yes at the paid size is no change. (A change opened at what was paid made a
+    // resize re-charge the camera and write Required again.)
+    const patched = await apiJson(page.request, `/api/v1/divisions/${r.divisionId}`, "PATCH", { camera_policy: "off" });
+    expect(patched.status, `camera off: ${JSON.stringify(patched.error)}`).toBeLessThan(300);
+    expect([(await packageRow(r.divisionId)).cameras_paid, await divisionCameraPolicy(r.divisionId)], "premise: paid with the camera, the setting Off").toEqual([true, "off"]);
+    const back = await quoteOf(page, r.divisionId, small);
+    expect([back.owed, back.covers], "the server's quote at the setting (no answer): the camera price back, still covering").toEqual([priceOf(small) - withCamera, true]);
+    const backTotal = back.back!.pack + back.back!.monthly;
+    await page.reload();
+    await page.getByTestId("online-paid-chip-change").click();
+    await expect(receipt(page)).toHaveAttribute("data-mode", "change");
+    await expect(cameraRadio(page, false), "the change receipt opens at the setting (Off): No, not at what was paid").toBeChecked();
+    await expect(confirm(page)).toHaveText(
+      backTotal === 0 ? uiEn["onlineChess.receipt.confirm.camerasOff.none"]! : fill(backTotal === 1 ? "onlineChess.receipt.confirm.camerasOff.one" : "onlineChess.receipt.confirm.camerasOff.other", { count: backTotal }),
+    );
+    await answerCamera(page, true);
+    await expect(confirm(page), "Yes at the paid size over a paid camera: nothing to pay (R6)").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
+    await page.getByTestId("online-receipt-cancel").click();
+    await expect(receipt(page)).toHaveCount(0);
+    expect(await balanceOf(page, r.divisionId), "looking moved nothing").toBe(start - withCamera);
   });
 
   test("D: the competition page flags the unpaid online division for its organiser, links to the Fixtures tab, and stops when it is paid", async ({ page }) => {
