@@ -1,4 +1,4 @@
-// Seazn-hosted video, Phase 4 Task 33: the organisation's Seazn switch (V553, `org_stream_targets.offered` on the org's Seazn row).
+// Seazn-hosted video, Phase 4 Task 33: the organisation's Seazn switch (V559, `org_stream_targets.offered` on the org's Seazn row).
 // The owner's rulings (2026-11-23/24, ledger) are the expectations here, never the code under test:
 //   - default ON; it gates only NEW Seazn picks and starts;
 //   - off never stops a live Seazn stream, and Stop still works;
@@ -98,7 +98,7 @@ function flipAtStorageRead(deps: SessionDeps, flip: () => Promise<unknown>): { d
   return { deps: { ...deps, drivers: { ...deps.drivers, ingest } }, flipped: () => flipped };
 }
 
-describe.skipIf(!HAS_DB)("the org's Seazn switch: read and write (V553)", () => {
+describe.skipIf(!HAS_DB)("the org's Seazn switch: read and write (V559)", () => {
   it("default ON; off reads back off; a SECOND off is idempotent; on → off → on round-trips; another org's switch never moves", async () => {
     const a = await rig();
     const b = await rig();

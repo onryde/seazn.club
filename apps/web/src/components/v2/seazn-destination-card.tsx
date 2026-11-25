@@ -1,7 +1,7 @@
 "use client";
 // The Streaming page's Seazn Hosted card (Phase 4 Task 33b; mock "Option B", owner-approved 2026-11-23, layout only — the build is the
 // house look: the lime accent and the purple-100 cards). It says what Seazn Hosted is (a line, three chips, the credit line) and carries
-// the org's switch (Task 33, V553 `offered`): on, matches can pick Seazn; off, they cannot.
+// the org's switch (Task 33, V559 `offered`): on, matches can pick Seazn; off, they cannot.
 //
 // The card reads the switch ITSELF (`offered`, from `seaznOfferOf` on the page), never the destinations list: the list leaves Seazn out
 // while the switch is off (`seaznWhere`), so a card built from it would vanish with the one control that turns it back on.

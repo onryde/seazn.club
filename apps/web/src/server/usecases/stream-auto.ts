@@ -42,7 +42,7 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "target_in_use": return "destination_in_use";
     case DESTINATION_NOT_ALLOWED:
     case TARGET_UNREADABLE:
-    // Task 33 fix round 1 (m2): Seazn not offered — the deployment's flag or, since V553, the organisation's own switch — is the
+    // Task 33 fix round 1 (m2): Seazn not offered — the deployment's flag or, since V559, the organisation's own switch — is the
     // organiser's to fix (turn it on, or pick another destination), as the phone's start maps it (`phoneStartRefusal`). Reached only
     // when the switch goes off after the pick resolved; the steady state is the resolver hiding the row, stored as no_destination too.
     case SEAZN_UNAVAILABLE: return "no_destination";

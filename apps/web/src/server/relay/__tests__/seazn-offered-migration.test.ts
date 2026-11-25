@@ -1,4 +1,4 @@
-// V553 (Seazn-hosted video, Phase 4 Task 33): the org's Seazn switch lives on its `seazn` destination row (V541), as
+// V559 (Seazn-hosted video, Phase 4 Task 33): the org's Seazn switch lives on its `seazn` destination row (V541), as
 // `org_stream_targets.offered`. Default ON, so every row that existed and every row the V541 trigger makes reads on; only the Seazn
 // row may ever read off. Each refusal has its accepted twin in the same `it`, so an empty schema cannot pass (AGENTS.md class 3):
 // the twin fails with "column does not exist" first.
@@ -10,7 +10,7 @@ import { sql, type Tx } from "@/lib/db";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-/** The constraint V553 names; the refusals below must carry exactly this name, so a differently-named check fails here. */
+/** The constraint V559 names; the refusals below must carry exactly this name, so a differently-named check fails here. */
 const OFFERED_CHECK = "org_stream_targets_offered_seazn_only";
 
 const failure = async (p: PromiseLike<unknown>): Promise<string> => {
@@ -37,7 +37,7 @@ async function rolledBack(fn: (tx: Tx) => Promise<void>): Promise<void> {
 }
 const probe = (tx: Tx, q: (sp: Tx) => PromiseLike<unknown>): Promise<string> => failure(tx.savepoint((sp) => q(sp as Tx)));
 
-describe.skipIf(!HAS_DB)("V553__seazn_offered.sql — the org's Seazn switch is real", () => {
+describe.skipIf(!HAS_DB)("V559__seazn_offered.sql — the org's Seazn switch is real", () => {
   it("offered is a NOT NULL boolean defaulting to true; the V541 trigger's Seazn row and a pasted row both read true", async () => {
     const [col] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
       select data_type, is_nullable, column_default from information_schema.columns

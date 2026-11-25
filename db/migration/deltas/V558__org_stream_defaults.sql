@@ -1,5 +1,5 @@
 -- V558 — the club's default Score style and Score timing (Seazn-hosted video, Phase 4, Task 38). V554 to V556 are the realtime
--- branch's; V553 and V557 are this branch's. The tests find this file by name, never by number.
+-- branch's; V557 and V559 (once V553) are this branch's. The tests find this file by name, never by number.
 --
 -- A club sets the look of the score on its video ONCE, on the Streaming page, and every new stream starts with it. One row per
 -- organisation, made by its first save; no row is the same as a row of two nulls: "nothing set here".

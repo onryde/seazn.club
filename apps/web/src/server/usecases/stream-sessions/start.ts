@@ -315,7 +315,7 @@ export async function startBroadcast(
   // Task 11: with SEAZN_HOSTED_LIVE off the Seazn destination does not exist for this deployment (no list or pick offers it),
   // so a start that names it anyway — a direct `targetId`, a pick saved while the flag was on — is refused by the pick's own
   // 422, before the mode is weighed and before anything is read, written or asked of a provider. Task 33: the same refusal, at
-  // the same place, when the ORG switched Seazn off (V553 `offered`; `seaznClosed` is the one rule, shared with the pick's write).
+  // the same place, when the ORG switched Seazn off (V559 `offered`; `seaznClosed` is the one rule, shared with the pick's write).
   // It gates only this NEW start: a Seazn session already running never comes through here, so it keeps running and Stops normally.
   if (seaznClosed(target)) {
     log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not offered (deployment flag or the org's switch off) — start refused");
@@ -460,7 +460,7 @@ export async function startBroadcast(
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
     const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
-    // Task 33 fix round 1 (m1): the org's Seazn switch (V553 `offered`) is re-read UNDER that lock. The early read above ran before
+    // Task 33 fix round 1 (m1): the org's Seazn switch (V559 `offered`) is re-read UNDER that lock. The early read above ran before
     // the storage read (a provider call: seconds), and the switch's PUT updates this same row, so the two serialise here: an off that
     // committed before this lock refuses this start by the same 422, before anything is written; one that commits after it finds
     // the session already admitted, which it never stops (owner ruling: the switch gates only NEW starts). A row archived since the

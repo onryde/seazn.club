@@ -1,4 +1,4 @@
-// Seazn-hosted video, Phase 4 Task 33: GET/PUT /api/v1/orgs/{id}/seazn-hosted — the org's Seazn switch (V553), over the REAL handler,
+// Seazn-hosted video, Phase 4 Task 33: GET/PUT /api/v1/orgs/{id}/seazn-hosted — the org's Seazn switch (V559), over the REAL handler,
 // the REAL session door and the REAL tables. Only `requireUser` (who is signed in) is faked, exactly as the sibling org routes' suites
 // do; `requireOrgAuth`'s role lookup runs against real `org_members` rows.
 //

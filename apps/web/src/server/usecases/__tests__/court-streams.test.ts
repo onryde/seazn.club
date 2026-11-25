@@ -88,7 +88,7 @@ describe.skipIf(!HAS_DB)("court streams (desk)", () => {
 
   // Task 37 FLIPS the V541-era pin that read "refuses the Seazn destination with the same YouTube-only 422, LIVE on or off": a court
   // may stream to the org's Seazn destination while the deployment offers it (SEAZN_HOSTED_LIVE) AND the org has not switched it off
-  // (V553 `offered`). The refusal when it does not is the pick's and the start's own: 422 seazn_unavailable.
+  // (V559 `offered`). The refusal when it does not is the pick's and the start's own: 422 seazn_unavailable.
   const seaznId = async () => {
     const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${day.orgId} and kind = 'seazn'`;
     expect(seazn, "PREMISE: the org has its Seazn row").toBeDefined();

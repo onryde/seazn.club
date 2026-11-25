@@ -5,7 +5,7 @@ import { seaznOfferOf, setSeaznOffered } from "@/server/usecases/stream-targets"
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Seazn-hosted video, Task 33 (V553): the organisation's Seazn switch, `{ offered }`. The streaming destinations' gate (the
+/** Seazn-hosted video, Task 33 (V559): the organisation's Seazn switch, `{ offered }`. The streaming destinations' gate (the
  *  stream-targets route beside this one): org read for GET (a viewer sees the switch), org write for PUT (ruling R19: owner /
  *  admin), and never key-reachable (key-scopes.ts NEVER_KEY_ROUTES). Off gates only NEW Seazn picks and starts; a live Seazn stream,
  *  its recordings and its replays are untouched (usecases/stream-targets.ts). */

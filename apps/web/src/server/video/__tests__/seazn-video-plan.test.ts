@@ -192,7 +192,7 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
     expect((await hintsOf(f, now)).activeUntil, "ended and decided").toBeNull();
   });
 
-  // Task 33 fix round 1 (m5): the org's Seazn switch (V553) gates only NEW Seazn picks and starts (owner ruling). Arm 1 (a Seazn session
+  // Task 33 fix round 1 (m5): the org's Seazn switch (V559) gates only NEW Seazn picks and starts (owner ruling). Arm 1 (a Seazn session
   // or replay) never reads it, so a running or replayed Seazn fixture keeps its player; arm 3 (unstarted) reads it only through the
   // resolver, on purpose — the player appears exactly when Go live would stream to Seazn.
   it("fix round 1 (m5): the switch is NOT read for a fixture with a Seazn session or replay — off, a LIVE session's plan and a replayed fixture's plan are unchanged, whole (counted)", async () => {

@@ -1,5 +1,6 @@
--- V553 — the organisation's Seazn switch (Seazn-hosted video, Phase 4, Task 33). V547 is billing's, V548 plan-limits', V549 and
--- V550 online chess's (all unmerged); V551 and V552 are this branch's. The tests find this file by name, never by number.
+-- V559 — the organisation's Seazn switch (Seazn-hosted video, Phase 4, Task 33). Written as V553 and renumbered at the rebase onto
+-- main's V554–V556 (realtime push nudges, #1302; Flyway runs with no outOfOrder). V547 is billing's, V548 plan-limits', V549 and
+-- V550 online chess's (all unmerged); V551, V552, V557, V558 and V559 are this branch's. The tests find this file by name, never by number.
 --
 -- One switch per organisation, on its Seazn destination row (V541), not on organizations: every reader that decides whether Seazn
 -- is offered already reads org_stream_targets alone (usecases/stream-targets.ts seaznWhere), so no reader needs a join.

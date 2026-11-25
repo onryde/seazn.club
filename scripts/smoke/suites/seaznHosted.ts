@@ -19,7 +19,7 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  * 3. REFUSED WHILE OFF — naming the Seazn destination as the fixture's pick (PUT stream-settings) and starting on it (POST
  *    stream-sessions) are both refused `422 seazn_unavailable`, and the refused start writes no session row. Skipped when
  *    told LIVE is on: that refusal does not exist there.
- * 3b. THE ORG SWITCH (Phase 4, Task 33, V553) — GET /orgs/{id}/seazn-hosted reads the default ON; PUT off answers and reads back
+ * 3b. THE ORG SWITCH (Phase 4, Task 33, V559) — GET /orgs/{id}/seazn-hosted reads the default ON; PUT off answers and reads back
  *    off, and a Go live on the Seazn destination is then 422 seazn_unavailable with no session row; PUT on answers on, and the
  *    same Go live is past the switch: told LIVE is on, a LATER door answers it (never seazn_unavailable — no phone is paired here,
  *    so nothing is admitted or written); told LIVE is off, it is still 422 seazn_unavailable (the flag is the master). Both modes.

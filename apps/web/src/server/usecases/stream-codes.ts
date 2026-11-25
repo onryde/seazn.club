@@ -535,7 +535,7 @@ export async function writeStreamSettings(
     const live = await tx<{ seazn: boolean; offered: boolean }[]>`
       select kind = 'seazn' as seazn, offered from org_stream_targets where id = ${a.targetId} and org_id = ${a.orgId} and archived_at is null`;
     if (live.length === 0) throw new HttpError(404, "stream target not found");
-    // Seazn-hosted video: with LIVE off, or the org's Seazn switch off (V553, Task 33), the row is hidden from every list, so naming
+    // Seazn-hosted video: with LIVE off, or the org's Seazn switch off (V559, Task 33), the row is hidden from every list, so naming
     // it is refused rather than stored. A pick saved while it was offered stays stored and resolves to none until it is offered again.
     if (seaznClosed(live[0]!)) throw new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE);
   }

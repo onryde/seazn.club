@@ -256,7 +256,7 @@ export const PutCourtStream = z.object({ on: z.boolean() }).strict();
 export type PutCourtStream = z.infer<typeof PutCourtStream>;
 export const CourtStreamSwitch = z.object({ on: z.boolean() }).strict();
 export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
-/** Seazn-hosted video, Task 33 (V553): GET/PUT /orgs/{id}/seazn-hosted — the org's Seazn switch. `offered` false: no match may
+/** Seazn-hosted video, Task 33 (V559): GET/PUT /orgs/{id}/seazn-hosted — the org's Seazn switch. `offered` false: no match may
  *  pick or start Seazn (422 seazn_unavailable); a live Seazn stream, its recordings and its replays are untouched. */
 export const PutSeaznHosted = z.object({ offered: z.boolean() }).strict();
 export type PutSeaznHosted = z.infer<typeof PutSeaznHosted>;

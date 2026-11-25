@@ -62,7 +62,7 @@ export class TargetUnreadableError extends HttpError {
 
 /** Seazn-hosted video (V541): the ONE place the Seazn row's visibility and order are decided, for the Streaming list and the
  *  fixture's default pick alike. LIVE on: Seazn first, then the rest oldest-first — and the Seazn row only while the org's switch
- *  (V553 `offered`, Task 33) is on. LIVE off: the row is left out whatever the switch says (the flag is the master) and the order
+ *  (V559 `offered`, Task 33) is on. LIVE off: the row is left out whatever the switch says (the flag is the master) and the order
  *  is the old one, so an org's default stays its oldest pasted destination. An org that switched Seazn off reads exactly as LIVE
  *  off does: its default falls to the next destination, and a SAVED Seazn pick is not in the list, so it resolves to none
  *  (`resolveStreamTarget`). Columns are unqualified on purpose: both callers read `org_stream_targets` alone in that scope. */
@@ -78,7 +78,7 @@ export const seaznClosed = (row: { seazn: boolean; offered: boolean }, on: boole
 
 const seaznRowMissing = () => new HttpError(404, "the Seazn destination was not found");
 
-/** Task 33 (V553): the org's Seazn switch, read off its ACTIVE Seazn row. A missing or archived row (no product path makes either:
+/** Task 33 (V559): the org's Seazn switch, read off its ACTIVE Seazn row. A missing or archived row (no product path makes either:
  *  V541's trigger makes one per org, and removing it is refused) is the 404, never a guessed default. The caller has already
  *  authorised the org (the route's door, or the Streaming page's own). Read whatever SEAZN_HOSTED_LIVE says: the stored choice is the
  *  org's, and the flag decides only whether anything offers Seazn at all. */
@@ -89,7 +89,7 @@ export async function seaznOfferOf(orgId: string): Promise<{ offered: boolean }>
   return { offered: row.offered };
 }
 
-/** Task 33 (V553): turn the org's Seazn destination on or off. Editors only — the route's door asks `requireOrgAuth(…, "write")`
+/** Task 33 (V559): turn the org's Seazn destination on or off. Editors only — the route's door asks `requireOrgAuth(…, "write")`
  *  (owner / admin) — and another org's id is the 404. One statement, so a second PUT with the same value is the same answer and the
  *  same row. Off gates only NEW Seazn picks and starts (`seaznWhere`, `seaznClosed`): a live Seazn session keeps running and Stop
  *  still works, and recordings and replays stay playable, downloadable and deletable — none of those readers reads `offered`. */
