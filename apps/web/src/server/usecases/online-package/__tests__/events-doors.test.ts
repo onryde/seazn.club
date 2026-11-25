@@ -14,14 +14,13 @@
 //
 // single-sport: Online Chess is boardgame only (online-play.ts `supportsOnlinePlay`).
 //
-// Mutant table (each run once by hand; results in the commit message):
-//   E1 the pay door's capture dropped                         -> "the pay door: first payment is ONE `bought` …"
-//   E2 the capture moved inside the transaction               -> "… sent after the commit" (the paid row is not yet visible)
-//   E3 `paidBefore` pinned to false                           -> "… a later payment is `resized`"
-//   E4 the no-op guard dropped (applied false still sent)     -> "… a replay and a refused payment send nothing"
-//   E5 each refund door's capture dropped (three mutants)     -> "delete division: …", "online play off: …", "delete competition: …"
-//   E6 the collector's "something came back or was forfeited" guard dropped -> "applyPackageDelete collects nothing for a row already refunded"
-//   E7 a door's capture dropped from the competition, division or switch-off door (one mutant each) -> that door's case
+// Mutant table (21 mutants, each run once by hand over events.test.ts, this file and open-round-package-events.test.ts; all killed):
+//   pay door:       the capture dropped; `paidBefore` pinned false; the no-op guard dropped (applied false still sent)
+//   props:          the return sign lost on a move down and on a refund; `forfeited` dropped; the plan fallback dropped; the never-throws
+//                   wrapper removed; the distinct id left to the user only; `at_round_one` pinned false; an extra property leaked
+//   refund doors:   each of the three doors' capture dropped (division delete, competition delete, online play off); the switch-off
+//                   door's collector not passed on; the collector's "something came back or was forfeited" guard dropped
+//   openRound gate: the event dropped; `at_round_one` false; `paidBefore` false; a frozen row returning an event; the capture dropped
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Seen = { event: string; distinctId: string; orgId?: string; properties: Record<string, unknown>; committedAtCapture: boolean | null };
