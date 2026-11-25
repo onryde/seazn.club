@@ -12,7 +12,7 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 import { bucketCounts, fixtureBucket, pagesByRound, planRounds } from "@/lib/round-paging";
-import { countsAsMatch, isBye, type MatchLineRow } from "@/lib/run-sheet-groups";
+import { countsAsMatch, isBye, playKey, roundUnderWay, sortRoundsByPlay, type MatchLineRow } from "@/lib/run-sheet-groups";
 import { stageCounts } from "@/lib/stage-card/summaries";
 
 /** Stage kinds whose folded rounds ship as a tally. Every other kind ships every row. */
@@ -52,6 +52,9 @@ export interface FoldedRunSheetRound {
   /** The round's first and last kickoff - where its bar sits among the stage's rounds (`stageRoundSections` reads by kickoff). */
   firstAt: string | null;
   lastAt: string | null;
+  /** Task 51: the round is already under way (`roundUnderWay`, the predicate the loaded section carries too), so an untimed one keeps its
+   *  round-number place among the rounds instead of going last. */
+  underWay: boolean;
   /** W5 T23: a round appended for a late player's catch-up matches. */
   catchUp: boolean;
 }
@@ -94,6 +97,7 @@ export function foldedRoundOf(stageId: string, round: number, rows: readonly Pag
     played: rows.filter((f) => fixtureBucket(f.status) !== "upcoming").length,
     firstAt: times[0] ?? null,
     lastAt: times.at(-1) ?? null,
+    underWay: roundUnderWay(rows.map(asLine), held),
     catchUp: rows.some((f) => isCatchUpRoundExtKey(f.ext_key ?? null)),
   };
 }
@@ -157,22 +161,16 @@ export function foldedRoundShows(r: Pick<FoldedRunSheetRound, "unscheduled">, fi
 }
 
 /** A stage's round sections with its folded rounds put back among them: a round not loaded yet is a section with no rows that carries
- *  its tally, a loaded one is already a section (its rows joined the blocks). Read in `stageRoundSections`' order - earliest kickoff
- *  first (a folded round's `firstAt`), the untimed ones after, the round number breaking every tie. */
-export function withFoldedRounds<S extends { round: number; fixtures: readonly { scheduled_at: string | null }[] }>(
+ *  its tally, a loaded one is already a section (its rows joined the blocks). Read in `stageRoundSections`' order - the SAME
+ *  `sortRoundsByPlay`: earliest kickoff first (a folded round's `firstAt`), the untimed ones after, the round number breaking every tie,
+ *  and a round already under way (the tally's `underWay`, a loaded section's) keeping its number's place with no times. */
+export function withFoldedRounds<S extends { round: number; fixtures: readonly { scheduled_at: string | null }[]; underWay: boolean }>(
   sections: readonly S[],
   folded: readonly FoldedRunSheetRound[],
   loaded: ReadonlySet<number>,
 ): (S | { round: number; fixtures: never[]; folded: FoldedRunSheetRound })[] {
   const pending = folded.filter((r) => !loaded.has(r.round)).map((r) => ({ round: r.round, fixtures: [] as never[], folded: r }));
-  const earliest = (s: S | (typeof pending)[number]): number => {
-    const at = "folded" in s ? s.folded.firstAt : (s.fixtures[0]?.scheduled_at ?? null);
-    return at === null ? Number.POSITIVE_INFINITY : Date.parse(at);
-  };
-  return [...sections, ...pending].sort((a, b) => {
-    const ea = earliest(a);
-    const eb = earliest(b);
-    if (ea !== eb) return ea < eb ? -1 : 1;
-    return a.round - b.round;
-  });
+  return sortRoundsByPlay([...sections, ...pending], (s) =>
+    "folded" in s ? playKey(s.round, s.folded.firstAt, s.folded.underWay) : playKey(s.round, s.fixtures[0]?.scheduled_at ?? null, s.underWay),
+  );
 }

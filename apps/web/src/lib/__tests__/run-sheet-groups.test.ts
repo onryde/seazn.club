@@ -663,6 +663,139 @@ describe("stageRoundSections - one non-bracket stage's rows by round", () => {
   });
 });
 
+// Task 51 (owner 2026-11-25, stg division seaznhostedtesting): "why round 1 is moved down in this?" - Round 1 (no kickoff times, 3 of 4 done,
+// 1 on its pad) read BELOW Rounds 2-4 (timed, none drawn yet). THE RULE, written from the owner's words and not from the code: a round
+// that is already under way (one of the lines the round bar counts has a result or is in play - the bar's own "N of M done" predicate)
+// keeps its round-number place even when it has no kickoff times, so it reads before every round with a higher number. A round with
+// nothing started and no times still goes last. Timed rounds keep earliest-kickoff order. Rows go through `buildRunSheet`, the real producer.
+describe("stageRoundSections - a round already under way keeps its place with no kickoff times (task 51)", () => {
+  const sections = (fixtures: ReturnType<typeof fx>[], stages: RunSheetInput["stages"] = [LEAGUE]) =>
+    stageRoundSections(buildRunSheet(input({ fixtures, stages })), stages[0]!.id);
+  const rounds = (fixtures: ReturnType<typeof fx>[], stages?: RunSheetInput["stages"]) => sections(fixtures, stages).map((s) => s.round);
+  let no = 0;
+  const row = (round: number, over: Partial<ReturnType<typeof fx>> = {}) => fx({ id: `t51-${++no}`, round_no: round, fixture_no: no, seq_in_round: no, ...over });
+  const atDay = (d: number) => `2026-09-${String(d).padStart(2, "0")}T14:00:00.000Z`;
+  const UNTIMED = { scheduled_at: null };
+  const done = { status: "decided", outcome: { kind: "win", winner: "h1" } } as const;
+  /** Rounds 2-4: timed, nothing drawn or started - the owner's three "Awaiting draw" rounds. */
+  const laterRounds = () => [2, 3, 4].map((r) => row(r, { scheduled_at: atDay(10 + r) }));
+
+  it("the owner's case: Round 1 untimed with 3 done and 1 on its pad reads FIRST, ahead of the timed rounds 2, 3 and 4", () => {
+    const out = rounds([
+      ...laterRounds(),
+      row(1, { ...UNTIMED, ...done }),
+      row(1, { ...UNTIMED, ...done }),
+      row(1, { ...UNTIMED, ...done }),
+      row(1, { ...UNTIMED, status: "in_play" }),
+    ]);
+    expect(out).toEqual([1, 2, 3, 4]);
+    expect(out.length, "anti-vacuity: four rounds were read").toBe(4);
+  });
+
+  it("one result and nothing else is already under way: the round takes its number's place, and with the result gone it goes last again", () => {
+    const withResult = [row(1, { ...UNTIMED, ...done }), row(1, UNTIMED), row(1, UNTIMED), ...laterRounds()];
+    expect(rounds(withResult)).toEqual([1, 2, 3, 4]);
+    const nothingYet = [row(1, UNTIMED), row(1, UNTIMED), row(1, UNTIMED), ...laterRounds()];
+    expect(rounds(nothingYet), "the same scene with no result: today's order, the untimed round after every timed one").toEqual([2, 3, 4, 1]);
+  });
+
+  it("a round only in play (no result yet) is under way too, and so is one held for its verdict", () => {
+    expect(rounds([row(1, { ...UNTIMED, status: "in_play" }), row(1, UNTIMED), ...laterRounds()])).toEqual([1, 2, 3, 4]);
+    expect(rounds([row(1, { ...UNTIMED, status: "needs_decision" }), ...laterRounds()])).toEqual([1, 2, 3, 4]);
+  });
+
+  // The sweep: every status the schema has, against the rule. Under way = anything but `scheduled` (every other status is a result, a
+  // settled void or an open match in play - fixture-status.ts), so the expected order is read off the status list, not off the sorter.
+  it("every fixture status: only 'scheduled' leaves an untimed round waiting at the back", () => {
+    let checked = 0;
+    let underWay = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const out = rounds([row(1, { ...UNTIMED, status }), row(1, UNTIMED), row(2, { scheduled_at: atDay(12) })]);
+      expect(out, status).toEqual(status === "scheduled" ? [2, 1] : [1, 2]);
+      checked++;
+      if (status !== "scheduled") underWay++;
+    }
+    expect(checked, "every status swept").toBe(FIXTURE_STATUSES.length);
+    expect(underWay, "anti-vacuity: both answers are reached").toBeGreaterThan(0);
+    expect(underWay).toBeLessThan(FIXTURE_STATUSES.length);
+  });
+
+  it("a round whose only settled line is a bye is NOT under way (a bye is no match: the bar does not count it)", () => {
+    const swiss = { id: "s1", seq: 1, kind: "swiss" };
+    const award = { kind: "award", winner: "h1", loser: null, reason: "bye" };
+    const out = rounds(
+      [
+        row(1, { ...UNTIMED, away_entrant_id: null, status: "forfeited", outcome: award }),
+        row(1, { ...UNTIMED, home_entrant_id: "h2", away_entrant_id: "a2" }),
+        row(2, { scheduled_at: atDay(12) }),
+      ],
+      [swiss],
+    );
+    expect(out, "the sit-out was settled at the draw; no match of Round 1 has started").toEqual([2, 1]);
+  });
+
+  it("not started and untimed rounds still go after every timed round, by number (E1 item 1 unchanged)", () => {
+    expect(rounds([row(5, UNTIMED), row(4, UNTIMED), row(1, { scheduled_at: atDay(15) }), row(2, { scheduled_at: atDay(13) })])).toEqual([2, 1, 4, 5]);
+  });
+
+  it("sequence: an under-way untimed Round 1 reads before an EARLIER-kicking timed Round 3, because it precedes every higher round; Rounds 3 and 2 keep their kickoff order", () => {
+    const out = rounds([row(1, { ...UNTIMED, ...done }), row(2, { scheduled_at: atDay(14) }), row(3, { scheduled_at: atDay(11) })]);
+    expect(out).toEqual([1, 3, 2]);
+  });
+
+  it("sequence: an under-way untimed Round 2 precedes the higher rounds only; a timed Round 1 that kicks off later keeps its kickoff slot, last", () => {
+    const out = rounds([row(1, { scheduled_at: atDay(20) }), row(2, { ...UNTIMED, ...done }), row(3, { scheduled_at: atDay(11) })]);
+    expect(out).toEqual([2, 3, 1]);
+  });
+
+  it("sequence: an under-way untimed Round 3 does not jump over the timed Rounds 1 and 2 below it - only the higher rounds are what it must precede", () => {
+    const out = rounds([row(1, { scheduled_at: atDay(5) }), row(2, { scheduled_at: atDay(10) }), row(3, { ...UNTIMED, ...done }), row(4, { scheduled_at: atDay(20) })]);
+    expect(out).toEqual([1, 2, 3, 4]);
+  });
+
+  it("an under-way untimed round and a not-started untimed round with nothing timed anywhere: by round number", () => {
+    expect(rounds([row(2, { ...UNTIMED, ...done }), row(1, UNTIMED), row(3, UNTIMED)])).toEqual([1, 2, 3]);
+    expect(rounds([row(1, UNTIMED), row(2, { ...UNTIMED, ...done })])).toEqual([1, 2]);
+  });
+
+  it("the verdict is per round: a round with one timed row is placed by that row, started or not (a timed round never takes the untimed rule)", () => {
+    const out = rounds([row(1, { ...UNTIMED, ...done }), row(1, { scheduled_at: atDay(18) }), row(2, { scheduled_at: atDay(12) })]);
+    expect(out, "Round 1 kicks off on day 18, after Round 2: the play order stands").toEqual([2, 1]);
+  });
+
+  it("other formats: a Swiss and an americano stage read the same rule", () => {
+    let checked = 0;
+    for (const kind of ["swiss", "americano"] as const) {
+      const stage = { id: "s1", seq: 1, kind };
+      expect(rounds([row(1, { ...UNTIMED, ...done }), row(2, { scheduled_at: atDay(12) })], [stage]), kind).toEqual([1, 2]);
+      expect(rounds([row(1, UNTIMED), row(2, { scheduled_at: atDay(12) })], [stage]), `${kind}, nothing started`).toEqual([2, 1]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("pooled stage: a round is ONE section across the pools, so one pool's started match makes the round under way", () => {
+    const GROUP = { id: "s1", seq: 1, kind: "group" };
+    const pooled = (r: number, pool: string, over: Partial<ReturnType<typeof fx>> = {}) => row(r, { pool_id: pool, ...over } as never);
+    const started = [
+      pooled(1, "pA", { ...UNTIMED, ...done }),
+      pooled(1, "pB", { ...UNTIMED }), // pool B has not started: Round 1 is under way through pool A
+      pooled(2, "pA", { scheduled_at: atDay(12) }),
+      pooled(2, "pB", { scheduled_at: atDay(12) }),
+    ];
+    expect(rounds(started, [GROUP])).toEqual([1, 2]);
+    const pBInPlay = [pooled(1, "pA", UNTIMED), pooled(1, "pB", { ...UNTIMED, status: "in_play" }), pooled(2, "pA", { scheduled_at: atDay(12) })];
+    expect(rounds(pBInPlay, [GROUP]), "the started pool may be the second one").toEqual([1, 2]);
+    const none = [pooled(1, "pA", UNTIMED), pooled(1, "pB", UNTIMED), pooled(2, "pA", { scheduled_at: atDay(12) }), pooled(2, "pB", { scheduled_at: atDay(12) })];
+    expect(rounds(none, [GROUP]), "no pool started: untimed Round 1 last").toEqual([2, 1]);
+  });
+
+  it("the empty case and a lone round: nothing to order is nothing, one under-way untimed round is itself", () => {
+    expect(sections([])).toEqual([]);
+    expect(rounds([row(1, { ...UNTIMED, ...done })])).toEqual([1]);
+  });
+});
+
 // Match Day E1 fix round 3 (supersedes fix round 1's m2 and fix round 2's section order): pools play at the same time on separate courts, so
 // no ORDER of per-pool sections is also time order. A group stage's round is ONE section holding every pool's matches of that round, in time
 // order; a tie in time reads by the page's pool order, then by the draw. The row's `pool_id` says which pool it is.
