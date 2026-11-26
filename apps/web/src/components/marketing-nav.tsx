@@ -99,12 +99,14 @@ export async function MarketingNav({
             </Link>
           ))}
           {/* Help: an icon, like the signed-in header's "?" (components/help-menu.tsx), but a plain link — one
-              destination, so no menu. From `md` only: below it the panel carries a "Help" row. 44px square hit area. */}
+              destination, so no menu. From `md` only: below it the panel carries a "Help" row. 44px square hit area, with
+              4px of it let into the bar's padding (`-my-1`): at its full height it made the bar 69px, taller than the 64px
+              every night hero pulls up under it, and a strip of cream showed above them (e2e/marketing-hero-gap.spec.ts). */}
           <Link
             href={help.href}
             aria-label={help.label}
             title={help.label}
-            className="mk-nav-link grid h-11 w-11 shrink-0 place-items-center rounded-lg max-md:hidden"
+            className="mk-nav-link -my-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg max-md:hidden"
           >
             <CircleHelp aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.75} />
           </Link>
