@@ -49,6 +49,61 @@ function collisions(rows: readonly Row[], rest: number, gap = 0) {
   return { found, pairs };
 }
 
+/** How long a row keeps its players from the next match: the longest rest of the groups it is in. */
+const restOn = (input: SolveBuildInput, r: Row): number =>
+  Math.max(0, ...(r.ruleGroupIndices ?? []).map((i) => input.ruleGroups![i]!.minRestMinutes ?? 0));
+
+/** `collisions` over a whole request, each row owing its own rest. */
+function clashes(input: SolveBuildInput) {
+  const gap = input.constraints.gapMinutes;
+  const found: string[] = [];
+  let pairs = 0;
+  const hit = (a: Row, aLength: number, b: Row, bLength: number) =>
+    a.startAtMs < b.startAtMs + bLength * MIN && b.startAtMs < a.startAtMs + aLength * MIN;
+  for (const [i, a] of input.existing.entries()) {
+    for (const b of input.existing.slice(i + 1)) {
+      pairs++;
+      if (a.court === b.court && hit(a, MATCH + gap, b, MATCH + gap)) found.push(`court ${a.fixtureId}/${b.fixtureId}`);
+      if (
+        (a.entrantIds ?? []).some((e) => (b.entrantIds ?? []).includes(e)) &&
+        hit(a, MATCH + restOn(input, a), b, MATCH + restOn(input, b))
+      ) {
+        found.push(`entrant ${a.fixtureId}/${b.fixtureId}`);
+      }
+    }
+  }
+  return { found, pairs };
+}
+
+/** The time from the floor on that `intervals` cover, as merged [from, to] minute pairs, flattened. */
+function fromFloor(intervals: [number, number][]): number[] {
+  const out: number[] = [];
+  for (const [from, to] of intervals
+    .map(([a, b]): [number, number] => [Math.max(a, FLOOR), b])
+    .filter(([a, b]) => b > a)
+    .sort((a, b) => a[0] - b[0])) {
+    const start = (from - FLOOR) / MIN;
+    const end = (to - FLOOR) / MIN;
+    if (out.length > 0 && start <= out.at(-1)!) out[out.length - 1] = Math.max(out.at(-1)!, end);
+    else out.push(start, end);
+  }
+  return out;
+}
+
+const courtBusy = (input: SolveBuildInput, court: string) =>
+  fromFloor(
+    input.existing
+      .filter((r) => r.court === court)
+      .map((r) => [r.startAtMs, r.startAtMs + (MATCH + input.constraints.gapMinutes) * MIN]),
+  );
+
+const playerBusy = (input: SolveBuildInput, player: string) =>
+  fromFloor(
+    input.existing
+      .filter((r) => (r.entrantIds ?? []).includes(player))
+      .map((r) => [r.startAtMs, r.startAtMs + (MATCH + restOn(input, r)) * MIN]),
+  );
+
 describe("spareHeldRows", () => {
   it("returns the request itself when no row is held", () => {
     const input = request([row("a", -600, "C1"), row("b", -600, "C1")]);
@@ -125,6 +180,111 @@ describe("spareHeldRows", () => {
       expect(byId(spare(spent), "a").startAtMs).toBeLessThan(at(-91));
     });
   }
+
+  // Rest differs per rule group, so the row that REACHES furthest is not the row that holds the court.
+  const unequal = (rows: Row[], rests: number[]) =>
+    ({
+      ...request(rows),
+      ruleGroups: rests.map((minRestMinutes) => ({ fixtureIds: ["free"], minRestMinutes })),
+    }) as SolveBuildInput;
+
+  it("keeps the court taken by the running match when an earlier one owes a longer rest", () => {
+    const input = unequal(
+      [row("long-rest", -35, "C1", ["e1"], { ruleGroupIndices: [1] }), row("running", -10, "C1", ["e2"])],
+      [0, 120],
+    );
+    const out = spare(input);
+    expect(courtBusy(out, "C1")).toEqual(courtBusy(input, "C1"));
+    expect(playerBusy(out, "e1")).toEqual(playerBusy(input, "e1"));
+    expect(clashes(out).found).toEqual([]);
+  });
+
+  it("keeps a player busy for the held match when an earlier, shorter row it did not touch has them too", () => {
+    const input = request([row("sibling", -45, "C2", ["e1"]), row("a", -20, "C1", ["e1", "e2"])]);
+    const out = spare(input, new Set(["a"]));
+    expect(playerBusy(input, "e1").length).toBeGreaterThan(0);
+    expect(playerBusy(out, "e1")).toEqual(playerBusy(input, "e1"));
+    expect(clashes(out).found).toEqual([]);
+  });
+
+  for (const [name, heldAt, otherAt] of [
+    ["the held one started first", -20, -10],
+    ["the held one started last", -10, -20],
+    ["the other one has yet to start", -10, 5],
+  ] as const) {
+    it(`sends a running held match and another row on its court apart: ${name}`, () => {
+      const input = request([row("held", heldAt, "C1", ["e1"]), row("other", otherAt, "C1", ["e2"])]);
+      expect(clashes(input).found).toHaveLength(1);
+      const out = spare(input, new Set(["held"]));
+      expect(clashes(out).found).toEqual([]);
+      expect(courtBusy(out, "C1")).toEqual(courtBusy(input, "C1"));
+      for (const player of ["e1", "e2"]) expect(playerBusy(out, player)).toEqual(playerBusy(input, player));
+    });
+  }
+
+  it("holds a player until the later of the held match's rest and a row that starts inside it", () => {
+    const input = request([row("held", -20, "C1", ["e1"]), row("sibling", 20, "C2", ["e1"])], 60);
+    const out = spare(input, new Set(["held"]));
+    expect(playerBusy(input, "e1")).toEqual([0, 110]);
+    expect(playerBusy(out, "e1")).toEqual([0, 110]);
+    expect(clashes(out).found).toEqual([]);
+  });
+
+  it("with unequal rest and rows it did not touch, frees nothing early and sends no clash", () => {
+    let seed = 11;
+    const next = (n: number) => {
+      seed = (seed * 48271) % 2147483647;
+      return seed % n;
+    };
+    const RESTS = [0, 15, 60, 120];
+    const seen = { boards: 0, courts: 0, players: 0, busy: 0, clashingBefore: 0, mixed: 0, addedRows: 0, broughtForward: 0 };
+    for (let i = 0; i < 600; i++) {
+      const gap = [0, 10][next(2)]!;
+      const make = (id: string, earliest: number, span: number): Row => {
+        const a = next(6);
+        return row(id, earliest + 5 * next(span), `C${1 + next(2)}`, [`e${a}`, `e${(a + 1 + next(5)) % 6}`], {
+          ruleGroupIndices: [next(RESTS.length)],
+        });
+      };
+      const shape = (rows: Row[]) => ({ ...unequal(rows, RESTS), constraints: { matchMinutes: MATCH, gapMinutes: gap } }) as SolveBuildInput;
+      const held = Array.from({ length: 1 + next(6) }, (_, j) => make(`held${j}`, -150, 30));
+      // Rows the pass was not asked to touch do not collide among themselves; they may with a held one.
+      const others: Row[] = [];
+      for (let j = 0; j < 5; j++) {
+        const candidate = make(`other${j}`, -150, 60);
+        if (clashes(shape([...others, candidate])).found.length === 0) others.push(candidate);
+      }
+      const rows = [...others, ...held].sort(() => next(3) - 1);
+      const input = shape(rows);
+      const out = spareHeldRows(input, ids(held), FLOOR);
+      if (clashes(input).found.length > 0) seen.clashingBefore++;
+      if (others.length > 0) seen.mixed++;
+      seen.addedRows += out.existing.length - rows.length;
+      seen.broughtForward += rows.filter((before) => {
+        const now = byId(out, before.fixtureId).startAtMs;
+        return now < before.startAtMs && out.existing.some((o) => o.court === before.court && o.startAtMs >= FLOOR && o.startAtMs === now + (MATCH + gap) * MIN);
+      }).length;
+      expect(clashes(out).found, `board ${i}`).toEqual([]);
+      for (const court of ["C1", "C2"]) {
+        expect(courtBusy(out, court), `board ${i} ${court}`).toEqual(courtBusy(input, court));
+        seen.courts++;
+        seen.busy += courtBusy(input, court).length;
+      }
+      for (let e = 0; e < 6; e++) {
+        expect(playerBusy(out, `e${e}`), `board ${i} e${e}`).toEqual(playerBusy(input, `e${e}`));
+        seen.players++;
+        seen.busy += playerBusy(input, `e${e}`).length;
+      }
+      seen.boards++;
+    }
+    expect(seen).toMatchObject({ boards: 600, courts: 1200, players: 3600 });
+    expect(seen.busy).toBeGreaterThan(1000);
+    expect(seen.clashingBefore).toBeGreaterThan(200);
+    expect(seen.mixed).toBeGreaterThan(500);
+    // Both rewrites that are not plain parking were reached.
+    expect(seen.addedRows).toBeGreaterThan(50);
+    expect(seen.broughtForward).toBeGreaterThan(20);
+  });
 
   it("sends nothing the service cannot hold, and frees no court early, across many boards", () => {
     // A fixed linear congruential generator: the same boards every run.

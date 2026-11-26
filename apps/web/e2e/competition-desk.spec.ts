@@ -148,7 +148,12 @@ test.describe("competition desk", () => {
     await setFixtureScheduledAtSql(fixtureIds[0]!, new Date(Date.now() - 24 * 3600_000).toISOString());
 
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
-    // The positive anchor first: the row is rendered, in the published state the seed built.
+    // The positive anchors first: the Needs-you list is on this page and has read this division (the other fixtures
+    // still owe a time), and the row is in the published state the seed built. So the missing row below is a verdict,
+    // not a list that never rendered.
+    const needs = await needsYouOnCompetitionPage(page);
+    await expect(needs.locator('[data-attention="unscheduled"]')).toHaveCount(1);
+    await expect(needs).toContainText(`Premier · ${fixtureIds.length - 1} fixtures unscheduled`);
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
     await expect(row).toHaveAttribute("data-phase", "scheduled");
     await expect(page.locator('[data-attention="result_missing"]')).toHaveCount(0);

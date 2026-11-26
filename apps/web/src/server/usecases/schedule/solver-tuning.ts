@@ -1,5 +1,6 @@
 import "server-only";
 import type { RateLimitConfig } from "@/lib/rate-limit";
+import { schedulerLog } from "@seazn/scheduler";
 import {
   calendarDaysCovering,
   slotFixtures,
@@ -10,6 +11,7 @@ import {
   type SlotConfig,
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
+import { greedySeed } from "../schedule-solver-rest";
 import { MS_PER_MIN } from "./helpers";
 
 /** The grid a floor taken from the clock is rounded UP to, so a proposal reads 10:05 rather than 10:03. */
@@ -287,7 +289,8 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
 }
 
 /** How many matches fit between `from` and `to`: inside the play hours when any are set, back to back
- *  with the gap between them, on every court. Blackouts and court hours are not subtracted. */
+ *  with the gap between them, on every court. An ESTIMATE: blackouts, court hours and other bookings
+ *  are not subtracted, which is why `daySpreadThatPlacesAll` checks the cap it produces. */
 function matchRoom(config: SlotConfig & VerifyConfig, from: number, to: number): number {
   if (from >= to) return 0;
   const sessions = config.sessionWindows ?? [];
@@ -358,8 +361,9 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
   config: T,
   divisionId: string,
   fixtureCount: number,
-  /** Starts of this division's cards that are on the board but not among the `fixtureCount` (the held
-   *  ones). The engine's day tally counts them, so a cap sized without them is too small. */
+  /** Starts of this division's cards that are on the board but not among the `fixtureCount`: held,
+   *  played, another stage's. The engine's day tally counts them, so a cap sized without them is too
+   *  small. */
   taken: readonly number[] = [],
 ): T {
   const existingHard = config.constraints?.hard ?? [];
@@ -402,4 +406,27 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
       hard,
     },
   };
+}
+
+/**
+ * `capped` (the default day spread) only if it costs the run no placement; else `uncapped`. The room
+ * estimate behind the cap cannot see everything a day loses (blackouts, court hours, other bookings,
+ * rest, round gaps), so the cap is not trusted, it is tried: on the engine's own greedy board, which no
+ * run places fewer than (its "never worse than greedy" floor, and every fallback ships that board). A
+ * greedy board that places everything under the cap therefore settles it. Anything left off and the cap
+ * is dropped, so the run IS the run without it. No second solver call, and no solver call here: a
+ * greedy pass is local arithmetic. A cap the organiser set is in both configs and is never touched.
+ */
+export async function daySpreadThatPlacesAll<T extends SlotConfig & VerifyConfig & { courts: string[] }>(
+  capped: T,
+  uncapped: T,
+  run: {
+    fixtures: readonly SchedulableFixture[];
+    existing: readonly Assignment[];
+    dependencies: readonly OrderDependency[];
+  },
+): Promise<T> {
+  if (capped === uncapped) return uncapped;
+  const seed = await greedySeed({ ...run, config: capped, log: schedulerLog }, run.fixtures);
+  return seed.assignments.length === run.fixtures.length ? capped : uncapped;
 }

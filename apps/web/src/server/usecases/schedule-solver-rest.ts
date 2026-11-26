@@ -161,7 +161,10 @@ function solverRestBreaches(
  * seed's construction (pins, legalisation) belongs to the engine, and a second copy of it is the placer/verifier fork
  * this module exists to close.
  */
-async function greedySeed(input: BuildInput, fixtures: readonly SchedulableFixture[]): Promise<BuildResult> {
+export async function greedySeed(
+  input: Omit<BuildInput, "solve">,
+  fixtures: readonly SchedulableFixture[],
+): Promise<BuildResult> {
   const out = await buildSchedule({ ...input, fixtures, solve: NO_VERDICT });
   if (out.engine !== "greedy") {
     // A solver that placed nothing cannot have produced a solver board: the engine changed under this code.

@@ -20,7 +20,9 @@ import "server-only";
 //   solver-tuning.ts  the auto pass's wall-clock budget, cooldown, window bound and day spread
 //   reflow.ts         the reflow pass over an already-placed board
 //   held.ts           the auto pass's held cards (start before its floor): the solver request, round order
+//   final-board.ts    the auto pass's board after apply: what the write gate lets it propose, stored-slot conflicts
 //   auto.ts           autoSchedule: the propose-only auto pass
+//   apply-gate.ts     the write gate's verdict on a set of rows (applySchedule, and the auto pass before it)
 //   apply.ts          applySchedule (transactional persist) and lastAiApply
 //   move.ts           moveFixture: the single-fixture drag-and-drop move
 //   publish.ts        publishSchedule and startDivision (its status transaction: startDivisionInTx): both take a division live

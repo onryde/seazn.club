@@ -14,6 +14,8 @@ const { createStages, generateStageFixtures } = await import("../stages");
 const { applySchedule, autoSchedule, putScheduleSettings } = await import("../schedule");
 const { ScheduleMetrics, ScheduleSolverInfo } = await import("@/server/api-v1/schemas");
 const { seedCourts } = await import("./_seed");
+const { putCourtCalendar } = await import("../venues");
+const { boardMetrics } = await import("@seazn/engine/scheduling");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -31,7 +33,10 @@ interface Shape {
 }
 
 /** The reported board: 8 entrants, 3 Swiss rounds of 4, two courts, nothing paired yet. */
-async function seedSwiss(window: { startAt: number; endAt: number; sessions: [number, number][] }, shape: Shape = {}) {
+async function seedSwiss(
+  window: { startAt: number; endAt: number; sessions: [number, number][]; blackouts?: [number, number][] },
+  shape: Shape = {},
+) {
   const kind = shape.kind ?? "swiss";
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -91,13 +96,13 @@ async function seedSwiss(window: { startAt: number; endAt: number; sessions: [nu
       gapMinutes: 0,
       courts,
       perEntrantMinRest: 0,
-      blackouts: [],
+      blackouts: (window.blackouts ?? []).map(([from, to]) => ({ from: iso(from), to: iso(to) })),
       sessionWindows: window.sessions.map(([from, to]) => ({ from: iso(from), to: iso(to) })),
     },
     tz: "UTC",
   });
   const { fixtures } = await generateStageFixtures(auth, stage.id);
-  return { auth, stageId: stage.id, fixtures, courts };
+  return { auth, stageId: stage.id, fixtures, courts, competitionId: competition.id, divisionId: division.id };
 }
 
 async function starts(seed: Awaited<ReturnType<typeof seedSwiss>>) {
@@ -128,6 +133,67 @@ async function layDown(seed: Seed, fixtures: Seed["fixtures"], day: number, lock
     at.set(f.id, slot);
   }
   return at;
+}
+
+/** The board as the database holds it: id -> [start, court], `null`s for a card with no time. */
+async function stored(seed: Seed) {
+  const rows = await sql<{ id: string; scheduled_at: Date | null; court_id: string | null }[]>`
+    select id, scheduled_at, court_id from fixtures where stage_id = ${seed.stageId}`;
+  return new Map(rows.map((r) => [r.id, [r.scheduled_at?.getTime() ?? null, r.court_id] as const]));
+}
+
+/**
+ * Applies the proposal through the real write gate and checks the counts against what the database then
+ * holds: a card on no proposal is exactly where it was (apply writes only what it is handed), `moved` is
+ * the proposal's rows that are not where they were, and nothing that had a time is without one.
+ */
+async function applyAndAudit(seed: Seed, out: Awaited<ReturnType<typeof autoSchedule>>) {
+  const before = await stored(seed);
+  await apply(seed, out);
+  const after = await stored(seed);
+  const listed = new Map(out.assignments.map((a) => [a.fixture_id, a]));
+  let changed = 0;
+  let lost = 0;
+  let audited = 0;
+  for (const [id, was] of before) {
+    const now = after.get(id)!;
+    const proposed = listed.get(id);
+    if (proposed === undefined) expect(now).toEqual(was);
+    else expect(now).toEqual([Date.parse(proposed.scheduled_at), proposed.court_id]);
+    if (now[0] !== was[0] || now[1] !== was[1]) changed++;
+    if (was[0] !== null && now[0] === null) lost++;
+    audited++;
+  }
+  expect(audited).toBe(seed.fixtures.length);
+  expect(out.solver.lost).toBe(lost);
+  if (out.solver.mode === "polish") expect(out.solver.moved).toBe(changed);
+  return { before, after };
+}
+
+/** `metrics` describe the rows on the proposal, all of them: the engine's own measure over that set. */
+async function expectMetricsOfProposal(seed: Seed, out: Awaited<ReturnType<typeof autoSchedule>>) {
+  const sides = await sql<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+    select id, home_entrant_id, away_entrant_id from fixtures where division_id = ${seed.divisionId}`;
+  const entrantsOf = new Map(
+    sides.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null)]),
+  );
+  const rows = out.assignments.map((a) => ({
+    fixtureId: a.fixture_id,
+    court: a.court_id,
+    startAt: Date.parse(a.scheduled_at),
+    endAt: Date.parse(a.ends_at),
+    entrants: entrantsOf.get(a.fixture_id)!,
+    people: [],
+  }));
+  expect(rows.length).toBeGreaterThan(0);
+  const m = boardMetrics(rows, seed.courts, seed.fixtures.length);
+  expect(out.metrics).toEqual({
+    makespan_minutes: m.makespanMinutes,
+    worst_idle_gap_minutes: m.worstIdleGapMinutes,
+    court_imbalance_minutes: m.courtImbalanceMinutes,
+    placed: rows.length,
+    total: seed.fixtures.length,
+  });
 }
 
 /** Every card in `expected` comes back exactly where it was; reports how many it checked. */
@@ -391,31 +457,47 @@ describe.skipIf(!HAS_DB)("autoSchedule start floor", () => {
       }
     }
 
+    // Round 2 has been played (held), round 1 was postponed to tomorrow, round 3 sits later. The pass
+    // cannot put round 1 behind round 2, so it keeps its time, and what it does with round 3 has to fit
+    // AROUND that time: apply writes only what the proposal lists.
     for (const kind of ["swiss", "league"] as const) {
-      it(`${kind} polish: a placed card it cannot keep behind a held later round is counted lost, not moved`, async () => {
-        const seed = await seedSwiss(
-          { startAt: midnight(-1), endAt: midnight(2) + 23 * HOUR, sessions: [] },
-          { kind, entrants: kind === "swiss" ? 8 : 4 },
-        );
-        const held = await layDown(seed, inRound(seed, 2), -1);
-        // Round 1 sits on the board for tomorrow, after the round that should follow it.
-        const first = await layDown(seed, inRound(seed, 1), 1);
-        expect(first.size).toBeGreaterThan(0);
-        const out = await run(seed, "polish");
-        expectUnmoved(out, held);
-        expect(out.assignments.filter((a) => first.has(a.fixture_id))).toEqual([]);
-        // `moved` is the engine's count: any proposed card that is not where it was, one that had no time
-        // included. That is round 3 here. The round 1 cards are on no proposal, so they are not moves.
-        expect(out.solver).toMatchObject({ lost: first.size, moved: inRound(seed, 3).length });
-        expect(out.metrics.placed).toBe(out.assignments.length);
-        ScheduleSolverInfo.parse(out.solver);
-      }, 120_000);
+      for (const mode of ["build", "polish"] as const) {
+        it(`${kind} ${mode}: a postponed round 1 keeps its time, the proposal applies around it, nothing is counted lost`, async () => {
+          const seed = await seedSwiss(
+            { startAt: midnight(-1), endAt: midnight(4) + 23 * HOUR, sessions: [] },
+            { kind, entrants: kind === "swiss" ? 8 : 4 },
+          );
+          const held = await layDown(seed, inRound(seed, 2), -1, mode === "build");
+          const first = await layDown(seed, inRound(seed, 1), 1);
+          await layDown(seed, inRound(seed, 3), 3);
+          expect(first.size).toBeGreaterThan(0);
+          const out = await run(seed, mode);
+          expectUnmoved(out, held);
+          const { after } = await applyAndAudit(seed, out);
+          let kept = 0;
+          for (const [id, was] of first) {
+            expect(after.get(id)).toEqual([was.at, was.court]);
+            // Improve times leaves it put ON the proposal; a full run cannot place it and says why.
+            if (mode === "polish") expectUnmoved(out, new Map([[id, was]]));
+            else expect(out.assignments.filter((a) => a.fixture_id === id)).toEqual([]);
+            // No time was offered for it: the card says why it was not moved.
+            if (mode === "build") expect(out.conflicts.filter((c) => c.fixture_id === id).length).toBeGreaterThan(0);
+            kept++;
+          }
+          expect(kept).toBe(first.size);
+          if (mode === "polish") {
+            const order = out.conflicts.filter((c) => c.code.toLowerCase().includes("order") && held.has(c.fixture_id));
+            expect(order.length).toBeGreaterThan(0);
+          }
+          expect(out.solver.lost).toBe(0);
+          expect(out.solver.status).not.toBe("already_optimal");
+          await expectMetricsOfProposal(seed, out);
+        }, 120_000);
+      }
     }
 
     // The organiser's pin is not the auto pass's to drop, even where it already breaks round order against
-    // a held card. The unpinned round 1 cards, which the pass would have to place, are still refused. No
-    // apply here: pins that contradict the round order give a proposal apply refuses, held or not (seen
-    // 2026-11-26 with both pins ahead of the floor).
+    // a held card. The unpinned round 1 cards, which the pass would have to place, are still refused.
     for (const kind of ["swiss", "league"] as const) {
       for (const mode of ["build", "polish"] as const) {
         it(`${kind} ${mode}: keeps a pin ahead of the floor that is already behind a held later round`, async () => {
@@ -433,6 +515,7 @@ describe.skipIf(!HAS_DB)("autoSchedule start floor", () => {
           expect(out.assignments).toHaveLength(seed.fixtures.length - (inRound(seed, 1).length - 1));
           expect(out.metrics.placed).toBe(out.assignments.length);
           expect(out.solver.locked_kept).toBe(mode === "build" ? held.size + 1 : 1);
+          await applyAndAudit(seed, out);
         }, 120_000);
       }
     }
@@ -489,6 +572,54 @@ describe.skipIf(!HAS_DB)("autoSchedule start floor", () => {
       }, 120_000);
     }
 
+    // The normal path reports a pin's own clash (the control). A held board has to say the same.
+    it("a double booking is reported on both cards by the normal path, and by a board that is held entirely", async () => {
+      const clash = (out: Awaited<ReturnType<typeof autoSchedule>>) =>
+        new Set(out.conflicts.filter((c) => c.details?.kind === "court_double_booking").map((c) => c.fixture_id));
+      const ahead = await seedSwiss({ startAt: midnight(-1), endAt: midnight(2) + 23 * HOUR, sessions: [] });
+      const [p, q] = inRound(ahead, 1);
+      await place(p!.id, midnight(1) + 10 * HOUR, ahead.courts[0]!, true);
+      await place(q!.id, midnight(1) + 10 * HOUR, ahead.courts[0]!, true);
+      expect(clash(await run(ahead, "build"))).toEqual(new Set([p!.id, q!.id]));
+
+      let checked = 0;
+      for (const others of ["all held", "some free"] as const) {
+        const seed = await seedSwiss({ startAt: midnight(-1), endAt: midnight(2) + 23 * HOUR, sessions: [] });
+        const [a, b] = inRound(seed, 1);
+        const slot = { at: midnight(-1) + 8 * HOUR, court: seed.courts[0]! };
+        await place(a!.id, slot.at, slot.court, true);
+        await place(b!.id, slot.at, slot.court, true);
+        const rest = seed.fixtures.filter((f) => f.id !== a!.id && f.id !== b!.id);
+        const was = new Map([[a!.id, slot], [b!.id, slot]]);
+        if (others === "all held") {
+          for (const [i, f] of rest.entries()) {
+            const at = { at: midnight(-1) + (9 + i) * HOUR, court: seed.courts[i % 2]! };
+            await place(f.id, at.at, at.court, true);
+            was.set(f.id, at);
+          }
+        }
+        const out = await run(seed, "build");
+        expectUnmoved(out, was);
+        expect(out.assignments).toHaveLength(12);
+        expect(clash(out), others).toEqual(new Set([a!.id, b!.id]));
+        expect(out.solver.contradictory_pins).toBeUndefined();
+        await applyAndAudit(seed, out);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    }, 120_000);
+
+    for (const mode of ["build", "polish"] as const) {
+      it(`${mode}: the metrics are measured over every row on the proposal, held ones included`, async () => {
+        const seed = await seedSwiss({ startAt: midnight(-1), endAt: midnight(2) + 23 * HOUR, sessions: [] });
+        // Held on one court only, so a measure that skips them reads a different court spread and length.
+        for (const [i, f] of inRound(seed, 1).entries()) await place(f.id, midnight(-1) + (8 + i) * HOUR, seed.courts[0]!, true);
+        const out = await run(seed, mode);
+        expect(out.assignments).toHaveLength(12);
+        await expectMetricsOfProposal(seed, out);
+      }, 120_000);
+    }
+
     it("build: places a window that starts at 23:00 and has all of the next day (1 court)", async () => {
       const seed = await seedSwiss(
         { startAt: midnight(3) + 23 * HOUR, endAt: midnight(4) + 23 * HOUR, sessions: [] },
@@ -513,4 +644,117 @@ describe.skipIf(!HAS_DB)("autoSchedule start floor", () => {
       await apply(seed, out);
     }, 120_000);
   });
+});
+
+// The pass's own default per-day cap is a way to spread a board, never a reason to place less of it:
+// whatever the room estimate behind it misses, no card is left off that a run without it would place.
+describe.skipIf(!HAS_DB)("autoSchedule default day cap never places fewer", () => {
+  const TWO_DAYS = { startAt: midnight(3), endAt: midnight(4) + 23 * HOUR, sessions: [] as [number, number][] };
+  const dayOf = (t: number) => Math.floor((t - midnight(0)) / DAY);
+  const perDay = (out: Awaited<ReturnType<typeof autoSchedule>>) => {
+    const n = new Map<number, number>();
+    for (const a of out.assignments) {
+      const d = dayOf(Date.parse(a.scheduled_at));
+      n.set(d, (n.get(d) ?? 0) + 1);
+    }
+    return Object.fromEntries([...n].sort(([a], [b]) => a - b));
+  };
+  const decide = async (seed: Seed, fixtures: Seed["fixtures"], day: number) => {
+    const was = await layDown(seed, fixtures, day);
+    for (const id of was.keys()) await sql`update fixtures set status = 'decided' where id = ${id}`;
+    return was;
+  };
+
+  it("places all six free cards when six decided cards already sit on one of the two days", async () => {
+    const seed = await seedSwiss(TWO_DAYS);
+    const done = await decide(seed, [...inRound(seed, 1), ...inRound(seed, 2).slice(0, 2)], 3);
+    expect(done.size).toBe(6);
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(6);
+    await apply(seed, out);
+  }, 120_000);
+
+  it("still spreads, counting the decided cards, when the cap that counts them fits", async () => {
+    // Four decided on day 3, eight to place over days 3 to 5: four a day on the two empty days. A cap
+    // sized without the four is three, which fits only six.
+    const seed = await seedSwiss({ ...TWO_DAYS, endAt: midnight(5) + 23 * HOUR });
+    await decide(seed, inRound(seed, 1), 3);
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(8);
+    expect(perDay(out)).toEqual({ 4: 4, 5: 4 });
+    await apply(seed, out);
+  }, 120_000);
+
+  it("places the whole board when the second day is blacked out", async () => {
+    const seed = await seedSwiss({ ...TWO_DAYS, blackouts: [[midnight(4), midnight(5)]] });
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(12);
+    await apply(seed, out);
+  }, 120_000);
+
+  it("places the whole board when every court is closed on the second day", async () => {
+    const seed = await seedSwiss(TWO_DAYS);
+    let closed = 0;
+    for (const court of seed.courts) {
+      await putCourtCalendar(seed.auth, court, {
+        hours: [],
+        exceptions: [{ date: iso(midnight(4)).slice(0, 10), closed: true, open_min: null, close_min: null }],
+      });
+      closed++;
+    }
+    expect(closed).toBe(2);
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(12);
+    await apply(seed, out);
+  }, 120_000);
+
+  it("places the whole board when another division fills the second day's play hours", async () => {
+    // Ten hours on day 3, one hour on day 4, and that hour is another division's on both courts.
+    const sessions: [number, number][] = [
+      [midnight(3) + 10 * HOUR, midnight(3) + 20 * HOUR],
+      [midnight(4) + 10 * HOUR, midnight(4) + 11 * HOUR],
+    ];
+    const seed = await seedSwiss({ ...TWO_DAYS, sessions });
+    const other = await createDivision(seed.auth, seed.competitionId, {
+      name: "Doubles",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await createEntrants(
+      seed.auth,
+      other.id,
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `D${i + 1}`, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(seed.auth, other.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(seed.auth, stage!.id);
+    let booked = 0;
+    for (const [i, f] of fixtures.slice(0, 4).entries()) {
+      await place(f.id, midnight(4) + 10 * HOUR + Math.floor(i / 2) * 30 * 60_000, seed.courts[i % 2]!);
+      booked++;
+    }
+    expect(booked).toBe(4);
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(12);
+    await apply(seed, out);
+  }, 120_000);
+
+  it("keeps a cap the organiser set, even where it leaves cards unplaced", async () => {
+    const seed = await seedSwiss(TWO_DAYS);
+    await decide(seed, [...inRound(seed, 1), ...inRound(seed, 2).slice(0, 2)], 3);
+    const [row] = await sql<{ config: Record<string, unknown> }[]>`
+      select config from schedule_settings where division_id = ${seed.divisionId}`;
+    await sql`
+      update schedule_settings set config = ${sql.json({
+        ...row!.config,
+        constraints: {
+          ...((row!.config.constraints as object | undefined) ?? {}),
+          hard: [{ type: "max_fixtures_per_day", count: 3, scope: { kind: "division", divisionId: seed.divisionId } }],
+        },
+      } as never)}
+      where division_id = ${seed.divisionId}`;
+    const out = await run(seed, "build");
+    expect(out.assignments).toHaveLength(3);
+    expect(perDay(out)).toEqual({ 4: 3 });
+  }, 120_000);
 });
