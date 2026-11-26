@@ -104,8 +104,14 @@ writing copy.
 Route handler: 200, `application/json`, no redirect, no auth. Relation
 `delegate_permission/common.handle_all_urls`.
 
-- Production origin: `com.seazn.capture` with the **Play app-signing** SHA-256 (Play Console → App integrity;
-  owner supplies it; the upload key is not it). Until supplied, production returns `[]`.
+- Production origin: `com.seazn.capture` with the **Play app-signing** SHA-256s (Play Console → App integrity;
+  the upload key is not one). Supplied by the owner 2026-11-25, listed in this order; an empty list returns `[]`.
+  - `C9:CA:20:3F:00:1D:66:32:A9:05:F7:BA:32:76:38:6F:95:38:28:E5:27:CD:F1:8C:AA:4E:2B:B1:8A:D1:5F:2E` (current
+    classic app signing key)
+  - `FA:51:ED:4F:3D:D9:E0:90:97:0F:86:21:BE:56:7B:2B:9C:B5:6C:21:4F:41:04:68:AA:0F:74:17:F3:A0:D1:3C` (previous app
+    signing key; the one in Play's asset links JSON)
+  - `7A:02:CF:5F:5F:3F:B4:45:D2:42:D1:B6:D8:CF:05:01:DD:52:FB:05:8A:74:62:C7:37:04:45:4B:10:33:C6:DD` (post-quantum
+    app signing key)
 - Staging origin: `com.seazn.capture.dev`,
   `FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C`
   (from the phone session, checked there with apksigner). This is the stock React Native debug keystore, which
@@ -161,7 +167,7 @@ N28; never run), so no web copy may promise it. A single-phone web Go live would
 **Missing destination or credit (web call).** The server refuses the app's own Go live without them, and the app
 then says "ask the organiser", to a person who may be the organiser (phone session, from its code; not re-run on
 one phone). So when the page knows one is missing, the line beside the button names it instead, in four locales:
-"Pick a destination here first." or "You need a streaming credit first." The button stays, because pairing works
+"Pick a destination here first." or "You need a Seazn credit first." The button stays, because pairing works
 without either and a refusal leaves the phone paired. It reuses what the panel already uses to gate its own Go
 live, with no new server call; a surface that does not hold that state (check the court sheet) shows
 "Check a destination is picked and you have a credit." The end-to-end walk after the spike covers this on one
@@ -227,7 +233,7 @@ The anchor's `href` holds a live credential on a page that does run analytics.
 ## 9. Needed from the owner
 
 
-- The Play app-signing SHA-256 (blocks only production assetlinks).
+- The Play app-signing SHA-256s: supplied 2026-11-25 (§5.2).
 - In-app browsers may not hand links to apps, so a person who has the app can see "isn't on this phone yet".
   The page copy is the owner-approved phone spec's. Proposal: add one line, "Already installed? Open this page in Chrome." It is left out of the build unless the owner says yes, and does not block it. Note that after the fragment is dropped, they would go back and tap again
   in Chrome from the signed-in page, so the wording must send them there.

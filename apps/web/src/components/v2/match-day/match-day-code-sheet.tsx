@@ -8,11 +8,13 @@
 // competition's codes that can still open, each with Show QR and Withdraw.
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
+import { OpenInAppRow } from "@/components/v2/open-in-app";
 import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicDate } from "@/lib/format";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { clientOrigin, dayAppLink } from "@/lib/open-in-app";
 import type { MatchDayCourt } from "@/lib/match-day/types";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import type { MatchDayCode, MatchDayCodeScope } from "@/server/api-v1/schemas";
@@ -80,7 +82,7 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, zone, co
   const [canApprove, setCanApprove] = useState(false);
   const [canCall, setCanCall] = useState(false);
   const [codes, setCodes] = useState<MatchDayCode[] | null>(null);
-  const [shown, setShown] = useState<{ id: string; qr: SeaznQr } | null>(null);
+  const [shown, setShown] = useState<{ id: string; url: string; qr: SeaznQr } | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [failed, setFailed] = useState(false);
 
@@ -104,9 +106,10 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, zone, co
   }, [competitionId]);
 
   const show = async (code: MatchDayCode) => {
-    if (code.url !== null) setShown({ id: code.id, qr: await renderSeaznQr(code.url) });
+    if (code.url !== null) setShown({ id: code.id, url: code.url, qr: await renderSeaznQr(code.url) });
   };
   const body = scopeBody(kind, venueId, courtIds);
+  const origin = clientOrigin();
 
   const mint = async () => {
     if (body === null || busy !== null) return;
@@ -206,6 +209,8 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, zone, co
             {t(dict, "matchDay.code.failed")}
           </p>
         )}
+        {/* Android phones only: "Open in app" for the code shown below it (renders nothing elsewhere). */}
+        {shown !== null && <OpenInAppRow href={origin === null ? null : dayAppLink(origin, shown.url)} />}
         {shown !== null && (
           <div data-testid="md-code-qr" className="mx-auto w-full max-w-xs">
             <SeaznQrImage testId="md-code-qr-image" sensitive qr={shown.qr} alt={t(dict, "matchDay.code.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />

@@ -9275,5 +9275,12 @@
   "openApp.fallback.title": "Seazn Club isn't on this phone yet",
   "openApp.fallback.play": "Get it on Google Play",
   "openApp.fallback.retry": "Then come back and tap Open in app again",
-  "openApp.fallback.scoreInBrowser": "Score in browser instead"
+  "openApp.fallback.scoreInBrowser": "Score in browser instead",
+  "openApp.button": "Open in app",
+  "openApp.scoreInBrowser": "Score in browser",
+  "openApp.orScan": "or scan with another phone",
+  "openApp.stream.thenGoLive": "Then hold Go live in the app.",
+  "openApp.stream.needDestination": "Pick a destination here first.",
+  "openApp.stream.needCredit": "You need a Seazn credit first.",
+  "openApp.stream.checkFirst": "Check a destination is picked and you have a credit."
 }
