@@ -202,6 +202,8 @@ describe("CourtCard", () => {
       const line = d["matchCentre.scoreUpdatedAgo"];
       expect(line, `${locale} has the key`).toBeTruthy();
       expect(line.match(/\{seconds\}/g)?.length, `${locale} has one {seconds}`).toBe(1);
+      // English pasted into a locale is a translation gap, not a translation.
+      if (locale !== "en") expect(line, `${locale} is translated, not English`).not.toBe(en["matchCentre.scoreUpdatedAgo"]);
       checked += 1;
     }
     expect(checked, "all four locales checked").toBe(4);
