@@ -367,18 +367,45 @@ body {
   .help-prose h3 {
     @apply scroll-mt-24;
   }
-  /* Blog posts (layout A, owner 2026-11-25). A post shares help's pipeline and `.help-prose`, but reads as an article:
-     17px at 1.7 and section headings in normal case. A picture keeps the figure rule below: its own width, capped at
-     the column, so a narrow screenshot is never scaled up (art fills the column through its own markup). Every rule
-     needs BOTH classes, so a help article never takes one (e2e/blog.spec.ts "layout A" measures both). */
-  .competition-prose.blog-prose {
-    @apply text-[17px];
-    line-height: 1.7;
+  /* Blog posts (reading layout "A", owner 2026-11-25). A post shares help's pipeline and `.help-prose`, but reads as an
+     article: the body text and lists in the serif the post page loads (`--blog-serif`, app/blog/[slug]/page.tsx), 20px at
+     1.6 (18px on a phone), and section headings in normal case in the house sans, as are tables and captions. A picture
+     keeps the figure rule below: its own width, capped at the column, so a narrow screenshot is never scaled up (art fills
+     the column through its own markup). Every rule needs BOTH classes, so a help article never takes one
+     (e2e/blog.spec.ts "the reading column" measures both). */
+  .competition-prose.blog-prose p,
+  .competition-prose.blog-prose li {
+    font-family: var(--blog-serif), Georgia, serif;
+    font-size: 20px;
+    line-height: 1.6;
+    color: #242424;
+  }
+  .competition-prose.blog-prose p {
+    margin-block: 1.35em;
+  }
+  .competition-prose.blog-prose p:first-child {
+    margin-top: 0;
+  }
+  .competition-prose.blog-prose p:last-child {
+    margin-bottom: 0;
   }
   .competition-prose.blog-prose h2 {
-    margin-top: 2.5rem;
+    margin-top: 3rem;
+    font-size: 24px;
+    line-height: 1.28;
     letter-spacing: -0.01em;
+    color: #242424;
     @apply normal-case;
+  }
+  @media (max-width: 599.98px) {
+    .competition-prose.blog-prose p,
+    .competition-prose.blog-prose li {
+      font-size: 18px;
+    }
+    .competition-prose.blog-prose h2 {
+      margin-top: 2.25rem;
+      font-size: 21px;
+    }
   }
   /* A post's own Markdown table (server/blog-table-stack.ts): on a narrow phone each row is a card, the first cell
      its title and every other cell under its column's name. The column header row stays for a screen reader, out of

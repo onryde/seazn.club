@@ -47,7 +47,11 @@ vi.mock("@/server/blog-content", async (importOriginal) => {
 });
 
 // The shell's display face (components/marketing/marketing-shell.tsx) is next/font, which only exists inside a Next build.
-vi.mock("next/font/google", () => ({ Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }) }));
+// The post's serif (app/blog/[slug]/page.tsx) too: the mock's class name is what shows where the page puts it.
+vi.mock("next/font/google", () => ({
+  Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }),
+  Source_Serif_4: (o: { variable: string }) => ({ variable: `serif-face-on(${o.variable})`, className: "" }),
+}));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   usePathname: () => "/blog",
@@ -195,13 +199,13 @@ describe("the post page, through the real renderer (the pilot)", () => {
     }
   });
 
-  it("'On this page' lists the body's sections and then 'How Seazn handles it'", async () => {
+  it("has no 'On this page' list; the sections and 'How Seazn handles it' stay link targets", async () => {
     const markup = await html(PILOT);
-    const rail = /data-testid="help-toc".*?<\/nav>/s.exec(markup)![0];
-    const entries = [...rail.matchAll(/<a [^>]*href="#([^"]+)"/g)].map((m) => m[1]);
-    expect(entries.length).toBeGreaterThanOrEqual(3);
-    expect(entries.at(-1)).toBe("how-seazn-handles-it");
-    for (const id of entries) expect(markup, id).toContain(`id="${id}"`);
+    expect(markup).not.toContain('data-testid="help-toc"');
+    expect(text(markup)).not.toContain("On this page");
+    const headings = [...markup.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]!);
+    expect(headings.length, "anti-vacuity: section headings with an id").toBeGreaterThanOrEqual(3);
+    expect(markup).toContain('id="how-seazn-handles-it"');
   });
 
   it("an unknown slug is a 404, never a render", async () => {
@@ -210,15 +214,32 @@ describe("the post page, through the real renderer (the pilot)", () => {
   });
 });
 
-// Layout A (owner pick 2026-11-25): one 44rem reading column. The widths themselves are measured in a browser
-// (e2e/blog.spec.ts "layout A"), which runs only on pushes to main; this holds the two things a PR can check without a DOM.
-describe("layout A, as the markup declares it (pilot)", () => {
+// The reading layout (owner pick "A", 2026-11-25): one centred 680px column, no table of contents, the body in a serif
+// that only a post page loads. Widths and faces are measured in a browser (e2e/blog.spec.ts "the reading column"),
+// which runs only on pushes to main; this holds what a PR can check without a DOM.
+describe("the reading column, as the markup declares it (pilot)", () => {
+  it("the article is one centred 680px column, not a grid with a rail beside it", async () => {
+    const markup = await html(PILOT);
+    const article = /<article class="([^"]*)" data-testid="blog-post">/.exec(markup)![1]!.split(" ");
+    expect(article).toEqual(expect.arrayContaining(["mx-auto", "max-w-[42.5rem]"]));
+    expect(article.filter((c) => c.includes("grid"))).toEqual([]);
+    expect(markup).not.toContain("<aside");
+  });
+
   it("every Markdown segment is the blog's own prose, and nothing in the post is capped to help's 34rem", async () => {
     const markup = await html(PILOT);
     const prose = [...markup.matchAll(/class="competition-prose ([^"]*)"/g)].map((m) => m[1]!.split(" "));
     expect(prose.length, "anti-vacuity: prose segments").toBeGreaterThan(1);
     for (const classes of prose) expect(classes).toEqual(expect.arrayContaining(["help-prose", "blog-prose"]));
     expect(markup).not.toContain("max-w-[34rem]");
+  });
+
+  // `var(--blog-serif)` is what globals.css asks for, so the name is part of the contract.
+  it("the post page puts the serif's variable on its own root, and the blog index does not", async () => {
+    expect(await html(PILOT)).toMatch(/^<main class="serif-face-on\(--blog-serif\)">/);
+    const index = renderToStaticMarkup(await BlogIndexPage());
+    expect(index.length, "premise: the index rendered").toBeGreaterThan(500);
+    expect(index).not.toContain("serif-face-on");
   });
 });
 
@@ -233,7 +254,7 @@ describe("the post page with related posts and an update (fixtures, through the 
       <BlogPostView
         title={draw.title} answer={draw.description} date={draw.date} dateLabel={formatBlogDate(draw.date)}
         updated={draw.updated} updatedLabel={`Updated ${formatBlogDate(draw.updated!)}`} topicLabel="Standings points"
-        parts={[{ kind: "html", html: "<p>Body.</p>" }]} toc={[]}
+        parts={[{ kind: "html", html: "<p>Body.</p>" }]}
         handles={{ href: "/help/sports/football", title: "How Seazn handles it", body: "b", linkLabel: "Open" }}
         related={related.map((r) => ({ href: blogUrl(r.slug), title: r.title, topic: "t" }))}
         labels={{ blog: "Blog", related: "Related posts", swipe: "swipe" }}

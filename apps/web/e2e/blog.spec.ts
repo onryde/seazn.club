@@ -1,7 +1,8 @@
 // The blog at desktop width in a browser (Blog P2 Task 4; the seven phone and tablet widths are e2e/mobile/blog.spec.ts).
 // What the unit suite (src/app/blog/__tests__, node, no DOM) cannot see: no sideways page scroll at 1280, 768 and 320, axe,
-// a wide example table scrolling INSIDE a focusable named region (AGENTS.md class 23), the "On this page" rail beside the
-// article, the nav's client-side signed-in swap against the real session cookies, the Help icon's hit area, and the feed.
+// a wide example table scrolling INSIDE a focusable named region (AGENTS.md class 23), the one reading column with no
+// "On this page", the serif a post page alone loads, the nav's client-side signed-in swap against the real session cookies,
+// the Help icon's hit area, and the feed.
 //
 // The pilot is the one post on disk; the index shows no sport chips until a post names a sport (the chips' rule is a unit
 // test, src/app/blog/__tests__/blog-pages.test.tsx), so no chip is clicked here.
@@ -79,18 +80,9 @@ test.describe("signed out", () => {
     });
   }
 
-  test("1280: the article, then the 'On this page' rail on its right, which marks and scrolls to a section", async ({ page }) => {
-    await visit(page, POST, 1280);
-    const rail = page.getByRole("navigation", { name: "On this page" });
-    await expect(rail).toBeVisible();
-    const h1 = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
-    const box = (await rail.boundingBox())!;
-    expect(h1.x + h1.width, "the article is left of the rail").toBeLessThanOrEqual(box.x);
-    const last = rail.locator("a").last();
-    await expect(last).toHaveAttribute("href", "#how-seazn-handles-it");
-    await last.click();
+  test("'How Seazn handles it' is still a link target, and its link leads to a help page that exists", async ({ page }) => {
+    await visit(page, `${POST}#how-seazn-handles-it`, 1280);
     await expect(page.locator("#how-seazn-handles-it")).toBeInViewport();
-    // The post's "How Seazn handles it" link leads to a help page that exists.
     const go = page.getByTestId("blog-handles-it").getByRole("link");
     const href = (await go.getAttribute("href"))!;
     expect(href).toMatch(/^\/help\//);
@@ -149,13 +141,16 @@ test.describe("signed out", () => {
   });
 });
 
-// Layout A (owner pick 2026-11-25): everything in a post's reading column is the SAME 44rem wide and starts at the same
-// left edge. A screenshot is the one exception to the width: it is never scaled up past its own pixels. Measured in the page, element by element; a kind with no element found fails (anti-vacuity), so a renamed
-// test id cannot pass by checking nothing.
+// The reading layout (owner pick "A", 2026-11-25): one centred 680px column at every width and no table of contents.
+// Everything in a post's column is the SAME width and starts at the same left edge. A screenshot is the one exception to
+// the width: it is never scaled up past its own pixels. Measured in the page, element by element; a kind with no element
+// found fails (anti-vacuity), so a renamed test id cannot pass by checking nothing.
 const REM = 16;
+const COLUMN = 680;
 const COLUMN_PARTS: Record<string, string> = {
   header: '[data-testid="blog-post"] > header',
   lede: '[data-testid="blog-post"] > header > p:first-of-type',
+  byline: '[data-testid="blog-byline"]',
   prose: ".blog-prose",
   heading: ".blog-prose h2",
   paragraph: ".blog-prose > p",
@@ -166,7 +161,7 @@ const COLUMN_PARTS: Record<string, string> = {
   handles: '[data-testid="blog-handles-it"]',
   related: '[data-testid="blog-related"]',
 };
-const COMMON = ["header", "lede", "prose", "heading", "paragraph", "handles", "related"];
+const COMMON = ["header", "lede", "byline", "prose", "heading", "paragraph", "handles", "related"];
 const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
   { path: "/blog/chess-points-and-half-points", kinds: [...COMMON, "example", "picture"] },
   { path: "/blog/how-standings-points-work", kinds: [...COMMON, "example", "picture"] },
@@ -174,16 +169,81 @@ const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
   { path: "/blog/what-you-need-to-stream-a-match", kinds: [...COMMON, "art"] },
 ];
 
-test.describe("layout A: one reading column", () => {
+/** The face the body asks for, as the browser names it (next/font's own family name carries it). */
+const SERIF = /Source.?Serif.?4/i;
+
+const style = (page: Page, selector: string) =>
+  page.locator(selector).first().evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { size: s.fontSize, line: parseFloat(s.lineHeight), transform: s.textTransform, family: s.fontFamily, color: s.color, top: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, bottom: `${s.borderBottomWidth} ${s.borderBottomStyle} ${s.borderBottomColor}` };
+  });
+
+/** The font files of the serif's faces, as this page's stylesheets declare them (the local fallback face has none). */
+const serifFiles = (page: Page) =>
+  page.evaluate((serif) => {
+    const files: string[] = [];
+    const walk = (rules: CSSRuleList, base: string) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSFontFaceRule && new RegExp(serif, "i").test(rule.style.getPropertyValue("font-family"))) {
+          for (const m of rule.style.getPropertyValue("src").matchAll(/url\("?([^")]+)"?\)/g)) files.push(new URL(m[1]!, base).href);
+        } else if ("cssRules" in rule) walk((rule as CSSGroupingRule).cssRules, base);
+      }
+    };
+    for (const sheet of document.styleSheets) walk(sheet.cssRules, sheet.href ?? location.href);
+    return files;
+  }, SERIF.source);
+
+/** Every font the page asked the network for, and every font it preloads. */
+function watchFonts(page: Page): string[] {
+  const asked: string[] = [];
+  page.on("request", (r) => {
+    if (r.resourceType() === "font" || /\.(woff2?|ttf|otf)(\?|$)/.test(r.url()) || /fonts\.(googleapis|gstatic)\.com/.test(r.url())) asked.push(r.url());
+  });
+  return asked;
+}
+
+/**
+ * The faces Chromium actually drew each of these elements' own text with (CDP `CSS.getPlatformFontsForNode`). A glyph the
+ * web font lacks is drawn with a second, system face, which computed style cannot show.
+ */
+async function drawnWith(page: Page, selector: string): Promise<{ nodes: number; glyphs: number; faces: Map<string, number> }> {
+  await page.evaluate(() => document.fonts.ready);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument", { depth: -1 });
+  const { nodeIds } = await cdp.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector });
+  const faces = new Map<string, number>();
+  let nodes = 0;
+  let glyphs = 0;
+  for (const nodeId of nodeIds) {
+    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+    if (fonts.length > 0) nodes++;
+    for (const f of fonts) {
+      const face = `${f.isCustomFont ? "web" : "system"}:${f.familyName}`;
+      faces.set(face, (faces.get(face) ?? 0) + f.glyphCount);
+      glyphs += f.glyphCount;
+    }
+  }
+  await cdp.detach();
+  return { nodes, glyphs, faces };
+}
+const notTheSerif = (faces: Map<string, number>) => [...faces].filter(([face]) => !(face.startsWith("web:") && SERIF.test(face))).map(([face, n]) => `${face} x${n}`);
+
+test.describe("the reading column", () => {
   test.use(signedOut);
 
   for (const width of WIDTHS) {
     for (const { path, kinds } of COLUMN_POSTS) {
-      test(`${path} at ${width}: every part of the post is one column wide`, async ({ page }, testInfo) => {
+      test(`${path} at ${width}: one centred column, every part of the post in it, no 'On this page'`, async ({ page }, testInfo) => {
         await visit(page, path, width);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-        const column = Math.min(44 * REM, width - 2 * 16);
+        await expect(page.getByTestId("help-toc")).toHaveCount(0);
+        await expect(page.getByText("On this page", { exact: true })).toHaveCount(0);
+        const column = Math.min(COLUMN, width - 2 * 16);
         const left = (await page.locator(COLUMN_PARTS.header!).boundingBox())!.x;
+        const inner = await page.evaluate(() => document.documentElement.clientWidth);
+        expect(Math.abs(left - (inner - column) / 2), `centred: x=${left} in ${inner}px`).toBeLessThanOrEqual(1);
         let checked = 0;
         const wrong: string[] = [];
         for (const kind of kinds) {
@@ -214,24 +274,144 @@ test.describe("layout A: one reading column", () => {
     await visit(page, "/blog/how-standings-points-work", 1280);
     const img = page.locator(COLUMN_PARTS.picture!);
     const natural = await naturalWidth(img);
-    expect(natural, "premise: narrower than the 44rem column").toBeLessThan(44 * REM);
+    expect(natural, "premise: narrower than the 680px column").toBeLessThan(COLUMN);
     expect(Math.abs((await img.boundingBox())!.width - natural), `drawn at its own ${natural}px`).toBeLessThanOrEqual(1);
   });
 
-  const style = (page: Page, selector: string) =>
-    page.locator(selector).first().evaluate((el) => {
-      const s = getComputedStyle(el);
-      return { size: s.fontSize, line: s.lineHeight, transform: s.textTransform };
+  // Phone sizes below 600, where the art also changes drawing; the full sizes from there. 599 and 600 are the two sides.
+  for (const { width, size } of [
+    { width: 1280, size: { body: 20, title: "42px", lede: "22px", h2: "24px" } },
+    { width: 600, size: { body: 20, title: "42px", lede: "22px", h2: "24px" } },
+    { width: 599, size: { body: 18, title: "31px", lede: "18px", h2: "21px" } },
+    { width: 320, size: { body: 18, title: "31px", lede: "18px", h2: "21px" } },
+  ]) {
+    test(`a post's type at ${width}: a ${size.body}px serif body at 1.6, a grey subtitle, the byline between two hairlines`, async ({ page }) => {
+      // The plate post has a list-free body, so the list item comes from the streaming guide.
+      await visit(page, "/blog/chess-points-and-half-points", width);
+      let checked = 0;
+      for (const selector of [".blog-prose > p", ".blog-prose li"]) {
+        const s = await style(page, selector);
+        expect(s.size, selector).toBe(`${size.body}px`);
+        expect(Math.abs(s.line - size.body * 1.6), `${selector} line height ${s.line}`).toBeLessThan(0.5);
+        expect(s.family.split(",")[0], selector).toMatch(SERIF);
+        expect(s.color, selector).toBe("rgb(36, 36, 36)");
+        checked++;
+      }
+      expect((await style(page, "main h1")).size).toBe(size.title);
+      const lede = await style(page, COLUMN_PARTS.lede!);
+      expect([lede.size, lede.color]).toEqual([size.lede, "rgb(107, 107, 107)"]);
+      const h2 = await style(page, ".blog-prose h2");
+      expect([h2.size, h2.transform]).toEqual([size.h2, "none"]);
+      const byline = await style(page, COLUMN_PARTS.byline!);
+      expect([byline.top, byline.bottom]).toEqual(["1px solid rgb(236, 236, 236)", "1px solid rgb(236, 236, 236)"]);
+      // Everything that is not body text stays in the house sans.
+      const sans = [
+        "main h1",
+        COLUMN_PARTS.lede!,
+        '[data-testid="blog-post"] nav[aria-label="Breadcrumb"] a',
+        `${COLUMN_PARTS.byline!} time`,
+        ".blog-prose h2",
+        '[data-testid="blog-example"] figcaption',
+        '[data-testid="blog-example"] th',
+        '[data-testid="blog-example"] td',
+        ".blog-prose figure figcaption",
+        '[data-testid="blog-handles-it"] h2',
+        '[data-testid="blog-handles-it"] p',
+        '[data-testid="blog-handles-it"] a',
+        '[data-testid="blog-related"] li a span',
+      ];
+      for (const selector of sans) {
+        await expect(page.locator(selector).first(), `anti-vacuity: ${selector}`).toBeAttached();
+        expect((await style(page, selector)).family, selector).not.toMatch(SERIF);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: elements whose face was read").toBe(sans.length + 2);
     });
+  }
 
-  test("a post's type: 17px body at 1.7, a 19px lede, section headings in normal case", async ({ page }) => {
+  test("a post page loads the serif from this site; no font comes from anywhere else", async ({ page, baseURL }) => {
+    const asked = watchFonts(page);
     await visit(page, "/blog/chess-points-and-half-points", 1280);
-    const p = await style(page, ".blog-prose > p");
-    expect(p.size).toBe("17px");
-    expect(Math.abs(parseFloat(p.line) - 17 * 1.7), `line height ${p.line}`).toBeLessThan(0.5);
-    expect((await style(page, ".blog-prose li")).size).toBe("17px");
-    expect((await style(page, COLUMN_PARTS.lede!)).size).toBe("19px");
-    expect((await style(page, ".blog-prose h2")).transform).toBe("none");
+    await page.waitForLoadState("networkidle");
+    await page.evaluate(() => document.fonts.ready);
+    const files = await serifFiles(page);
+    expect(files.length, "premise: the serif declares its files").toBeGreaterThan(0);
+    const loaded = asked.filter((u) => files.includes(u));
+    console.log(`post page: ${asked.length} font requests, ${loaded.length} of them the serif (${files.length} declared)`);
+    expect(loaded.length, "the serif was fetched").toBeGreaterThan(0);
+    expect(asked.filter((u) => new URL(u).origin !== new URL(baseURL!).origin), "fonts from another origin").toEqual([]);
+    expect(new Set(loaded).size, "one file: the Latin one, regular and bold together").toBe(1);
+    const drawn = await drawnWith(page, ".blog-prose > p");
+    expect(drawn.nodes, "anti-vacuity: paragraphs drawn").toBeGreaterThan(0);
+    expect(notTheSerif(drawn.faces)).toEqual([]);
+  });
+
+  test("no other page asks for the serif: the blog index, help, the home page and pricing", async ({ page }) => {
+    // The files are read from a post, then each other page is opened fresh and left to settle while its links prefetch.
+    // A fixed settle, not "network idle": the home page keeps prefetching and is never idle.
+    test.setTimeout(150_000);
+    await visit(page, "/blog/chess-points-and-half-points", 1280);
+    const files = await serifFiles(page);
+    expect(files.length, "premise").toBeGreaterThan(0);
+    let checked = 0;
+    for (const path of ["/blog", "/help", "/help/registration/card-payments", "/en", "/pricing"]) {
+      const other = await page.context().newPage();
+      const asked = watchFonts(other);
+      const postPrefetches: string[] = [];
+      other.on("requestfinished", (r) => {
+        if (/\/blog\/[a-z0-9-]+\?_rsc=/.test(r.url())) postPrefetches.push(r.url());
+      });
+      await visit(other, path, 1280);
+      await other.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      // The index is where this leaks: a prefetched post route carries its preload hints with it. The premise is that
+      // one was prefetched, or the check below would pass with nothing to catch.
+      if (path === "/blog") await expect.poll(() => postPrefetches.length, { message: "the index prefetched a post", timeout: 30_000 }).toBeGreaterThan(0);
+      await other.waitForTimeout(3_000);
+      expect(asked.length, `${path}: anti-vacuity, its own fonts were seen`).toBeGreaterThan(0);
+      expect(asked.filter((u) => files.includes(u)), path).toEqual([]);
+      const preloaded = await other.locator('link[rel="preload"][as="font"]').evaluateAll((els) => els.map((e) => (e as HTMLLinkElement).href));
+      expect(preloaded.filter((u) => files.includes(u)), `${path}: preload`).toEqual([]);
+      await other.close();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: pages checked").toBe(5);
+  });
+
+  // The serif is a Latin subset: every character a post draws in it must be in it (the ½ of a drawn game, the × and the
+  // dashes), or the browser quietly draws that one in another face. The posts come from the feed.
+  test("every post's body is drawn wholly in the serif, and so is every non-ASCII character any post uses", async ({ page, request }) => {
+    const xml = await (await request.get("/blog/rss.xml")).text();
+    const paths = [...xml.matchAll(/<link>https?:\/\/[^<]+?(\/blog\/[a-z0-9-]+)<\/link>/g)].map((m) => m[1]!);
+    expect(paths.length, "anti-vacuity: posts in the feed").toBeGreaterThan(20);
+    test.setTimeout(Math.max(120_000, paths.length * 8_000));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const special = new Set<string>();
+    const wrong: string[] = [];
+    let nodes = 0;
+    let glyphs = 0;
+    for (const path of paths) {
+      const res = await page.goto(path);
+      expect(res?.status(), path).toBe(200);
+      const drawn = await drawnWith(page, ".blog-prose p, .blog-prose p *, .blog-prose li, .blog-prose li *");
+      expect(drawn.nodes, `${path}: anti-vacuity, body text drawn`).toBeGreaterThan(0);
+      for (const face of notTheSerif(drawn.faces)) wrong.push(`${path}: ${face}`);
+      nodes += drawn.nodes;
+      glyphs += drawn.glyphs;
+      for (const c of (await page.getByTestId("blog-post").innerText()).match(/[^\x00-\x7F]/g) ?? []) if (!/\s/.test(c)) special.add(c);
+    }
+    expect(wrong, `${paths.length} posts, ${nodes} elements, ${glyphs} glyphs`).toEqual([]);
+    // Tables are sans today; a character used only there must still be in the serif before it moves into a sentence.
+    const chars = [...special].sort().join("");
+    expect(chars, "premise: posts use the half of a drawn game").toContain("½");
+    await page.locator(".blog-prose").first().evaluate((el, text) => {
+      const probe = el.appendChild(document.createElement("p"));
+      probe.id = "glyph-probe";
+      probe.textContent = text;
+    }, chars);
+    const probe = await drawnWith(page, "#glyph-probe");
+    console.log(`serif sweep: ${paths.length} posts, ${nodes} elements, ${glyphs} glyphs; non-ASCII characters probed: ${chars}`);
+    expect(probe.glyphs, "anti-vacuity: probe glyphs").toBeGreaterThanOrEqual([...chars].length);
+    expect(notTheSerif(probe.faces), chars).toEqual([]);
   });
 
   // The art has two drawings: the browser takes the phone one below 600px and the wide one from 600. Both must really
@@ -259,12 +439,15 @@ test.describe("layout A: one reading column", () => {
     expect(checked, "anti-vacuity: widths checked").toBe(4);
   });
 
-  // The positive pair: `.help-prose` is shared, so a help article must still be help's own type and width.
-  test("a help article keeps help's own prose: 15px, uppercase section headings, a 34rem column", async ({ page }) => {
+  // The positive pair: `.help-prose` is shared, so a help article must still be help's own type, width and contents list.
+  test("a help article keeps help's own prose and its 'On this page': 15px sans, uppercase headings, a 34rem column", async ({ page }) => {
     await visit(page, "/help/registration/card-payments", 1280);
     await expect(page.locator(".help-prose")).toHaveCount(1);
     await expect(page.locator(".blog-prose")).toHaveCount(0);
-    expect((await style(page, ".help-prose > p")).size).toBe("15px");
+    await expect(page.getByRole("navigation", { name: "On this page" })).toBeVisible();
+    const p = await style(page, ".help-prose > p");
+    expect(p.size).toBe("15px");
+    expect(p.family).not.toMatch(SERIF);
     expect((await style(page, ".help-prose h2")).transform).toBe("uppercase");
     const box = (await page.locator(".help-prose").boundingBox())!;
     expect(Math.round(box.width)).toBe(34 * REM);
