@@ -59,7 +59,7 @@ const SHA256: Record<string, string> = {
   // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
   // Task 46 (owner 2026-11-24): + the answer's optional `delivery`, additive, on go-live and live only (review m1); its prose says
   // any session with a stored fact (review ruling, widened from Seazn-hosted only), unrelated to the request's `delivery` (m3). Re-pinned on the rebase.
-  "capture-beat.v1.json": "2696d9d899c3870b86b50d1e90c6e760c26cb61e902ce092a79754c25400afdb",
+  "capture-beat.v1.json": "6f34d9453195e464fc659d3a030968f380e2c838f35db4630536b339a56b4849",
   "capture-start.v1.json": "daf6383be934c600c6dbd439e8596f9af01f3d655578fa8b0b771d695672ad64",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "9c51829e4d1e9156cdf8ac19f1335476aa128bab62eaf126b1783fa182da8405",

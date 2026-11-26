@@ -666,7 +666,7 @@
                   "maximum": 9007199254740991
                 },
                 "cameraIngest": {
-                  "description": "The phone's camera feed at Cloudflare, from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The phone's camera feed at Cloudflare: connected, disconnected or errored. It follows the latest live-input notification Cloudflare sent for it, EXCEPT that a disconnected is told connected while the relay's own fresh beat, stored after that notification, shows the camera live (a late notification for a dead connection leg must not hide a camera that is on air). Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -675,7 +675,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), exactly as the latest live-input notification Cloudflare sent for it says: connected, disconnected or errored; never overridden by the relay's beat. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -877,7 +877,7 @@
                   "maximum": 9007199254740991
                 },
                 "cameraIngest": {
-                  "description": "The phone's camera feed at Cloudflare, from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The phone's camera feed at Cloudflare: connected, disconnected or errored. It follows the latest live-input notification Cloudflare sent for it, EXCEPT that a disconnected is told connected while the relay's own fresh beat, stored after that notification, shows the camera live (a late notification for a dead connection leg must not hide a camera that is on air). Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -886,7 +886,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), exactly as the latest live-input notification Cloudflare sent for it says: connected, disconnected or errored; never overridden by the relay's beat. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",

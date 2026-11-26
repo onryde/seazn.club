@@ -113,8 +113,8 @@ const DELIVERY_PROSE: Record<string, string> = {
   "delivery.programmePhase": "What the programme shows, as the relay's last beat reported it: waiting, live, frozen (the camera's picture stalled), reconnecting or final. Omitted on the same terms as relayOutput.",
   "delivery.fps": "The programme's frames per second, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
   "delivery.kbps": "The programme's bitrate in kbit/s, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
-  "delivery.cameraIngest": "The phone's camera feed at Cloudflare, from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
-  "delivery.programmeIngest": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+  "delivery.cameraIngest": "The phone's camera feed at Cloudflare: connected, disconnected or errored. It follows the latest live-input notification Cloudflare sent for it, EXCEPT that a disconnected is told connected while the relay's own fresh beat, stored after that notification, shows the camera live (a late notification for a dead connection leg must not hide a camera that is on air). Omitted when Cloudflare has sent none.",
+  "delivery.programmeIngest": "The programme feed at Cloudflare (a composed session's only), exactly as the latest live-input notification Cloudflare sent for it says: connected, disconnected or errored; never overridden by the relay's beat. Omitted when Cloudflare has sent none.",
 };
 const STAGE_PROSE: Record<string, string> = {
   stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",

@@ -13,10 +13,12 @@
 //     `ingest_status`, source `webhook`, payload.event): live_input.connected | .disconnected | .errored → connected |
 //     disconnected | errored. The event name, not the event's `to_state`: the port folds `errored` into `unknown`, and an
 //     errored input is a fact the phone can show.
-//     …EXCEPT a `disconnected` the relay's own newer beat contradicts (`ingestOf`): a late notification for a DEAD leg (the
-//     phone's SRT leg, torn down after it fell back to RTMPS) names the input, not the protocol or the connection, and carries a
-//     moment newer than the reconnect, so nothing in the notification tells it from a real drop (stg 2026-11-26, session c02f56a0:
-//     the phone was told "camera-ingest disconnected" while on air). The relay is the one reader that sees the input's frames.
+//     …EXCEPT the CAMERA's `disconnected` when the relay's own newer beat shows the camera live (`cameraIngestOf`): a late notification for
+//     a DEAD leg (the phone's SRT leg, torn down after it fell back to RTMPS) names the input, not the protocol or the connection,
+//     and carries a moment newer than the reconnect, so nothing in the notification tells it from a real drop (stg 2026-11-26,
+//     session c02f56a0: the phone was told "camera-ingest disconnected" while on air). The relay sees the camera's frames; its
+//     fresh beat, stored after the notification, outranks it. The programme input is NEVER outranked: its only relay word, the
+//     push's `output`, is a socket state a stalled encoder keeps `connected`, and there is no stg evidence it is needed.
 // Unknown or absent → the member is omitted, never null. A stored word the wire does not name is unknown: each member is
 // checked against the wire's own schema, so nothing outside the contract is ever sent.
 import { CaptureDelivery } from "@/server/api-v1/capture-schemas";
@@ -31,9 +33,12 @@ export type StoredDelivery = {
   /** payload.event of the latest recorded live-input notification for the session's camera / programme input; null when none. */
   cameraEvent: string | null;
   programmeEvent: string | null;
-  /** That notification's moment (fixture_stream_events.occurred_at: Cloudflare's own time when it sent one); null when none. */
+  /** The camera notification's moment (fixture_stream_events.occurred_at: Cloudflare's own `updated_at` when it sent one, else its
+   *  `ts`, else our arrival); null when none. CLOCK ASSUMPTION: it is compared with `relayBeatAt`, OUR storage time, so with CF's
+   *  clock behind ours a beat stored just before a real drop can look "after" it (the window is the skew, and the relay's
+   *  `live` proof still has to hold), and ahead delays the stale-leg fix by the skew. The events table keeps no receipt time to
+   *  compare instead; adding one is a migration, and the camera guard's safety rests on the frame proof, not on this order. */
   cameraEventAt: Date | null;
-  programmeEventAt: Date | null;
 };
 
 type Ingest = NonNullable<CaptureDelivery["cameraIngest"]>;
@@ -51,22 +56,16 @@ const wordOf = (event: string | null): Ingest | undefined =>
 /** The relay's beat says the camera is arriving: its input link is up AND the programme is on the camera's frames (`live`; a
  *  waiting, frozen, reconnecting or final programme is not the camera on air). */
 const cameraArriving = (beat: Record<string, unknown>): boolean => beat.input === "connected" && beat.programmePhase === "live";
-/** The relay's beat says its push to the programme input is up. */
-const programmeUp = (beat: Record<string, unknown>): boolean => beat.output === "connected";
-
-/** The notification's word for one input, except that a `disconnected` is outranked (told `connected`) when ALL of: the relay's
- *  stored beat is a fact about now (`liveBeat`), it shows this input working (`proves`), and it was stored AFTER the notification.
- *  The last is what keeps a real drop: a beat older than the notification cannot know of it, so it never contradicts it — and a
- *  notification with no moment, or one at the beat's own moment, is no ordering, so it stands. The relay's next beat after a real
- *  drop shows the input down (backoff / reconnecting), so a `connected` told in the gap lasts at most one beat. Only
- *  `disconnected` is outranked: `errored` is a fact the phone can show, and `connected` needs no help. */
-function ingestOf(
-  event: string | null, eventAt: Date | null, beat: Record<string, unknown> | null, beatAt: Date | null,
-  proves: (beat: Record<string, unknown>) => boolean,
-): Ingest | undefined {
+/** The camera notification's word, except that a `disconnected` is outranked (told `connected`) when ALL of: the relay's stored beat
+ *  is a fact about now (`liveBeat`), it shows the camera arriving (`cameraArriving`), and it was stored AFTER the notification.
+ *  The last keeps a real drop from being contradicted by a beat that cannot know of it, and a notification with no moment, or one at
+ *  the beat's own moment, is no ordering, so it stands. Cost of a wrong call, on a real drop: the camera reads `connected` for the
+ *  relay's freeze latency, plus what its pull still has buffered, plus up to one beat (5 s) until the next beat shows it down.
+ *  Only `disconnected` is outranked: `errored` is a fact the phone can show, and `connected` needs no help. */
+function cameraIngestOf(event: string | null, eventAt: Date | null, beat: Record<string, unknown> | null, beatAt: Date | null): Ingest | undefined {
   const word = wordOf(event);
   if (word !== "disconnected" || beat === null || beatAt === null || eventAt === null) return word;
-  return beatAt.getTime() > eventAt.getTime() && proves(beat) ? "connected" : word;
+  return beatAt.getTime() > eventAt.getTime() && cameraArriving(beat) ? "connected" : word;
 }
 
 /** The stored beat, when it is a fact about now: an object, fresh, and not the Machine's final beat. */
@@ -86,8 +85,8 @@ export function deliveryOf(s: StoredDelivery, now: Date): CaptureDelivery {
     programmePhase: beat?.programmePhase,
     fps: rounded(beat?.fps),
     kbps: rounded(beat?.bitrateKbps),
-    cameraIngest: ingestOf(s.cameraEvent, s.cameraEventAt, beat, s.relayBeatAt, cameraArriving),
-    programmeIngest: ingestOf(s.programmeEvent, s.programmeEventAt, beat, s.relayBeatAt, programmeUp),
+    cameraIngest: cameraIngestOf(s.cameraEvent, s.cameraEventAt, beat, s.relayBeatAt),
+    programmeIngest: wordOf(s.programmeEvent),
   };
   const out: Record<string, unknown> = {};
   for (const [member, value] of Object.entries(candidates)) {
