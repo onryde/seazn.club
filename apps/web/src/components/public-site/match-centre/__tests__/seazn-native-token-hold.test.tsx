@@ -174,6 +174,8 @@ beforeEach(() => {
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("RELAY_DRIVERS", "");
   vi.stubEnv("STREAM_PLAYBACK_HOST", "");
+  // W-LL: the held live address is the one that carries `?protocol=llhls`; the switch's default is stg-only (review I3), so it is explicit.
+  vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
   hls.instances.length = 0;
   // A player's failure report goes out as a beacon (seazn-video-report.ts); without one it would fall back to `fetch` and count as a read.
   vi.stubGlobal("navigator", { sendBeacon: () => true });

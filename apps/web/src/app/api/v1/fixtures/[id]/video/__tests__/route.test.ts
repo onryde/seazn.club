@@ -11,7 +11,7 @@
 //   - EVERY answer is `private, no-store`, varying on Cookie and Authorization, and every status is a documented response.
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the route reads no sport rule; every rig rides `generic`.
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
 
@@ -54,7 +54,8 @@ installSeaznEnv("seazn-org-video-route-test");
 
 const BASE = "https://test.local/api/v1";
 /** The fake driver's playback host and the token's one-segment shape (cf-playback.ts, the plan's C1). */
-const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
+/** W-LL: the live programme manifest carries Cloudflare's LL-HLS query while STREAM_PROGRAMME_LOW_LATENCY is on (the default); a recording's never does (seazn-video.test.ts pins that). */
+const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8(?:\?protocol=llhls)?$/;
 
 interface Envelope<T = unknown> {
   ok: boolean;
@@ -103,7 +104,16 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     expect(signLivePlayback, "no session, no live uid, nothing to sign").not.toHaveBeenCalled();
   });
 
-  it("a live Seazn session: 200, the route's own schema, the live address signed for THIS fixture's programme input, with no query string and no token outside the address", async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  // W-LL (review I1): the ONLY query the live address may carry is exactly `protocol=llhls`, and only while the switch is on; a value that
+  // is neither true nor false reads off (review I2) and answers the plain address, never a 500.
+  it.each([
+    { name: "on", env: "true", search: "?protocol=llhls" },
+    { name: "off", env: "false", search: "" },
+    { name: "malformed (reads off, no 500)", env: "maybe", search: "" },
+  ])("a live Seazn session, low-latency switch $name: 200, the route's own schema, the live address signed for THIS fixture's programme input, its only query `$search`, and no token outside the address", async ({ env, search }) => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", env);
     const o = await organiser();
     const sid = await live(o.r, o.fixtures[0], o.r.seazn);
     const [input] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sid} and role = 'programme' order by slot limit 1`;
@@ -115,7 +125,9 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/video over HTTP (the organiser's
     const m = PLAY.exec(data.live!.src);
     expect(m, "the live address is a Cloudflare-shaped manifest address with the token as ONE path segment").not.toBeNull();
     expect(m![1], "the token names this programme input (the fake mints fake.<uid>.<exp>)").toContain(input!.ingest_input_id);
-    expect(data.live!.src).not.toMatch(/[?#]/);
+    const parsed = new URL(data.live!.src);
+    expect([parsed.search, parsed.hash], "the query is exactly the LL-HLS one when on, and absent when off; never a fragment").toEqual([search, ""]);
+    expect(data.live!.src.endsWith(`/manifest/video.m3u8${search}`), "the query follows the manifest path").toBe(true);
     // The token appears once in the body: inside the address, and nowhere else (no field of its own, no echo).
     expect(res.raw.split(m![1]!).length - 1, "the token is in the address only").toBe(1);
     expect(data.replay).toEqual([]);

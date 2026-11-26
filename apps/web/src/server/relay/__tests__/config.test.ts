@@ -971,3 +971,48 @@ describe("T44 — SAMPLES_PER_SESSION_CAP holds a full session at the edge beat'
     expect((config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_HEARTBEAT_INTERVAL_MS).toBe(2_160);
   });
 });
+
+// W-LL (owner 2026-11-26): the switch for Low-Latency HLS on the programme input and its manifest address. The default is ON ONLY where
+// ENV_NAME is "stg" (review I3: stg and prod run one image, and Cloudflare calls the feature beta); true / false win anywhere; a
+// value that is neither reads OFF and never throws (review I2: it is read on request paths).
+describe("programmeLowLatency (STREAM_PROGRAMME_LOW_LATENCY)", () => {
+  const V = "STREAM_PROGRAMME_LOW_LATENCY";
+  it("unset or blank: on for ENV_NAME stg and off for prod, local, ci and no ENV_NAME; true and false (any case, trimmed) win in every environment", () => {
+    let checked = 0;
+    for (const envName of ["stg", " stg ", "prod", "local", "ci", "", undefined, "STG"]) {
+      const onStg = envName?.trim() === "stg";
+      for (const v of [undefined, "", "   "]) {
+        expect(config.programmeLowLatency({ ENV_NAME: envName, [V]: v }), `ENV_NAME ${JSON.stringify(envName)} unset ${JSON.stringify(v)}`).toBe(onStg);
+        checked++;
+      }
+      for (const v of ["true", "TRUE", " True "]) { expect(config.programmeLowLatency({ ENV_NAME: envName, [V]: v }), `${envName} ${v}`).toBe(true); checked++; }
+      for (const v of ["false", "FALSE", " False "]) { expect(config.programmeLowLatency({ ENV_NAME: envName, [V]: v }), `${envName} ${v}`).toBe(false); checked++; }
+    }
+    expect(checked, "eight environments x nine spellings").toBe(72);
+  });
+  it("anything else is OFF, in every environment (stg included), never throws, and is named for the caller to report; a good value names nothing", () => {
+    let checked = 0;
+    for (const envName of ["stg", "prod", undefined]) {
+      for (const bad of ["0", "1", "off", "on", "yes", "maybe", "truee"]) {
+        const r = config.programmeLowLatencyReading({ ENV_NAME: envName, [V]: bad });
+        expect(r, `${envName} ${bad}`).toEqual({ on: false, invalid: bad });
+        expect(config.programmeLowLatency({ ENV_NAME: envName, [V]: bad })).toBe(false);
+        checked++;
+      }
+      expect(config.programmeLowLatencyReading({ ENV_NAME: envName, [V]: "true" }).invalid).toBeNull();
+      expect(config.programmeLowLatencyReading({ ENV_NAME: envName }).invalid).toBeNull();
+    }
+    expect(checked, "three environments x seven bad values").toBe(21);
+  });
+  it("reads process.env when no env is passed", () => {
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv(V, "true");
+    expect(config.programmeLowLatency()).toBe(true);
+    vi.stubEnv(V, "false");
+    expect(config.programmeLowLatency()).toBe(false);
+    vi.stubEnv(V, "");
+    vi.stubEnv("ENV_NAME", "stg");
+    expect(config.programmeLowLatency(), "unset on stg").toBe(true);
+    vi.unstubAllEnvs();
+  });
+});

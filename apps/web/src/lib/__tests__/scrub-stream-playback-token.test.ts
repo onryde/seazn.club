@@ -81,6 +81,8 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.stubEnv("STREAM_PLAYBACK_HOST", HOST);
+  // W-LL: the live address carries the LL-HLS query only while the switch is on, and its default is stg-only (review I3): explicit.
+  vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -90,16 +92,17 @@ afterEach(() => {
 describe("a signed Cloudflare playback URL never reaches Sentry or PostHog with its token", () => {
   it("scrubScoreUrl: the segment after the customer host becomes [token]; the rest of every URL stays", async () => {
     const p = await produced();
-    expect(scrubScoreUrl(p.live)).toBe(`https://${HOST}/[token]/manifest/video.m3u8`);
+    // W-LL: the live programme manifest carries Cloudflare's LL-HLS query (default on), which is "the rest of the URL": it stays.
+    expect(scrubScoreUrl(p.live)).toBe(`https://${HOST}/[token]/manifest/video.m3u8?protocol=llhls`);
     expect(scrubScoreUrl(p.replay)).toBe(`https://${HOST}/[token]/manifest/video.m3u8`);
     expect(scrubScoreUrl(p.download)).toBe(`https://${HOST}/[token]/downloads/default.mp4`);
     expect(scrubScoreUrl(p.variant)).toBe(`https://${HOST}/[token]/manifest/stream_t0e1.m3u8?CMCD=1`);
     expect(scrubScoreUrl(p.segment)).toBe(`https://${HOST}/[token]/video/720/seg_12.ts`);
     // Quoted in a sentence, and URL-encoded inside another URL (a `next=`, a referrer carried as a parameter).
-    expect(scrubScoreUrl(`hls.js: manifestLoadError on ${p.live} (403)`)).toBe(`hls.js: manifestLoadError on https://${HOST}/[token]/manifest/video.m3u8 (403)`);
+    expect(scrubScoreUrl(`hls.js: manifestLoadError on ${p.live} (403)`)).toBe(`hls.js: manifestLoadError on https://${HOST}/[token]/manifest/video.m3u8?protocol=llhls (403)`);
     const encoded = `https://seazn.club/login?next=${encodeURIComponent(p.live)}`;
     expect(scrubScoreUrl(encoded)).not.toContain(p.token);
-    expect(scrubScoreUrl(encoded)).toBe(`https://seazn.club/login?next=${encodeURIComponent(`https://${HOST}/`)}[token]${encodeURIComponent("/manifest/video.m3u8")}`);
+    expect(scrubScoreUrl(encoded)).toBe(`https://seazn.club/login?next=${encodeURIComponent(`https://${HOST}/`)}[token]${encodeURIComponent("/manifest/video.m3u8?protocol=llhls")}`);
     expect(holdsCredential(p.live)).toBe(true);
     // The negative twins: the fake host, Cloudflare's API (the token is in its answer, never its URL), and our own pages.
     for (const untouched of [

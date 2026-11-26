@@ -7,6 +7,11 @@
 // shapes are Cloudflare's (C1: `/<token>/manifest/video.m3u8`; C5: `/<token>/downloads/default.mp4`), never read off the
 // module under test. Every case builds its own empty cache, so no case depends on another's order.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { warn, capture } = vi.hoisted(() => ({ warn: vi.fn(), capture: vi.fn() }));
+vi.mock("@/server/logger", () => ({ log: { warn } }));
+vi.mock("@/lib/sentry", () => ({ captureError: capture }));
+import { parseSignedAddress, withToken } from "@/components/public-site/match-centre/seazn-signed-address";
 import { FakeIngest } from "@/server/relay/fakes";
 import { CloudflareIngest } from "@/server/relay/ingest-cf";
 import { PlaybackTokenRecentlyFailed, createPlaybackTokenCache, signDownload, signLivePlayback, signRecordingPlayback } from "../cf-playback";
@@ -18,8 +23,10 @@ const TTL_MS = 3600 * 1000;
 const FAILURE_WINDOW_MS = 60_000;
 const T0 = new Date("2026-11-21T10:00:00Z");
 const at = (ms: number) => new Date(T0.getTime() + ms);
-/** Cloudflare's signed live/recording manifest: the token is one PATH segment, and there is no query string. */
-const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
+/** Cloudflare's signed live/recording manifest: the token is one PATH segment. A live programme manifest may carry Cloudflare's
+ *  documented LL-HLS query (W-LL, below); a recording's never does (PLAY_PLAIN). */
+const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8(?:\?protocol=llhls)?$/;
+const PLAY_PLAIN = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
 
 function rig() {
   const ingest = new FakeIngest();
@@ -60,7 +67,8 @@ describe("a signed manifest names its video: `id` (the match page holds a playin
 });
 
 describe("signLivePlayback (C1)", () => {
-  it("answers the input's signed manifest — the token a path segment, no `?` — expiring 1 h after now", async () => {
+  it("answers the input's signed manifest — the token a path segment, the LL-HLS query only when it is on — expiring 1 h after now", async () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "false");
     const { deps, mint } = rig();
     const live = await signLivePlayback(deps, "in-1", T0);
     expect(live.src).not.toContain("?");
@@ -160,7 +168,7 @@ describe("signLivePlayback (C1)", () => {
     expect(mint).not.toHaveBeenCalled();
     // The pair: the same relay with the host set signs on that host.
     vi.stubEnv("STREAM_PLAYBACK_HOST", "customer-abc.cloudflarestream.com");
-    expect((await signLivePlayback(deps, "in-1", T0)).src).toMatch(/^https:\/\/customer-abc\.cloudflarestream\.com\/[^/?]+\/manifest\/video\.m3u8$/);
+    expect((await signLivePlayback(deps, "in-1", T0)).src).toMatch(/^https:\/\/customer-abc\.cloudflarestream\.com\/[^/?]+\/manifest\/video\.m3u8(?:\?protocol=llhls)?$/);
   });
 
   it("expired entries leave the cache when a later token is minted, so a long-lived process does not keep every uid it ever signed", async () => {
@@ -236,5 +244,77 @@ describe("signDownload (C5, Phase 2's mover)", () => {
     const url = await signDownload(deps, "v-rec", at(MIN), 3600);
     expect(url).toMatch(/^https:\/\/playback\.fake\.invalid\/fake\.v-rec\.\d+\.dl\/downloads\/default\.mp4$/);
     expect(mint).toHaveBeenCalledTimes(2);
+  });
+});
+
+// W-LL (owner 2026-11-26). Cloudflare's own post (blog.cloudflare.com/cloudflare-stream-low-latency-hls-open-beta/): only its Stream
+// player picks LL-HLS by itself; any other player gets plain HLS unless the manifest URL carries `?protocol=llhls`. The query is
+// typed here as the post spells it. It goes on the LIVE PROGRAMME manifest only: the token stays the first path segment, so the match
+// page's token swap and its same-video check (both read the address after the token) still see one shape.
+describe("W-LL: the live programme manifest asks for LL-HLS with ?protocol=llhls (STREAM_PROGRAMME_LOW_LATENCY)", () => {
+  it("on (true anywhere; unset on stg only): the live manifest ends in ?protocol=llhls after the token path; off (false, or unset elsewhere): it is the plain manifest; a recording and a download never carry it either way", async () => {
+    let checked = 0;
+    // [the variable, ENV_NAME, on]: the default is on only where the deploy says it is stg (review I3).
+    for (const [env, envName, want] of [
+      [undefined, "stg", true], ["", "stg", true], ["true", "prod", true], ["TRUE", "", true], ["false", "stg", false],
+      [undefined, "prod", false], ["", "local", false], [undefined, "", false],
+    ] as const) {
+      vi.stubEnv("ENV_NAME", envName);
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", env);
+      const { deps } = rig();
+      const live = await signLivePlayback(deps, "in-1", T0);
+      const recording = await signRecordingPlayback(deps, "in-1", T0);
+      const download = await signDownload(deps, "in-1", T0, 300);
+      const token = tokenOf(live.src);
+      expect(live.src, `env ${JSON.stringify(env)} on ${JSON.stringify(envName)}`).toBe(`https://playback.fake.invalid/${token}/manifest/video.m3u8${want ? "?protocol=llhls" : ""}`);
+      expect(recording.src, "a recording is plain HLS").toMatch(PLAY_PLAIN);
+      expect(download, "a download never carries it").not.toContain("?");
+      checked++;
+    }
+    expect(checked, "eight environments").toBe(8);
+  });
+
+  // Review I2: this runs on every live read of the match page; a throw is a 500 on every poll of a live Seazn fixture.
+  it("a malformed value never throws or rejects: the live manifest is the plain one, on stg too, every read answers, and it is reported ONCE per value through the logger and the Sentry helper", async () => {
+    let checked = 0;
+    for (const bad of ["ll-bad-a", "ll-bad-b", "ll-bad-c"]) {
+      vi.stubEnv("ENV_NAME", "stg");
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", bad);
+      const { deps } = rig();
+      const before = [warn.mock.calls.length, capture.mock.calls.length];
+      // A SYNCHRONOUS throw would escape the caller's `.then(ok, err)` isolation (seazn-video.ts), so it is asserted on its own.
+      expect(() => void signLivePlayback(deps, "in-1", T0), bad).not.toThrow();
+      await expect(signLivePlayback(deps, "in-1", T0), bad).resolves.toMatchObject({ id: expect.stringMatching(/^[0-9a-f]{16}$/) });
+      expect((await signLivePlayback(deps, "in-1", T0)).src, bad).toMatch(PLAY_PLAIN);
+      expect([warn.mock.calls.length - before[0]!, capture.mock.calls.length - before[1]!], `${bad}: three-plus reads, one report each`).toEqual([1, 1]);
+      expect(capture.mock.calls.at(-1)![0]).toBeInstanceOf(Error);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a logger or Sentry that fails cannot fail the read", async () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "ll-bad-d");
+    warn.mockImplementationOnce(() => { throw new Error("logger down"); });
+    await expect(signLivePlayback(rig().deps, "in-1", T0)).resolves.toMatchObject({ src: expect.stringMatching(PLAY_PLAIN) });
+  });
+
+  it("the id does not see the query (one video, on or off), and a re-mint changes only the token: the part after it is equal", async () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
+    const a = await signLivePlayback(rig().deps, "in-1", T0);
+    const b = await signLivePlayback(rig().deps, "in-1", at(7 * MIN));
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "false");
+    const off = await signLivePlayback(rig().deps, "in-1", T0);
+    expect(a.id).toBe(off.id);
+    expect(a.src.slice(a.src.indexOf("/manifest"))).toBe("/manifest/video.m3u8?protocol=llhls");
+    expect(b.src.slice(b.src.indexOf("/manifest")), "the tail after the token is the same on every machine").toBe(a.src.slice(a.src.indexOf("/manifest")));
+    // The match page's own reader (seazn-signed-address.ts) on the REAL producer's output: the comparison `holdAddresses` makes
+    // (same origin, same tail, another token) still holds with the query, and the hls.js token swap keeps it.
+    const pa = parseSignedAddress(a.src)!;
+    const pb = parseSignedAddress(b.src)!;
+    expect(pa.tail).toBe("/manifest/video.m3u8?protocol=llhls");
+    expect([pa.origin, pa.tail]).toEqual([pb.origin, pb.tail]);
+    expect(pa.token, "PREMISE: two machines, two tokens").not.toBe(pb.token);
+    expect(withToken(a.src, pb)).toBe(b.src);
   });
 });
