@@ -1,0 +1,31 @@
+{
+  "description": "Task E (2026-11-26), proposed for web: the camera's decoded picture size, two optional keys for relay-job.v1's $defs.heartbeat.properties, written in that def's style (each anyOf a value or null; absent until known, never sent as 0 for unknown). They ride with the six keys of 2026-11-24-heartbeat-input-keys.proposed.json (that file is left as web pinned it): the compositor sends them only when RELAY_INPUT_BEAT=1, because web's heartbeat is strict (additionalProperties: false, zod .strict()), so the flag stays off until web's contract declares these keys too. web adds these two entries to docs/contracts/relay-job.v1.json (descriptions may be reworded); the compositor then re-vendors (scripts/vendor-contracts.sh) and crates/adapters/tests/contract.rs checks the vendored entries' types against this file's. The rates beside them are the earlier file's inputReceivedFps and inputReceivedKbps. This file is not part of contracts/ (never hand-edited, AGENTS.md section 8).",
+  "properties": {
+    "inputWidth": {
+      "description": "The width in pixels of the camera's decoded picture, as the relay's decoder produces it and before the relay scales it into the programme's box: a phone sending 1280x720 reads 1280 whatever the programme's size. Sent with inputHeight, and only while the camera is connected (omitted while it is connecting or backed off, and until its decoder has announced a size). The last size the connected build's decoder announced, so a phone rotated mid-stream or a transcode change moves it. Never 0 and never the programme's size.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "inputHeight": {
+      "description": "The height in pixels of the camera's decoded picture, as the relay's decoder produces it and before the relay scales it into the programme's box: a phone sending 1280x720 reads 720 whatever the programme's size. Sent with inputWidth, on the same terms.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

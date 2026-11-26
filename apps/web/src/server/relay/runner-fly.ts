@@ -272,8 +272,11 @@ export class FlyRunner implements RunnerProvider {
           stop_config: PLATFORM_STOP_CONFIG,
           // R4: RELAY_AIRINGS=1 switches the compositor's sponsor airings and proof frames on. Web is the only host that builds
           // this env, so the switch rides from web's own; only "1" turns it on (deploy order: README "Cloudflare Stream").
-          // T44 (the same shape): RELAY_INPUT_BEAT=1 makes the compositor send the camera's six beat keys; web's own flag of that name
-          // (default off, off in prod), the constant "1" and nothing else copied (relay/config.ts `relayInputBeat`).
+          // T44 (the same shape): RELAY_INPUT_BEAT=1 makes the compositor send the camera's eight beat keys (T44's six, Task E's
+          // inputWidth and inputHeight); web's own flag of that name (default off, off in prod), the constant "1" and nothing else
+          // copied (relay/config.ts `relayInputBeat`). Web with T44 AND Task E (#1326) must be deployed before RELAY_IMAGE moves to a
+          // compositor image that sends the size (#118) anywhere this flag is on: web's heartbeat is strict, so an undeclared key is a
+          // 400 on every connected beat (stale_beat after ~15 s, the Machine destroyed and retried, the session machine_crash).
           env: {
             SESSION_ID: spec.sessionId,
             JOB_TOKEN: spec.jobToken,

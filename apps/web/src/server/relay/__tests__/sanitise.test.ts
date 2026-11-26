@@ -21,6 +21,8 @@ const R2_BEAT_FIELDS = ["programmePhase", "input", "output", "graphics", "inputK
 const R4_BEAT_FIELDS = ["airingsDropped"];
 /** T44 (compositor Owed 110 + 111): the camera as the relay receives it — enum words and counts, kept like any other beat fact. */
 const T44_BEAT_FIELDS = ["inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns"];
+/** Task E (compositor `docs/specs/2026-11-26-heartbeat-input-picture.proposed.json`): the camera's decoded picture size in pixels. */
+const TASK_E_BEAT_FIELDS = ["inputWidth", "inputHeight"];
 /** R4 S8, ruling R14: the declared beat fields NEVER kept in a sample's raw (nor in last_heartbeat). `airings` is up to 64
  *  proof-of-play items per beat; the server records them as sponsor airings instead (server/sponsors/airings.ts). */
 const NOT_IN_RAW = ["airings"];
@@ -112,8 +114,11 @@ describe("sanitise — allowlist", () => {
     const kept = declared.filter((k) => !NOT_IN_RAW.includes(k));
     expect(kept.length).toBeGreaterThan(R2_BEAT_FIELDS.length);
     // heartbeat-full carries every kept field but the final beat's two, which heartbeat-final-fatal carries (review M6), and the
-    // camera's six (T44), which heartbeat-camera carries.
-    const full = { ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal"), ...contractFixture("heartbeat-camera") };
+    // camera's six (T44), which heartbeat-camera carries, and its picture's two (Task E), which heartbeat-camera-picture carries.
+    const full = {
+      ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal"), ...contractFixture("heartbeat-camera"),
+      ...contractFixture("heartbeat-camera-picture"),
+    };
     expect(Object.keys(full).sort(), "premise: the two beats carry every kept field").toEqual(kept);
     expect(sanitise(full)).toEqual(full);
     let checked = 0;
@@ -122,9 +127,46 @@ describe("sanitise — allowlist", () => {
       checked++;
     }
     expect(checked).toBe(kept.length);
-    for (const k of [...R2_BEAT_FIELDS, ...R4_BEAT_FIELDS, ...T44_BEAT_FIELDS]) expect(kept, k).toContain(k);
+    for (const k of [...R2_BEAT_FIELDS, ...R4_BEAT_FIELDS, ...T44_BEAT_FIELDS, ...TASK_E_BEAT_FIELDS]) expect(kept, k).toContain(k);
+    expect(TASK_E_BEAT_FIELDS.filter((k) => !ALLOWED_KEYS.has(k)), "Task E: each picture key is on the allowlist").toEqual([]);
+    expect(TASK_E_BEAT_FIELDS, "premise: a width and a height").toHaveLength(2);
     expect(T44_BEAT_FIELDS.filter((k) => !ALLOWED_KEYS.has(k)), "T44: each camera key is on the allowlist").toEqual([]);
     expect(T44_BEAT_FIELDS, "premise: Owed 110's four and 111's two").toHaveLength(6);
+  });
+
+  // Task E: the camera's picture size is two numbers, kept as sent. The allowlist owns the KEYS; the type and the bound are the
+  // beat contract's (RelayHeartbeat is strict and the route parses it before anything is stored), so the same pairs are put to
+  // both: what the contract admits survives whole, what it refuses is a 400 before the sanitiser sees it.
+  it("Task E: inputWidth and inputHeight survive a sample's raw as the numbers sent (the proposal's own bounds and a real size); a look-alike key is dropped; a value the contract refuses never reaches the sanitiser", () => {
+    const bounds = (key: string): { min: number; max: number } => {
+      expect(Object.keys(RelayHeartbeat.shape), `${key} is declared`).toContain(key);
+      // The bounds are the compositor's proposal's (the pinned copy that relay-contract.test.ts compares the contract and the twin
+      // to), never read off the generated contract this change also writes and never typed here.
+      const proposed = JSON.parse(
+        readFileSync(resolve(import.meta.dirname, "../../api-v1/__tests__/compositor-proposals/2026-11-26-heartbeat-input-picture.proposed.json"), "utf8"),
+      ) as { properties: Record<string, { anyOf: { type: string; minimum?: number; maximum?: number }[] }> };
+      const branch = proposed.properties[key]!.anyOf.find((b) => b.type === "integer")!;
+      return { min: branch.minimum!, max: branch.maximum! };
+    };
+    let kept = 0;
+    let refused = 0;
+    for (const key of TASK_E_BEAT_FIELDS) {
+      const { min, max } = bounds(key);
+      expect(min >= 1 && max > min, `premise: ${key}'s bounds ${min}..${max}`).toBe(true);
+      for (const v of [min, 720, 1280, max]) {
+        const beat = { state: "playing", [key]: v };
+        expect(RelayHeartbeat.safeParse(beat).success, `the contract admits ${key}=${v}`).toBe(true);
+        expect(sanitise(beat), `${key}=${v} survives as sent`).toEqual(beat);
+        kept++;
+      }
+      for (const v of [0, min - 1, max + 1, 720.5, "720", -720]) {
+        expect(RelayHeartbeat.safeParse({ state: "playing", [key]: v }).success, `the contract refuses ${key}=${String(v)}`).toBe(false);
+        refused++;
+      }
+    }
+    expect(kept, "anti-vacuity: two keys, four sizes each").toBe(8);
+    expect(refused, "anti-vacuity: two keys, six refusals each").toBe(12);
+    expect(sanitise({ state: "playing", inputWidth: 1280, inputHeights: 720, pictureWidth: 1280 }), "a look-alike key is dropped").toEqual({ state: "playing", inputWidth: 1280 });
   });
 
   // R4 S8 (ruling R14): 64 proof-of-play items a beat must never put in a sample row. The usecase strips the list before

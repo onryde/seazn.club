@@ -87,4 +87,10 @@ stored beat, never a `null` and never a `0`.
   received rates (`inputReceivedFps`, `inputReceivedKbps`) and the two loss totals for the process (`inputWithheldSpans`,
   `inputQueueOverruns`, a present 0 being a measured zero). All six are optional and nullable; a beat without them (every
   other vector) is valid as before. `heartbeat-invalid-give-up-reason` is a one-field edit of it: a reason outside the enum.
+- `heartbeat-camera-picture` carries the size of the camera's decoded picture (compositor Task E, 2026-11-26, sent only
+  when the Machine carries `RELAY_INPUT_BEAT=1`): `inputWidth` and `inputHeight`, whole pixels from 1 to 16384, with the
+  received rates beside them on a connected camera. The compositor measures them before it scales the picture into the
+  programme's box, so a 1280x720 phone reads 1280 and 720 whatever the programme's size, and it sends them only while the
+  camera is connected. Both are optional and nullable; an unknown size is absent, never 0. `inputReceivedKbps` is the whole
+  MPEG-TS stream the phone sends, audio and mux overhead included, not the video encoder's target.
 - Every id, key, passphrase and token here is a placeholder, never a real credential.
