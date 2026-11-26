@@ -3,7 +3,7 @@
 //
 // The home's Score control is a plain `<form method="post">` with no body, so it works with no script: the home token and the
 // match ride the PATH only (O3), and this route sits under `/q/`, a scrubbed secret path (lib/scrub-score-url.ts). Every
-// answer is a 303 with a relative Location (D3), never JSON:
+// answer to that form is a 303 with a relative Location (D3), never JSON:
 //   - a tap that works lands in the scoring pad, `/score/<device link>`: plan 1's `ensureGuestDeviceLink` re-opens the
 //     match's live link or mints one, so a second tap, or a tap on a live or decided match, lands on the SAME link (Review
 //     Focus 1); only a finalized match, or one marked Not played (`cancelled`, plan 4's skip), refuses;
@@ -28,11 +28,26 @@
 // server without DEVICE_LINK_KEK, a database error, any other code) is a fault: reported to Sentry and logged as `handler`
 // reports one, then shown as the generic line.
 //
-// Cross-site posts: the proxy's Origin check covers `/api/**` only, and this is a page path. A cross-site form can post here
-// only with the home token, which is the credential itself (§7.4): it gains nothing a link holder does not already have.
+// "SCORE IN APP" (owner 2026-11-26; spec docs/superpowers/specs/2026-11-25-open-in-app-web-design.md §5.6). The home's own
+// script posts to this SAME path with `QUICK_MATCH_APP_HEADER: 1` and is answered with the SAME tap, read as JSON:
+//   - `{secret}`: the device link the 303 would have opened. The island builds `/app/score#<secret>` from it;
+//   - `{location}`: every other answer, the exact relative Location the 303 would have carried (the home, with or without
+//     `?e=`), so a refusal has one mapping and one set of words.
+// Why JSON and not a 303 back to `/q/<token>#<secret>`: that would put the secret in the address bar and the browser's
+// history (and the page URL analytics reads) the moment of the first tap. A response body reaches neither, replay does not
+// record bodies (`recordBody: false`), and `no-store` keeps it out of every cache. The secret is never in a path or a query
+// of this request. With no script there is no control and no such post: the form's contract above is unchanged.
+//
+// Cross-site posts: the proxy's Origin check covers `/api/**` only, and this is a page path.
+//   - The form's 303: a cross-site form can post here only with the home token, which is the credential itself (§7.4): it
+//     gains nothing a link holder does not already have, and it cannot read where it was sent.
+//   - The JSON answer: a form cannot set a header, so it never gets it. A cross-origin `fetch` that sets it needs a CORS
+//     preflight, and this route grants none (no `OPTIONS` export, no `Access-Control-*`). Should a browser say the request
+//     is not same-origin anyway (`Sec-Fetch-Site`), it is a 403 before anything is read or minted.
 import * as Sentry from "@sentry/nextjs";
+import { NextResponse } from "next/server";
 import { handler, HttpError, redirectLocal } from "@/lib/http";
-import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_APP_HEADER, QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
 import { assertUuid } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -68,32 +83,57 @@ function refusalOf(err: unknown): string | null {
   return REFUSALS.find((r) => r.status === err.status && r.code === err.code)?.e ?? null;
 }
 
-export async function POST(_req: Request, { params }: { params: Promise<{ token: string; fixtureId: string }> }) {
-  return handler(async () => {
-    // Until the token is read, a failure has no home to land on: the site's root.
-    let home = "/";
-    try {
-      const { token: raw, fixtureId } = await params;
-      // Trimmed as the home page trims it (Review Focus 3). Encoded for the Location only: a token-shaped one is unchanged,
-      // and whatever else the path held stays one segment under /q/, never a way out of it.
-      const token = raw.trim();
-      home = routes.quickMatch(encodeURIComponent(token));
-      const qm = await resolveQuickMatchToken(token);
-      if (!qm) return redirectLocal(home, 303);
-      assertUuid(fixtureId, "fixture");
-      const link = await ensureGuestDeviceLink(qm, fixtureId);
-      await touchQuickMatchActivity(qm.id).catch((err: unknown) => {
-        log.error({ err, quickMatch: qm.id }, "quick match score: activity touch failed (the link stands)");
-      });
-      return redirectLocal(`/score/${link.secret}`, 303);
-    } catch (err) {
-      if (expiredMeanwhile(err)) return redirectLocal(home, 303);
-      const refused = refusalOf(err);
-      if (refused === null) {
-        Sentry.captureException(err);
-        log.error({ err }, "quick match score: failed");
-      }
-      return redirectLocal(`${home}?e=${refused ?? QUICK_MATCH_ERRORS.ACTION_FAILED}`, 303);
+/** Where one tap ends: the pad, by its device link, or a page on this site (the home, with or without `?e=`). The second
+ *  field is `path`, a generic name, on purpose: scrub-secret-painters.test.ts reads a route's object fields that hold a
+ *  credential URL as app-wide names, and `home` is a word half the app uses. */
+type Outcome = { secret: string } | { path: string };
+
+async function tapOutcome(params: Promise<{ token: string; fixtureId: string }>): Promise<Outcome> {
+  // Until the token is read, a failure has no home to land on: the site's root.
+  let home = "/";
+  try {
+    const { token: raw, fixtureId } = await params;
+    // Trimmed as the home page trims it (Review Focus 3). Encoded for the Location only: a token-shaped one is unchanged,
+    // and whatever else the path held stays one segment under /q/, never a way out of it.
+    const token = raw.trim();
+    home = routes.quickMatch(encodeURIComponent(token));
+    const qm = await resolveQuickMatchToken(token);
+    if (!qm) return { path: home };
+    assertUuid(fixtureId, "fixture");
+    const link = await ensureGuestDeviceLink(qm, fixtureId);
+    await touchQuickMatchActivity(qm.id).catch((err: unknown) => {
+      log.error({ err, quickMatch: qm.id }, "quick match score: activity touch failed (the link stands)");
+    });
+    return { secret: link.secret };
+  } catch (err) {
+    if (expiredMeanwhile(err)) return { path: home };
+    const refused = refusalOf(err);
+    if (refused === null) {
+      Sentry.captureException(err);
+      log.error({ err }, "quick match score: failed");
     }
-  });
+    return { path: `${home}?e=${refused ?? QUICK_MATCH_ERRORS.ACTION_FAILED}` };
+  }
+}
+
+/** The form's answer (D3). */
+const redirectAnswer = (outcome: Outcome) =>
+  redirectLocal("secret" in outcome ? `/score/${outcome.secret}` : outcome.path, 303);
+
+/** The home's own fetch. `location` is read off the form's answer, so it is encoded exactly as a browser would be sent it. */
+const appAnswer = (outcome: Outcome) =>
+  NextResponse.json(
+    "secret" in outcome ? { secret: outcome.secret } : { location: redirectAnswer(outcome).headers.get("location") },
+    { headers: NO_STORE },
+  );
+
+const NO_STORE = { "cache-control": "no-store" } as const;
+
+export async function POST(req: Request, { params }: { params: Promise<{ token: string; fixtureId: string }> }) {
+  const fromApp = req.headers.get(QUICK_MATCH_APP_HEADER) === "1";
+  if (fromApp) {
+    const site = req.headers.get("sec-fetch-site");
+    if (site !== null && site !== "same-origin") return new NextResponse(null, { status: 403, headers: NO_STORE });
+  }
+  return handler(async () => (fromApp ? appAnswer : redirectAnswer)(await tapOutcome(params)));
 }

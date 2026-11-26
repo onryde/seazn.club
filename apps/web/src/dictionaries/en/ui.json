@@ -9285,6 +9285,8 @@
   "openApp.button": "Open in app",
   "openApp.scoreInBrowser": "Score in browser",
   "openApp.orScan": "or scan with another phone",
+  "openApp.scoreInApp": "Score in app",
+  "openApp.tapAgain": "One more tap to open the app.",
   "openApp.stream.thenGoLive": "Then hold Go live in the app.",
   "openApp.stream.needDestination": "Pick a destination here first.",
   "openApp.stream.needCredit": "You need a Seazn credit first.",

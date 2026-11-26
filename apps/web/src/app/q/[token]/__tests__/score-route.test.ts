@@ -1,9 +1,13 @@
 // Quick match plan 2, Task 6 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §7.4, C1, C4, C18;
 // pre-flight A7, A8, B6, C13, D3; ledger carries "CARRY to T6"): the guest's Score tap, `POST /q/<token>/score/<fixtureId>`.
 //
-// The contract: every answer is a 303 (D3), never JSON. A tap that works lands in the scoring pad, `/score/<device link>`,
+// The contract of the FORM post: every answer is a 303 (D3), never JSON. A tap that works lands in the scoring pad, `/score/<device link>`,
 // minted or reopened by plan 1's `ensureGuestDeviceLink`; every refusal lands back on the home, `/q/<token>?e=<code>`, which
 // prints the refusal as localized flash copy; an unknown token lands on its own `/q/<token>`, the dead screen.
+//
+// "Score in app" (owner 2026-11-26, spec 2026-11-25 open-in-app §5.6) adds ONE other reading of the same post: the home's own
+// same-origin fetch, which names itself with a request header, is answered as JSON (the secret, or the Location the form
+// would have been sent to), so the secret never enters a URL, the address bar or history on that tap.
 //
 // Driven through the REAL route, the real `ensureGuestDeviceLink` and real Postgres rows. Every quick match is made by the real
 // producer (`createQuickMatch`); the link a tap lands on is used by the real consumer (the events route, as the pad posts),
@@ -31,7 +35,12 @@ import en from "@/dictionaries/en/ui.json";
 import { sql, withTenant } from "@/lib/db";
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { HttpError } from "@/lib/errors";
-import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
+import {
+  QUICK_MATCH_APP_HEADER,
+  QUICK_MATCH_ERRORS,
+  QUICK_MATCH_SYSTEM_ORG_ID,
+  QUICK_MATCH_SYSTEM_USER_ID,
+} from "@/lib/quick-match-constants";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { DEVICE_LINK_MINT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { requireFixtureActor } from "@/server/api-v1/auth";
@@ -50,8 +59,18 @@ import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-to
 import { scoreEvent } from "@/server/usecases/scoring";
 import { firstRallyFor, playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import { walk } from "@/components/__tests__/_hook-harness";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { QuickMatchHeroScore } from "@/components/quick-match/hero-score";
+import { QuickMatchHomeView } from "@/components/quick-match/home";
+import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { routes } from "@/lib/routes";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import QuickMatchHomePage from "../page";
+import * as scoreRoute from "../score/[fixtureId]/route";
 import { POST } from "../score/[fixtureId]/route";
 
 const KEK = kekBytes(32).toString("hex");
@@ -75,7 +94,7 @@ vi.mock("@/server/usecases/quick-match-activity", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/quick-match-activity")>();
   return { ...real, touchQuickMatchActivity: vi.fn(real.touchQuickMatchActivity) };
 });
-// The home a refusal lands on reads the viewer's locale (D10); here, English.
+// The home a refusal lands on reads the viewer's locale (D10); here, English unless a case asks once for another.
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 
 const reported = () => vi.mocked(Sentry.captureException).mock.calls.map(([err]) => err);
@@ -899,6 +918,269 @@ describe.skipIf(!HAS_DB)("the seam: the home's Score form names this route, and 
     expect(fixtureId, "the hero's match is match 1 (C11)").toBe(first!.id);
     const secret = await padSecret(await tap(token!, fixtureId!));
     expect((await resolveDeviceLinkToken(secret)).fixture_id).toBe(fixtureId);
+  });
+});
+
+// "Score in app" is the hero's alone (owner 2026-11-26). Its island reads `openApp.*` through `useMsg`, so the page must
+// hand it the viewer's own words: with no provider every viewer would read English and nothing would fail.
+describe.skipIf(!HAS_DB)("the real page's hero slot is the island with Score in app, in the viewer's language", () => {
+  it("hero: DictProvider (openApp.* only) around QuickMatchHeroScore; a row stays the plain form, in all four locales", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    let checked = 0;
+    for (const [locale, words] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
+      vi.mocked(resolveLocale).mockResolvedValueOnce(locale);
+      const tree = await QuickMatchHomePage({ params: Promise.resolve({ token: out.token }), searchParams: Promise.resolve({}) });
+      const view = walk(tree as ReactElement).find((el) => el.type === QuickMatchHomeView);
+      expect(view, "premise: the page renders the home view").toBeDefined();
+      const slots = (view!.props as { slots: { score: (f: { id: string; live: boolean }, p: "hero" | "row") => ReactElement } }).slots;
+      const hero = slots.score({ id: f0!.id, live: false }, "hero");
+      expect(hero.type, locale).toBe(DictProvider);
+      const provider = hero.props as { locale: string; dict: Record<string, string>; children: ReactElement };
+      expect(provider.locale).toBe(locale);
+      expect(Object.keys(provider.dict).length, "premise: keys were picked").toBeGreaterThan(0);
+      expect(Object.keys(provider.dict).filter((k) => !k.startsWith("openApp.")), "never the whole dictionary").toEqual([]);
+      for (const key of ["openApp.scoreInApp", "openApp.tapAgain", "openApp.button", "openApp.scoreInBrowser"] as const) {
+        expect(provider.dict[key], `${locale} ${key}`).toBe(words[key]);
+      }
+      expect(provider.children.type).toBe(QuickMatchHeroScore);
+      expect(provider.children.props).toEqual({
+        action: routes.quickMatchScore(out.token, f0!.id),
+        fixtureId: f0!.id,
+        label: words["quickMatch.home.score"],
+        failed: words["quickMatch.flash.generic"],
+      });
+      expect(slots.score({ id: f0!.id, live: true }, "hero").props).toMatchObject({
+        children: { props: { label: words["quickMatch.home.continue"] } },
+      });
+      const row = slots.score({ id: f0!.id, live: false }, "row");
+      expect(row.type, "a row offers no app button").toBe(QuickMatchScoreForm);
+      expect(row.props).toMatchObject({ place: "row", action: routes.quickMatchScore(out.token, f0!.id) });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
+// ── "Score in app": the same tap, asked for as JSON by the home's own fetch ──────────────────────────────────────────
+
+/** The tap as the home's "Score in app" fetch posts it: the same URL, no body, the request header that asks for JSON, and the
+ *  `Sec-Fetch-Site` a browser puts on a same-origin fetch. `headers` overrides or removes (null) one of them. */
+const appTap = (token: string, fixtureId: string, headers: Record<string, string | null> = {}) => {
+  const merged: Record<string, string | null> = { [QUICK_MATCH_APP_HEADER]: "1", "sec-fetch-site": "same-origin", ...headers };
+  const sent = Object.fromEntries(Object.entries(merged).filter((e): e is [string, string] => e[1] !== null));
+  return POST(new Request(`http://localhost/q/${token}/score/${fixtureId}`, { method: "POST", headers: sent }), {
+    params: Promise.resolve({ token, fixtureId }),
+  });
+};
+
+/** A JSON answer's body, with what every such answer owes: 200 JSON, never stored, no redirect, no CORS grant. */
+async function appBody(res: Response): Promise<Record<string, unknown>> {
+  expect(res.status, await res.clone().text()).toBe(200);
+  expect(res.headers.get("content-type")).toMatch(/^application\/json/);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(res.headers.get("location"), "no redirect: the secret never becomes a URL").toBeNull();
+  expect([...res.headers.keys()].filter((k) => k.startsWith("access-control-")), "no other origin may read it").toEqual([]);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+describe.skipIf(!HAS_DB)('"Score in app": the home\'s own fetch is answered as JSON (owner 2026-11-26)', () => {
+  it("a tap that works: only the secret, never stored, and the SAME link the browser's Score opens, in either order", async () => {
+    const out = await create();
+    const [f0, f1] = await fixturesOf(out.competitionId);
+    // App first, then the browser's Score.
+    const body = await appBody(await appTap(out.token, f0!.id));
+    expect(Object.keys(body)).toEqual(["secret"]);
+    expect(body.secret).toMatch(/^dl_[A-Za-z0-9_-]{43}$/);
+    expect(await resolveDeviceLinkToken(body.secret as string)).toMatchObject({
+      fixture_id: f0!.id,
+      issued_by: QUICK_MATCH_SYSTEM_USER_ID,
+    });
+    expect(await padSecret(await tap(out.token, f0!.id)), "the browser lands on the same link").toBe(body.secret);
+    expect(await linksOn(f0!.id)).toBe(1);
+    await scoresARally(body.secret as string, f0!.id);   // the real consumer takes it
+    expect(await appBody(await appTap(out.token, f0!.id)), "live: the same link").toEqual(body);
+    // Browser first, then the app.
+    const viaBrowser = await padSecret(await tap(out.token, f1!.id));
+    expect(await appBody(await appTap(` ${out.token}\n`, f1!.id)), "trimmed, as the form's token is").toEqual({ secret: viaBrowser });
+    expect(await linksOn(f1!.id)).toBe(1);
+    expect(reported()).toEqual([]);
+  });
+
+  it("is activity like the form's tap, and spends the same mint bucket", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const keys: string[] = [];
+    __setRateLimitCounterForTests(async (key) => {
+      keys.push(key);
+      return null;
+    });
+    await age(out.id);
+    const before = await activityOf(out.id);
+    await appBody(await appTap(out.token, f0!.id));
+    const after = await activityOf(out.id);
+    expect(after.last.getTime()).toBeGreaterThan(before.last.getTime());
+    expect(after.expires!.getTime() - after.last.getTime()).toBe(SPEC_EXPIRY_DAYS * DAY_MS);
+    expect(keys.filter((k) => k.startsWith("rl:qm-mint:"))).toEqual([`rl:qm-mint:${out.id}`]);
+  });
+
+  it("a touch that fails after the mint: the secret still comes back, and no log line carries it", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const lines: unknown[][] = [];
+    const spies = (["info", "warn", "error", "debug"] as const).map((level) =>
+      vi.spyOn(log, level).mockImplementation(((...args: unknown[]) => void lines.push(args)) as never),
+    );
+    try {
+      touchSpy.mockRejectedValueOnce(new Error("db blip"));
+      const body = await appBody(await appTap(out.token, f0!.id));
+      expect(body.secret).toMatch(/^dl_[A-Za-z0-9_-]{43}$/);
+      expect(lines.length, "premise: the failed touch was logged").toBeGreaterThan(0);
+      expect(JSON.stringify(lines)).not.toContain(body.secret as string);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    expect(reported()).toEqual([]);
+  });
+
+  it("every refusal: {location} only, equal to the Location the form is sent to for the same state; no secret", async () => {
+    const out = await create();
+    const other = await create();
+    const [f0, f1] = await fixturesOf(out.competitionId);
+    const [foreign] = await fixturesOf(other.competitionId);
+    const knockout = await create(league({ format: "knockout", sides: SIDES.slice(0, 3) }));
+    const waiting = (await fixturesOf(knockout.competitionId)).find((f) => !seated(f));
+    expect(waiting, "premise: a knockout of 3 has a waiting final").toBeDefined();
+    const row = await resolveQuickMatchToken(out.token);
+    if (!row) throw new Error("precondition: the token resolves");
+    expect(await skipQuickMatchFixture(row, f1!.id), "premise: the skip lands").toEqual({ changed: true });
+    const finished = await padSecret(await tap(out.token, f0!.id));
+    const auth = await requireFixtureActor(
+      new Request("http://test.local/api/v1", { headers: { authorization: `Bearer ${finished}` } }),
+      f0!.id,
+      "score",
+    );
+    const played = await playToDecided(auth, f0!.id);
+    if (played.kind !== "decided") throw new Error(`precondition: the match decides (${played.kind})`);
+    await scoreEvent(systemAuth(), f0!.id, { expected_seq: played.lastSeq, type: "core.finalize", payload: {} });
+
+    const changed = `qm_${"x".repeat(43)}`;
+    const cases: { name: string; token: string; fixtureId: string; arm?: () => void }[] = [
+      { name: "no uuid", token: out.token, fixtureId: "not-a-fixture" },
+      { name: "another quick match's", token: out.token, fixtureId: foreign!.id },
+      { name: "sides unknown", token: knockout.token, fixtureId: waiting!.id },
+      { name: "not played", token: out.token, fixtureId: f1!.id },
+      { name: "finalized", token: out.token, fixtureId: f0!.id },
+      {
+        name: "mint limit",
+        token: other.token,
+        fixtureId: foreign!.id,
+        arm: () => __setRateLimitCounterForTests(async (key) =>
+          key === `rl:qm-mint:${other.id}` ? { count: DEVICE_LINK_MINT_LIMIT.max + 1, ttlMs: 30_000 } : null,
+        ),
+      },
+      {
+        name: "expired meanwhile",
+        token: other.token,
+        fixtureId: foreign!.id,
+        arm: () => void mintSpy.mockRejectedValueOnce(new HttpError(404, "expired", QUICK_MATCH_ERRORS.EXPIRED)),
+      },
+      { name: "unknown token", token: changed, fixtureId: foreign!.id },
+      { name: "token shaped like a way out", token: "../../admin", fixtureId: foreign!.id },
+    ];
+    const codes = new Set<string | null>();
+    let checked = 0;
+    for (const c of cases) {
+      c.arm?.();
+      const form = await landed(await tap(c.token, c.fixtureId));
+      __setRateLimitCounterForTests(null);
+      c.arm?.();
+      const res = await appTap(c.token, c.fixtureId);
+      __setRateLimitCounterForTests(null);
+      const text = await res.clone().text();
+      expect(text, c.name).not.toContain("dl_");
+      expect(await appBody(res), c.name).toEqual({ location: form });
+      codes.add(new URL(form, "http://localhost").searchParams.get("e"));
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // Anti-vacuity: the sweep really met the different refusals, not nine spellings of one.
+    expect([...codes].map(String).sort()).toEqual(
+      [
+        "null",
+        QUICK_MATCH_ERRORS.NOT_PLAYED,
+        QUICK_MATCH_ERRORS.LINK_LIMITED,
+        QUICK_MATCH_ERRORS.SIDES_UNKNOWN,
+        QUICK_MATCH_ERRORS.ACTION_FAILED,
+        QUICK_MATCH_ERRORS.NOT_FOUND,
+      ].sort(),
+    );
+    expect(reported(), "refusals are not faults").toEqual([]);
+  });
+
+  // Not a path a browser sends (it resolves ".." first), so it stays out of the end-of-file sweep (`landed`). It is the one
+  // token whose Location the redirect's own normalising changes: the JSON answer must be read off that same answer.
+  it("its location is the form's own, normalising included: a dot-dot token resolves to the site root in both", async () => {
+    const form = await tap("..", randomUUID());
+    expect(form.status).toBe(303);
+    const location = form.headers.get("location");
+    expect(location, "premise: the redirect resolved the dots away").toBe("/");
+    expect(await appBody(await appTap("..", randomUUID()))).toEqual({ location });
+  });
+
+  it("a fault: reported once, the generic line's location, no secret", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const boom = new Error("connection reset");
+    mintSpy.mockRejectedValueOnce(boom);
+    const body = await appBody(await appTap(out.token, f0!.id));
+    expect(body).toEqual({ location: `/q/${out.token}?e=${QUICK_MATCH_ERRORS.ACTION_FAILED}` });
+    expect(reported()).toEqual([boom]);
+  });
+
+  it("a fetch the browser says is not same-origin is refused 403 before anything: no mint, no link, no activity", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    await age(out.id);
+    const before = await activityOf(out.id);
+    let checked = 0;
+    for (const site of ["cross-site", "same-site", "none"]) {
+      const res = await appTap(out.token, f0!.id, { "sec-fetch-site": site });
+      expect(res.status, site).toBe(403);
+      expect(res.headers.get("cache-control"), site).toBe("no-store");
+      expect(res.headers.get("location"), site).toBeNull();
+      expect(await res.text(), site).not.toContain("dl_");
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(mintSpy).not.toHaveBeenCalled();
+    expect(await linksOn(f0!.id)).toBe(0);
+    expect(await activityOf(out.id)).toEqual(before);
+    // The pair: a browser that sends no Sec-Fetch-Site at all is answered. The header alone already needs a preflight
+    // from another origin, and this route grants none.
+    expect(Object.keys(await appBody(await appTap(out.token, f0!.id, { "sec-fetch-site": null })))).toEqual(["secret"]);
+  });
+
+  it("only the header asks for JSON: without it (or with another value) the post is the form's, a 303, whatever the site", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const variants: Record<string, string | null>[] = [
+      { [QUICK_MATCH_APP_HEADER]: null },
+      { [QUICK_MATCH_APP_HEADER]: "0" },
+      { [QUICK_MATCH_APP_HEADER]: "" },
+      { [QUICK_MATCH_APP_HEADER]: null, "sec-fetch-site": "cross-site" },
+      { [QUICK_MATCH_APP_HEADER]: null, accept: "application/json" },
+    ];
+    let checked = 0;
+    for (const headers of variants) {
+      await padSecret(await appTap(out.token, f0!.id, headers));
+      checked++;
+    }
+    expect(checked).toBe(variants.length);
+  });
+
+  it("the route exports no OPTIONS handler, so Next's automatic one grants no other origin the header", () => {
+    expect(Object.keys(scoreRoute).filter((k) => k === "POST" || k === "OPTIONS" || k === "GET")).toEqual(["POST"]);
   });
 });
 
