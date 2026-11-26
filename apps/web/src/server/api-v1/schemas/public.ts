@@ -112,7 +112,15 @@ export type PublicOrgLiveT = z.infer<typeof PublicOrgLive>;
 
 /** A signed playback URL and when its token stops working. The token is a PATH segment of `src` (Cloudflare's
  *  `https://<customer host>/<token>/manifest/video.m3u8`), never a query, and the route answers it `private, no-store`. */
-const SignedPlayback = z.object({ src: z.url(), expiresAt: z.string().datetime() });
+const SignedPlayback = z.object({
+  src: z.url(),
+  expiresAt: z.string().datetime(),
+  /** The video's own identity: opaque (a hash of its Cloudflare uid, never the uid), the same on every read for as long as it is the same
+   *  live input or recording, whichever machine signed the answer, and different for another one. The address cannot say this: the
+   *  video is named inside the token, and two reads of one video can carry two tokens. A page holds a playing address only while this
+   *  is equal. Absent (the replay host's own player, an answer from before the field): the page never holds that address. */
+  id: z.string().min(1).max(64).optional(),
+});
 
 /** What the match page's player reads (server/video/seazn-video.ts): the live, while the fixture's latest session is a Seazn
  *  session on air, and the replay parts in recording order, each numbered by its place among them all (a part left out, past the

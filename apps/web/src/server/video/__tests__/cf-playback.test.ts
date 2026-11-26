@@ -40,6 +40,25 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+describe("a signed manifest names its video: `id` (the match page holds a playing address on it)", () => {
+  it("is the same for one uid whichever process signs it (a cold cache, another expiry, another token) and for the live and a recording of one uid alike; another uid has another", async () => {
+    const a = await signLivePlayback(rig().deps, "in-1", T0);
+    const b = await signLivePlayback(rig().deps, "in-1", at(7 * MIN));
+    const other = await signLivePlayback(rig().deps, "in-2", T0);
+    const rec = await signRecordingPlayback(rig().deps, "in-1", T0);
+    expect(tokenOf(a.src), "PREMISE: two machines minted two different tokens for one uid").not.toBe(tokenOf(b.src));
+    expect(a.id).toBe(b.id);
+    expect(a.id).toBe(rec.id);
+    expect(other.id).not.toBe(a.id);
+  });
+  it("is opaque: sixteen hex characters that contain neither the uid nor the token", async () => {
+    const live = await signLivePlayback(rig().deps, "in-1", T0);
+    expect(live.id).toMatch(/^[0-9a-f]{16}$/);
+    expect(live.id).not.toContain("in-1");
+    expect(live.src).not.toContain(live.id);
+  });
+});
+
 describe("signLivePlayback (C1)", () => {
   it("answers the input's signed manifest — the token a path segment, no `?` — expiring 1 h after now", async () => {
     const { deps, mint } = rig();

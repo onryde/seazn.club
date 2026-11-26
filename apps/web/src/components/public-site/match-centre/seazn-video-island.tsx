@@ -41,6 +41,7 @@ import { api } from "@/lib/client";
 import { interpolate } from "@/lib/i18n-runtime";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SEAZN_LIVE_DELAY_SECONDS } from "@/server/relay/config";
+import { holdAddresses } from "./seazn-held-address";
 import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
 import { SeaznReplayFrame } from "./seazn-replay-frame";
 import { holdWait, parseHold, showsPlayer, waitAfterAnswer, type Wait } from "./seazn-video-hold";
@@ -109,11 +110,14 @@ const partPillClass = (selected: boolean): string =>
     selected ? "bg-accent text-accent-ink" : "border border-white/25 text-court-ink hover:bg-white/10"
   }`;
 
-/** A player's identity. A different part is a different recording; a different `epoch` is a player that gave up and is rebuilt by the
+/** A player's identity. A different part is a different recording, and so is a different video under one slot: the route's `id` (a new
+ *  Go live is another input under the same `live` slot, with no answer between it and the old one when the viewer's tab was hidden or a
+ *  read failed). The player is then a fresh element and a fresh hls.js instance, whose manifest and timeline are the new video's: a token
+ *  swap onto the old instance would keep the old video's loaded manifest. With no id the key is the slot's alone. A different `epoch` is a player that gave up and is rebuilt by the
  *  next answer (the poll's `rebuild`), so it gets a fresh element and a fresh hls.js instance even when the address is unchanged. A
  *  token refresh changes neither, which is what keeps the picture running through one. The replay host's frame for a part has a key
  *  of its own (`embed:`), so a part turning from the interim to the host's copy mounts the frame in place of the player. */
-export const playerKey = (part: number | "live", epoch: number): string => `${part}:${epoch}`;
+export const playerKey = (part: number | "live", epoch: number, id?: string): string => (id === undefined || id === "" ? `${part}:${epoch}` : `${part}:${id}:${epoch}`);
 const frameKey = (part: number, epoch: number): string => `embed:${playerKey(part, epoch)}`;
 
 interface StageProps {
@@ -179,7 +183,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
       return (
         <section data-testid="seazn-video" aria-label={labels.live} className={REGION}>
           <SeaznPlayer
-            key={playerKey("live", epoch)}
+            key={playerKey("live", epoch, video.live.id)}
             src={video.live.src}
             title={labels.live}
             liveLabel={labels.live}
@@ -229,7 +233,7 @@ export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts:
       <SeaznReplayFrame key={frameKey(active.partNo, epoch)} src={active.src} expiresAt={active.expiresAt} title={title} onStale={onStale} />
     ) : (
       <SeaznPlayer
-        key={playerKey(active.partNo, epoch)}
+        key={playerKey(active.partNo, epoch, active.id)}
         src={active.src}
         title={title}
         unavailable={labels.unavailable}
@@ -309,6 +313,8 @@ export function SeaznVideoIsland({
   liveExpected = false,
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
+  // The answer the players were last handed, for `holdAddresses`: the next answer is compared with this one, never with a raw read.
+  const shownRef = useRef<PublicFixtureVideo | null>(initial ?? null);
   // The wait (seazn-video-hold.ts `Wait`), from the page's plan at first and from EVERY answer after (`waitAfterAnswer`; Task 33g: an
   // open page follows the latest session through a Stop, a cancel or a missed live, not only the render it was drawn from).
   //   - `liveNext` (Task 33c, 33f): whether the held box keeps the delay line's row and its line says the live video is coming, or the replay.
@@ -331,9 +337,17 @@ export function SeaznVideoIsland({
     // The page's visibility is the document's (the loop's default): no read while the tab is hidden.
     const poll = startVideoPoll({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
-      onVideo: (next, { rebuild }) => {
-        setVideo(next);
-        setWait((w) => waitAfterAnswer(w, next, Date.now()));
+      // A video already on screen keeps its address while its token is not refresh-due, whichever machine signed this answer
+      // (seazn-held-address.ts: a native player is re-pointed, and stops, by every changed address). A rebuild takes the fresh
+      // answer whole: the player it replaces gave up on the address it held. The poll times its next read from what this returns.
+      hold: (next, { rebuild }) => {
+        const shown = rebuild ? next : holdAddresses(shownRef.current, next, Date.now());
+        shownRef.current = shown;
+        return shown;
+      },
+      onVideo: (shown, { rebuild }) => {
+        setVideo(shown);
+        setWait((w) => waitAfterAnswer(w, shown, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
       settledAtMs,

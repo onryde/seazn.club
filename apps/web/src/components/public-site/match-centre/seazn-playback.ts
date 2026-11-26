@@ -6,7 +6,8 @@
 //     and never loads hls.js. Everything else gets hls.js, loaded on demand (the bundle is not paid by the pages that play none),
 //     as a worker-less instance (`enableWorker: false`).
 //   - The address carries its token in the path and the token lapses (a Cloudflare HLS is not assumed to outlive it), so the island
-//     hands over a fresh address before then. On hls.js that is NOT a reload: a `loadSource` of a different address detaches and
+//     hands over a fresh address before then, once its token is refresh-due, and not before: the same video under another token
+//     (the app's second machine mints its own) is held back (seazn-held-address.ts), since a re-point stops a native player. On hls.js that is NOT a reload: a `loadSource` of a different address detaches and
 //     re-attaches the media (hls.ts 551-560, buffer-controller.ts 604-609), which empties the buffer, resets the time and leaves the
 //     element PAUSED. So one instance loads one manifest, once, and a refresh only changes the token held here: `xhrSetup` swaps the
 //     token segment of every later request (playlist reloads, renditions, segments) for the newest one (seazn-signed-address.ts).

@@ -188,6 +188,10 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(answer.live!.expiresAt).toBe(new Date((Math.floor(r.clock.now / 1000) + TTL_SECONDS) * 1000).toISOString());
     expect(PublicFixtureVideo.parse(answer), "the producer's answer is the published contract").toEqual(answer);
     expect(await readOrg(r, r.fixtureIds[0])).toEqual(answer);
+    // The live names its video: opaque (a hash, never the uid), and the same on the next read (the page holds a playing address on it).
+    expect(answer.live!.id, "an opaque identity").toMatch(/^[0-9a-f]{16}$/);
+    expect(answer.live!.id).not.toContain(prog.uid);
+    expect((await read(r, r.fixtureIds[0])).live!.id).toBe(answer.live!.id);
     // The OTHER fixture of the same org streams nothing: its answer is empty, and nothing was signed for it.
     const before = r.mint.mock.calls.length;
     expect(await read(r, r.fixtureIds[1])).toEqual(NONE);

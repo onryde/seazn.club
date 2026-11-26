@@ -5,8 +5,12 @@
 // plays lapses: nothing here assumes a playing Cloudflare HLS survives its token's expiry. The server re-mints inside its own window
 // (`SEAZN_TOKEN_REFRESH_BEFORE_SECONDS`, 5 min, where `cf-playback.ts` stops reusing a cached token), and every answer that plays a
 // Cloudflare address (live, or the interim `hls` recording) is re-read at `SEAZN_VIDEO_POLL_FLOOR_MS` (30 s). The floor is shorter
-// than that window (the schedule test pins it), so each re-read also carries the refresh, and a same-token answer is a no-op to the
-// player (seazn-playback.ts). The floor is also the least any re-read waits, so a clock that is wrong cannot hammer the route.
+// than that window (the schedule test pins it), so a re-read always lands inside it, and the address the island hands the player is
+// replaced then, once, by the first answer that finds the held token refresh-due (seazn-held-address.ts: a playing address is held
+// while its token is not due, whichever machine signed the answer, because a native player is re-pointed, and stops, by every changed
+// address). A same-address answer is a no-op to the player (seazn-playback.ts). The floor is also the least any re-read waits, so a clock
+// that is wrong cannot hammer the route. The expiries read below are the SHOWN answer's (the poll hands the schedule what the island
+// kept on screen), so a settled recording is re-read before the token the player holds is due, not the newest one's.
 //
 // Why the floor and not the token's refresh point (~55 min): what ends the state on screen comes BEFORE that point.
 //   - LIVE (Task 19; the Task 15 review's r3): the organiser stops. At the floor an open page learns it within one poll, and turns
