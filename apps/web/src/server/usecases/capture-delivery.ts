@@ -23,17 +23,20 @@ import "server-only";
 // session with no fact yet answers no `delivery` at all (relay/domain/delivery.ts omits every unknown member, and
 // wireBeatAnswer an empty object). Court sessions are read the same way.
 import { sql } from "@/lib/db";
-import { latestWebhookEvent } from "./stream-sessions/live-notification";
+import { latestWebhookAt, latestWebhookEvent } from "./stream-sessions/live-notification";
 import type { StoredDelivery } from "@/server/relay/domain/delivery";
 
 /** The stored facts for session `sid`, or null when it no longer exists. One statement. */
 export async function readDeliveryFacts(sid: string): Promise<StoredDelivery | null> {
-  const [row] = await sql<{ last_heartbeat: unknown; heartbeat_at: Date | null; camera_event: string | null; programme_event: string | null }[]>`
+  const [row] = await sql<{ last_heartbeat: unknown; heartbeat_at: Date | null; camera_event: string | null; programme_event: string | null; camera_event_at: Date | null; programme_event_at: Date | null }[]>`
     select s.last_heartbeat, s.heartbeat_at,
            ${latestWebhookEvent("camera")} as camera_event,
-           ${latestWebhookEvent("programme")} as programme_event
+           ${latestWebhookEvent("programme")} as programme_event,
+           ${latestWebhookAt("camera")} as camera_event_at,
+           ${latestWebhookAt("programme")} as programme_event_at
       from fixture_stream_sessions s
      where s.id = ${sid}`;
   if (row === undefined) return null;
-  return { relayBeat: row.last_heartbeat, relayBeatAt: row.heartbeat_at, cameraEvent: row.camera_event, programmeEvent: row.programme_event };
+  return { relayBeat: row.last_heartbeat, relayBeatAt: row.heartbeat_at, cameraEvent: row.camera_event, programmeEvent: row.programme_event,
+    cameraEventAt: row.camera_event_at, programmeEventAt: row.programme_event_at };
 }
