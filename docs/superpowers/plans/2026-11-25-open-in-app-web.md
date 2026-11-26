@@ -28,7 +28,7 @@
 - `/app/stream` opened with no fragment, or a garbled one: same page, no error, no script reads it. (Task 2)
 - A court code with `exp` and a non-ASCII-free round trip: bytes after decoding equal the QR text exactly. (Task 1)
 - Server render and first client render on Android: no hydration mismatch, button appears after mount. (Task 4)
-- Fallback opened directly (in-app browser, typed URL, `history.length === 1`): "Score in browser instead" hidden, Play link still works. (Task 2)
+- Fallback opened directly (in-app browser, typed URL): Play link works, and "Score in browser instead" shows only when the address carried a device-link token (spec §5.3, amended 2026-11-26; it was hidden whenever `history.length === 1`). (Task 2)
 
 ---
 
@@ -83,6 +83,11 @@ it("route answers 200 json with assetLinksFor(siteOrigin())", ...);
 - [ ] **Step 4:** Tests PASS. **Step 5:** Commit `feat(open-in-app): link builder and assetlinks.json`.
 
 ### Task 2: Fallback pages, then the staging spike (GATE)
+
+> **Superseded on one point (owner, 2026-11-26; spec §5.3).** "Score in browser instead" no longer goes back: on
+> `/app/score` it opens the remote pad, `/score/<token>`, so that page's script does read the fragment. Where the steps
+> below say `history.back()`, "its body does not match `/hash|…|\/score\//`", "nothing to go back to" or
+> `history.length > 1`, the spec's §5.3 is the rule now. The other `/app` pages are unchanged.
 
 **Files:**
 - Create: `apps/web/src/lib/app-fallback-page.ts`, `apps/web/src/app/app/{stream,score,day}/route.ts`
