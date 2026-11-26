@@ -6,7 +6,7 @@ import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
 import { PUBLIC_HUB_ROOT, isPublicHubPath, routes } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
-import { revshareEnabled } from "@/lib/revshare-shared";
+import { isAffiliateLandingPath, revshareEnabled } from "@/lib/revshare-shared";
 import { BUNNY_EMBED_HOST, FAKE_REPLAY_EMBED_HOST, replayDriverIsFake, streamPlaybackHost } from "@/server/relay/config";
 import { ROUTED_DIVISION_TABS } from "@/lib/division-tabs";
 
@@ -42,15 +42,23 @@ export function isStaticContentPath(pathname: string): boolean {
   return STATIC_CONTENT_TREE.test(pathname);
 }
 
-/** revshare's tracking.js (app/layout.tsx) posts to its own API (`/api/tracking/click`, `/api/tracking/get-ip-hash`). */
+/** revshare's tracking.js (lib/revshare-script.ts) posts to its own API (`/api/tracking/click`, `/api/tracking/get-ip-hash`). */
 const REVSHARE_ORIGIN = "https://www.revshare.so";
 
-/** The external script origins the root layout loads on every page, as ` <origin>` script-src suffixes, for the fixed
+/** The external script origins the root layout's code loads, as ` <origin>` script-src suffixes, for the fixed
  *  (nonce-free) policy, which has no 'strict-dynamic' to trust them through: revshare's tracking.js when it is on
- *  (app/layout.tsx), and PostHog's own origin, from which posthog-js loads its lazy extensions (instrumentation-client.ts;
- *  "" when events ride the same-origin /ingest rewrite). Both are fixed per deployment, so the header stays byte-stable. */
+ *  (added in the browser on affiliate landings, lib/revshare-script.ts; help and blog are landings), and PostHog's own
+ *  origin, from which posthog-js loads its lazy extensions (instrumentation-client.ts; "" when events ride the same-origin
+ *  /ingest rewrite). Both are fixed per deployment, so the header stays byte-stable. */
 function rootLayoutScriptOrigins(): string {
   return `${revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}${posthogApiOrigin()}`;
+}
+
+/** tracking.js's API as a ` <origin>` connect-src suffix, on the pages the script can run on: the fixed policy's trees
+ *  (help and blog) and the other affiliate landings. A document keeps the policy it was served with, and the script is
+ *  only ever added to a document that was served as one of these. */
+function revshareConnectOrigin(nonce: string | null, pathname: string): string {
+  return revshareEnabled() && (nonce === null || isAffiliateLandingPath(pathname)) ? ` ${REVSHARE_ORIGIN}` : "";
 }
 
 /** The `/overlay` tree (`/overlay` or `/overlay/…`, never `/overlayx…`): the stream overlay a club adds to OBS, and the
@@ -143,10 +151,11 @@ export function cspHeader(
     // Core SDK talks to *.realtime.cloudflare.com, signalling over wss
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
     // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
-    // The fixed policy (nonce null) also lets revshare's tracking.js reach its API when revshare is on.
+    // When revshare is on, tracking.js may reach its API on the pages it can run on (isAffiliateLandingPath), under either
+    // policy. Under the nonce policy 'strict-dynamic' already trusts the tag, which our own bundle appends.
     // Seazn-hosted video (Task 15): the match page's player fetches the signed HLS manifest and its segments from the Stream customer
     // host (hls.js: XHR/fetch, here), so it is named in connect-src and, below, in media-src (proxy-csp-seazn-video.test.ts).
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com${playbackOrigin()} https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}${nonce === null && revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}`,
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com${playbackOrigin()} https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}${revshareConnectOrigin(nonce, opts.pathname ?? "")}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe; the Turnstile widget (components/turnstile-widget.tsx) is a challenges.cloudflare.com
     // iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
     // privacy-enhanced embed, loaded only after a tap: `youtube-nocookie.com` and its www host, and no `youtube.com` origin.

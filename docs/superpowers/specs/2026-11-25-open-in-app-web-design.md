@@ -126,7 +126,7 @@ Seen only when the app did not take the link.
 
 ```
   [Seazn Club]
-  Seazn Club isn't on this phone yet
+  Seazn Club Mobile App isn't on this phone yet
   [ Get it on Google Play ]
   Then come back and tap Open in app again.
   Score in browser instead          <- /app/score only
