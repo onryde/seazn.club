@@ -109,7 +109,7 @@ const { createVenue, createCourt } = await import("../venues");
 type AuthCtx = import("@/server/api-v1/auth").AuthCtx;
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const T0 = "2026-08-01T09:00:00.000Z";
+const T0 = "2027-08-01T09:00:00.000Z";
 const DIVISION_CONFIG = {
   resultMode: "score",
   allowDraws: true,

@@ -499,6 +499,9 @@ interface Props {
   /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
    *  an organiser), threaded to the run sheet's chips. Optional: none by default. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  /** Fixture id → actual start for the matches in play (the division page's `listFixtureKickoffs`), threaded to the run
+   *  sheet so "Needs result" measures from the start the desk measures from. Optional: a row then uses its slot. */
+  kickoffs?: Record<string, string>;
   /** The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers
    *  none until it starts). The page sets it from the SAME gates as the Fixtures tab's Match Day entry (an organiser who can act, a chess
    *  division that plays online now, the club offered online chess) plus the shared not-started predicate
@@ -706,7 +709,7 @@ function scrollIntoViewIfHidden(el: HTMLElement) {
   el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, foldedRounds = NO_FOLDED_ROUNDS, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, foldedRounds = NO_FOLDED_ROUNDS, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, kickoffs, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1324,6 +1327,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     streamStates,
     awaitingSettle,
     onlinePlay,
+    kickoffs,
     arbiterHrefFor: arbiterHref === null ? undefined : (fixtureId: string) => routes.competitionMatchDayBoard(orgSlug, compSlug, fixtureId),
     matchDayHref: matchDayHref ?? undefined,
     /* Fix round 1 (I1): "Find a pitch / table / board / rink", by the division's sport (an absent one is the court). */
@@ -1356,6 +1360,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       matchMinutes,
       streamStates,
       onlinePlay,
+      kickoffs,
     }) ||
     // A folded round keeps its bar under All, and under Unscheduled while it holds an unscheduled match (`foldedRoundShows`).
     (filter === "all" && foldedRounds.length > 0) ||
@@ -1480,6 +1485,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               nowMs={nowMs}
               matchMinutes={matchMinutes}
               onlinePlay={onlinePlay}
+              kickoffs={kickoffs}
               filter={filter}
               onFilter={setFilter}
               foldedUnscheduled={foldedUnscheduled}

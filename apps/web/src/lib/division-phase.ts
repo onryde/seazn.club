@@ -619,16 +619,19 @@ export function isUnscheduledFixture(f: { status: string; scheduledAt: string | 
 }
 
 /**
- * "This fixture should have finished by now and no result has arrived."
+ * "This match was STARTED, should have finished by now, and no result has arrived."
  *
- * The `result_missing` attention's own predicate, lifted out of
- * `resolveAttention` for the same reason as `isUnscheduledFixture` above.
- * The run sheet's "Needs result" chip asked `fixtureRowAction(...).kind ===
- * "open_pad"` — i.e. `status === "in_play"` — which is not merely a different
- * answer but a DISJOINT one: `open_pad` requires `in_play`, this requires
- * `scheduled`, so no fixture could ever be in both. On the Saturday evening
- * the filter exists for (organisers score after the fact, so nothing is ever
- * left `in_play`) the chip read zero (max-effort review, finding 2).
+ * Owner ruling 2026-11-26: "when match not started then don't show enter result, we need a result need you only if
+ * match started but not entered". So only an `in_play` fixture can owe one. A `scheduled` fixture never does, however
+ * long ago its slot ran, and neither does one with no usable kick-off.
+ *
+ * The kick-off is the ACTUAL start (`startedAt`, `core.start`'s own `recorded_at`, read by `kickoffsOf`) and falls
+ * back to the plan (`scheduledAt`) only for a caller or a row that has no start time. `startedAt` is REQUIRED (null is
+ * an answer) so a new caller has to say which it has.
+ *
+ * The `result_missing` attention's own predicate, lifted out of `resolveAttention` for the same reason as
+ * `isUnscheduledFixture` above: the run sheet's "Needs result" chip asks it too, so the two cannot drift (max-effort
+ * review, finding 2).
  *
  * `matchMinutes` is the division's own `schedule_settings.config.matchMinutes`
  * (falling back to `defaultMatchMinutes()`, competition-desk.ts) — the grace
@@ -640,14 +643,13 @@ export function isUnscheduledFixture(f: { status: string; scheduledAt: string | 
  * rule holds for `no_scorer`/`not_recording` beside it.
  */
 export function isResultMissing(
-  f: { status: string; scheduledAt: string | null; matchMinutes: number },
+  f: { status: string; startedAt: string | null; scheduledAt: string | null; matchMinutes: number },
   nowMs: number,
 ): boolean {
-  return (
-    f.status === "scheduled" &&
-    f.scheduledAt !== null &&
-    Date.parse(f.scheduledAt) + f.matchMinutes * 60_000 < nowMs
-  );
+  if (f.status !== "in_play") return false;
+  const kickoff = f.startedAt ?? f.scheduledAt;
+  // A malformed instant parses to NaN, which compares false: unknown is never overdue.
+  return kickoff !== null && Date.parse(kickoff) + f.matchMinutes * 60_000 < nowMs;
 }
 
 /** D12 (2026-10-09): a round is PAIRED automatically and OPENED by an
@@ -972,10 +974,11 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   //
   // RULING: the gate excludes `setup` only. `setup`, `scheduled`, `active`
   // and `completed` are the full set (divisions_status_check) — a division
-  // whose timetable is published (`scheduled`) or further along, with a
-  // match time that has passed, genuinely owes a result; only `setup` (no
-  // timetable published at all — scoring can't even be locked-open yet,
-  // scoring.ts:220) is the "not yet real" state G3 meant to exclude.
+  // whose timetable is published (`scheduled`) or further along can hold a
+  // live match; only `setup` (no timetable published at all — scoring can't
+  // even be locked-open yet, scoring.ts:220) is the "not yet real" state G3
+  // meant to exclude. (Since the 2026-11-26 ruling the match must also have
+  // STARTED to owe a result — `isResultMissing` below.)
   // `needs_draw`/`unscheduled`/`registrations_waiting` are still deliberately
   // NOT gated here — every one of them is exactly the class of thing an
   // organiser legitimately still owes before or after Start.
@@ -1024,7 +1027,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       if (f.status === "in_play" && f.eventCount === 0 && !f.hasScorer) {
         noScorer.push({ id: f.id, since: elapsed });
       }
-      // A SEPARATE `if`, deliberately not chained onto the one above. Chained,
+      // A SEPARATE statement, deliberately not chained onto the one above. Chained,
       // `!f.hasScorer` on the first arm made `f.hasScorer` on this one
       // redundant — a mutation sweep deleted that conjunct and all 79 tests
       // stayed green, because branch ORDER was doing the work the conjunct
@@ -1032,7 +1035,16 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       // (recurring failure class 3), and the pair's whole promise here is that
       // one match can never raise both rows. Independent predicates, each
       // killable on its own.
-      if (
+      //
+      // The result rung comes FIRST (owner ruling 2026-11-26): `not_recording` and `result_missing` are the same
+      // silent, started match at two ages, so once its window has closed it is owed a result and no longer reads
+      // "recording is late". One row per fixture, and the desk's owed count stays the predicate's own answer.
+      if (!f.awaitsRoundOpen && isResultMissing(f, nowMs)) {
+        // The predicate the run sheet's "Needs result" chip asks too. R4: never a board waiting on its online
+        // round's open (the run sheet's `owesResult` says the same through its `unopened` entry). A HELD online board
+        // that has started is counted here; the Needs-you LIST shows it once, as its `board_held` row (`needsYouItems`).
+        resultMissing.push(f.id);
+      } else if (
         // F3 (round J). `no_scorer`'s exact complement: same status, same zero
         // event count, `hasScorer` the other way round — so no fixture can ever
         // raise both, and the two rows can never contradict each other on the
@@ -1057,14 +1069,6 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         elapsed >= NOT_RECORDING_GRACE_MINUTES
       ) {
         notRecording.push({ id: f.id, since: elapsed });
-      } else if (!f.awaitsRoundOpen && isResultMissing(f, nowMs)) {
-        // Behaviour unchanged: the predicate is the same three terms, now
-        // EXPORTED so the run sheet's "Needs result" chip can ask this
-        // module the question instead of inventing its own answer. R4: never
-        // a board waiting on its online round's open (the run sheet's
-        // `owesResult` says the same through its `unopened` entry). A held board whose slot has passed IS counted here (spec 2026-11-05
-        // section 5.4: "The results-owed count is unchanged"); the Needs-you LIST shows it once, as its `board_held` row (`needsYouItems`).
-        resultMissing.push(f.id);
       }
     }
   }

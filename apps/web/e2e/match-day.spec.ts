@@ -6,6 +6,8 @@ import {
   activeOrg,
   addEntrantsViaApi,
   apiJson,
+  assignFixtureOfficialSql,
+  backdateFixtureStartSql,
   competitionPath,
   createStageAndGenerate,
   expectNoHorizontalScroll,
@@ -43,9 +45,10 @@ import { finishSeaznMatch, goLive, seedSeaznSession, signedAddressPattern, stubF
  * Task A4 adds the `needsYou` seed: two more players (Eve, Fay) and a third court, so that
  *   - Court 3: Eve v Fay IN PLAY with nothing recorded and no scorer named — the desk's red `no_scorer`, which marks the
  *     court's row;
- *   - Ben v Dee: planned three hours ago, on no court, no result — the desk's `result_missing`, which the header's
+ *   - Gus v Hal: STARTED three hours ago (a real core.start, its kick-off aged), on no court, a scorer assigned, no
+ *     result — the desk's `result_missing` (only a started match owes one: owner ruling 2026-11-26), which the header's
  *     Needs-you list puts FIRST even though the red row outranks it on the desk.
- * Eve and Fay play nobody else on the board, so Court 2's own candidates are what the A3 tests already pin.
+ * Eve, Fay, Gus and Hal are on no court's own match, so Court 2's own candidates are what the A3 tests already pin.
  *
  * Task B1 adds the `quiet` seed: the same board with Ana v Ben NOT started — nothing playing, so the shell polls on its quiet
  * cadence — for the two tests that moved here from the retired desk-in-play-band.spec.ts (the board's own polls).
@@ -68,6 +71,8 @@ interface Seed {
   /** Ana v Cal: queued on Court 1, blocked by Ana. */
   anaCal: string;
   names: { ana: string; ben: string; cal: string; dee: string };
+  /** The `needsYou` seed's owed match's first player (Gus v Hal); null otherwise. */
+  owedName: string | null;
 }
 
 async function seedMatchDay(
@@ -93,10 +98,10 @@ async function seedMatchDay(
   // whole organisation's held matches, and persons are the organisation's.
   const nonce = Math.random().toString(36).slice(2, 7);
   const names = { ana: `Ana ${label} ${nonce}`, ben: `Ben ${label} ${nonce}`, cal: `Cal ${label} ${nonce}`, dee: `Dee ${label} ${nonce}` };
-  const extra = opts.needsYou ? [`Eve ${label} ${nonce}`, `Fay ${label} ${nonce}`] : [];
+  const extra = opts.needsYou ? ["Eve", "Fay", "Gus", "Hal"].map((n) => `${n} ${label} ${nonce}`) : [];
   const ents = await addEntrantsViaApi(request, divisionId, [names.ana, names.ben, names.cal, names.dee, ...extra]);
   if (ents.status >= 300 || ents.ids.length !== 4 + extra.length) throw new Error(`entrants → ${ents.status}`);
-  const [ana, ben, cal, dee, eve, fay] = ents.ids as [string, string, string, string, string?, string?];
+  const [ana, ben, cal, dee, eve, fay, gus, hal] = ents.ids as [string, string, string, string, string?, string?, string?, string?];
   await createStageAndGenerate(request, divisionId);
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
@@ -142,7 +147,7 @@ async function seedMatchDay(
 
   if (court3 !== null) {
     const eveFay = fixtureOf(eve!, fay!);
-    const benDee = fixtureOf(ben, dee);
+    const gusHal = fixtureOf(gus!, hal!);
     await withDb(async (sql) => {
       // Court 3: in play with NOTHING recorded and no scorer — the state a phone that never opened the pad leaves. A status
       // patch on purpose: a core.start would be a recorded event, and the desk's no_scorer asks for none. Kicked off 5
@@ -150,10 +155,13 @@ async function seedMatchDay(
       // same, and once a link is made the match has a scorer and is not yet late, so the court carries NO mark at all.
       // Past the grace it would turn amber not_recording instead (pinned in competition-desk.test.ts, I1).
       await sql`update fixtures set court_id = ${court3.id}, scheduled_at = ${within(-5)}, status = 'in_play' where id = ${eveFay}`;
-      // Ben v Dee: its window closed hours ago, on no court, no result. Not clamped to today: the desk owes a result whatever
-      // day the window closed on.
-      await sql`update fixtures set court_id = null, scheduled_at = ${new Date(now - 3 * 3_600_000).toISOString()} where id = ${benDee}`;
+      // Gus v Hal: off court. Not clamped to today: a match in play is owed its result whatever day it started on.
+      await sql`update fixtures set court_id = null, scheduled_at = ${new Date(now - 3 * 3_600_000).toISOString()} where id = ${gusHal}`;
     });
+    // STARTED for real, then the kick-off aged past the 30-minute window; a scorer assigned, so it raises no recording row.
+    await startFixture(request, gusHal);
+    await backdateFixtureStartSql(gusHal, 180);
+    await assignFixtureOfficialSql(gusHal);
   }
 
   return {
@@ -168,6 +176,7 @@ async function seedMatchDay(
     calDee,
     anaCal,
     names,
+    owedName: extra[2] ?? null,
   };
 }
 
@@ -229,7 +238,7 @@ async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promis
   const rows = list.locator("[data-attention]");
   await expect(rows.first()).toHaveAttribute("data-attention", "result_missing");
   await expect(rows.first()).toContainText("Enter result");
-  await expect(rows.first()).toContainText(seed.names.ben);
+  await expect(rows.first()).toContainText(seed.owedName!);
   await expect(list.locator('[data-attention="no_scorer"]')).toHaveCount(1);
   await expectNoHorizontalScroll(page);
   await toggle.click();

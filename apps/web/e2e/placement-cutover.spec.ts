@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts, upcomingUtcDay } from "./helpers";
 
 // Task 11 (placement cutover) — proves the ONE thing `auto-schedule.spec.ts`
 // structurally cannot: that clicking Auto-schedule in a real browser, against a
@@ -52,7 +52,10 @@ import { TAG, apiJson, addEntrantsViaApi, divisionPath, seedVenueWithCourts } fr
 // "optimized" with the SAME copy as z3 in every locale, so the rendered
 // provenance string cannot tell them apart — only the attribute can.
 
-const START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+// A Monday ahead, for every board here: a BUILD proposes nothing before now, and the blackouts below
+// are placed relative to these starts.
+const BOARD_DAY = upcomingUtcDay(1);
+const START = new Date(BOARD_DAY + 9 * 3_600_000).toISOString();
 const SLOT_MIN = 30;
 const REST_MIN = 45;
 
@@ -314,7 +317,7 @@ test("Auto-schedule reaches the OPTIMISER, not the greedy fallback wearing the s
 // every time. A 2-fixture board is fully determined by its constraints, so
 // this is not the nondeterminism `_RULES.md` section 6b warns CP-SAT search
 // can exhibit on a larger, under-constrained one.
-const PER_COURT_START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+const PER_COURT_START = new Date(BOARD_DAY + 9 * 3_600_000).toISOString();
 const PER_COURT_START_MS = Date.parse(PER_COURT_START);
 const PER_COURT_MATCH_MIN = 30;
 const PER_COURT_GAP_MIN = 10;
@@ -481,7 +484,7 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
 // room to place both if the shared person is irrelevant, and exactly the
 // shape a placer blind to that person would happily fill by putting both on
 // the earliest tick, one per court.
-const SHARED_PERSON_START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+const SHARED_PERSON_START = new Date(BOARD_DAY + 9 * 3_600_000).toISOString();
 const SHARED_PERSON_START_MS = Date.parse(SHARED_PERSON_START);
 const SHARED_PERSON_MATCH_MIN = 30;
 const SHARED_PERSON_FIXTURE_COUNT = 2;

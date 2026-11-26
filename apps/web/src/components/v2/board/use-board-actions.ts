@@ -40,6 +40,7 @@ import {
   type BoardFixture,
   type PublishAllOutcome,
 } from "./types";
+import { roundOrderText } from "./conflict-detail-format";
 
 /** The board's safety-net refresh (realtime push nudges, spec §4.3). It runs whether push is up or not: before it
  *  the board relied on push alone, so a board on a topic gone silent never refreshed until reload. */
@@ -378,7 +379,14 @@ export function useBoardActions(
         const reasons = [
           ...new Set(
             list.map((c) => {
-              let m = helpOf(c.code);
+              let m =
+                roundOrderText(c.details, {
+                  msg,
+                  entrantNames,
+                  fixtureTitles: c.details?.other_fixture_id
+                    ? { [c.details.other_fixture_id]: titleOf(c.details.other_fixture_id) }
+                    : {},
+                })?.help ?? helpOf(c.code);
               // Structured `details.other_fixture_id` (C3, 2026-08-13 design
               // amendment) — never a regex scrape of the deprecated prose.
               // The old regex took the FIRST UUID-shaped substring in

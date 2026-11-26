@@ -7,6 +7,7 @@ import {
   divisionPath,
   expectNoHorizontalScroll,
   seedVenueWithCourts,
+  upcomingUtcDay,
 } from "./helpers";
 
 /**
@@ -134,7 +135,8 @@ test.describe("blackout window constrains the board (case a)", () => {
     // — pinning the org clock to UTC means "local midnight" IS UTC midnight,
     // so the instants below need no runner-zone conversion (#448 governs on
     // settings.orgTz, and this makes orgTz unambiguous).
-    const DAY = Date.UTC(2026, 9, 19); // Mon 2026-10-19T00:00:00Z
+    // A Monday ahead: Auto-schedule proposes nothing before now, and the blackout below sits on this day.
+    const DAY = upcomingUtcDay(1);
     const MIN = 60_000;
     const { courts: blackoutCourts } = await seedVenueWithCourts(request, ["Court A"]);
 
@@ -377,7 +379,7 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 9, 19, 9, 0)).toISOString(),
+        startAt: new Date(upcomingUtcDay(1) + 9 * 3_600_000).toISOString(), // Auto-schedule, below
         matchMinutes: 45,
         gapMinutes: 5,
         courts: courts.map((c) => c.id),

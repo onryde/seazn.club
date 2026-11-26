@@ -186,8 +186,9 @@ export function needsYouItems(
         }
         case "result_missing": {
           // A held board is one row already (`board_held`, spec 2026-11-05 section 5.4: "a hold is never counted twice"), so this row
-          // is about the matches that owe a result and are NOT held. The attention keeps them all: `resultsOwedOf` counts a held,
-          // late board, since the same section says "the results-owed count is unchanged". Only the ROW is deduped.
+          // is about the matches that owe a result and are NOT held. The attention keeps them all: `resultsOwedOf` counts a held
+          // board that STARTED and ran past its window (a never-started one owes no result: owner ruling 2026-11-26, which
+          // supersedes the same section's "the results-owed count is unchanged" for it). Only the ROW is deduped.
           const held = new Set(dd.attention.flatMap((b) => (b.kind === "board_held" ? [b.fixtureId] : [])));
           const ids = a.fixtureIds.filter((id) => !held.has(id));
           if (ids.length === 0) break;

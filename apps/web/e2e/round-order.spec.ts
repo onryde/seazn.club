@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, setDateTime, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, setDateTime, seedVenueWithCourts, upcomingUtcDay } from "./helpers";
 
 // C1 task 2 item 2 — owner-demanded browser e2e. The owner explicitly
 // rejected task 1's real-solver integration runs (schedule-reflow-*.test.ts,
@@ -36,6 +36,9 @@ const SOLVED = ["ok", "already_optimal"];
  *  proving a real solve. */
 const BUSY_RETRIES = 3;
 const BUSY_BACKOFF_MS = 4_000;
+
+// A Monday ahead: Auto-schedule proposes nothing before now, and the drag below names the day before it.
+const BOARD_DAY = upcomingUtcDay(1);
 
 /** A private competition + a 4-entrant round-robin division (6 fixtures,
  *  3 rounds of 2) on a two-court grid — the same shape
@@ -76,7 +79,7 @@ async function seedRoundRobinBoard(
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: new Date(BOARD_DAY + 9 * 3_600_000).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
         courts: courts.map((c) => c.id),
@@ -229,7 +232,7 @@ test("dragging a card into a round-order violation against an untouched sibling 
   expect(textBefore, `fixture ${laterRoundFixtureId} carries no R<n> label before the drag`).toMatch(/R\d+/);
 
   // Pick the later-round card, then move it to the day BEFORE the board's
-  // own `startAt` (2026-09-21) — `2026-09-20T09:00` — which trips the
+  // own `startAt` (`BOARD_DAY`), at 09:00 — which trips the
   // day-level half of H6 (`dayA > dayB`) against round 1's untouched
   // sibling regardless of exact time-of-day, so the destination time itself
   // only has to be a real, selectable slot (the board's own anchor,
@@ -237,7 +240,7 @@ test("dragging a card into a round-order violation against an untouched sibling 
   await cardBefore.locator("button[aria-pressed]").click();
   const dialog = page.getByRole("dialog", { name: /^Move / });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
-  await setDateTime(dialog, "2026-09-20T09:00");
+  await setDateTime(dialog, `${new Date(BOARD_DAY - 86_400_000).toISOString().slice(0, 10)}T09:00`);
   await dialog.getByRole("button", { name: "Move", exact: true }).click();
 
   // THE REFUSAL, on screen: the board's own error banner

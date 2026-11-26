@@ -785,20 +785,46 @@ describe.runIf(HAS_DB)("the wire: the per-board Needs-you rows survive Match Day
 // "a hold is never counted twice" (the Needs-you LIST carries it once, as its `board_held` row) and, in its last sentence, "The
 // results-owed count is unchanged" (a held board whose slot has passed is still a match that owes a result, and `results_owed` says so).
 // A6 first took the board out of the `result_missing` attention, which lowered `results_owed`; the dedupe belongs to the ROW only.
-describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchanged (spec 5.4) - a held board whose slot has passed is board_held in Needs you, not also a result_missing row, and still owes its result", () => {
+describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchanged (spec 5.4) - a held board that STARTED and ran past its window is board_held in Needs you, not also a result_missing row, and still owes its result", () => {
   const ago = (minutes: number): Date => new Date(NOW.getTime() - minutes * MIN);
   const resultMissing = (list: Attention[]): string[] => list.filter((a) => a.kind === "result_missing").flatMap((a) => a.fixtureIds).sort();
   const missingRows = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">) => rowsOf(desk, r).filter((i) => i.kind === "result_missing");
   const heldRows = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">) => rowsOf(desk, r).filter((i) => i.kind === "board_held");
+  /** The round's boards, started: in play with no start event on file, so the window runs from the slot (`isResultMissing`). */
+  const started = async (r: SeedOnlineChessRoundResult): Promise<void> => {
+    const rows = await sql<{ id: string }[]>`
+      update fixtures set status = 'in_play' where id in ${sql(r.boards.map((b) => b.fixtureId))} returning id`;
+    expect(rows.length, "every board of the round started").toBe(r.boards.length);
+  };
   /** The title a `result_missing` row of ONE match carries: the dictionary's own sentence over the desk's names for it. */
   const singleTitle = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">, fixtureId: string): string => {
     const names = desk.divisions.get(r.divisionId)!.fixture_names[fixtureId]!;
     return t(en as unknown as Dict, "desk.needsYou.result_missing", { division: "Open", home: names.home ?? "—", away: names.away ?? "—" });
   };
 
-  it("EMPTY CASE FIRST: two dated boards of an opened round whose slot has passed, nothing held - both owe a result, one row says so, and no board is held", async () => {
+  // Owner ruling 2026-11-26 ("when match not started then don't show enter result"): this SUPERSEDES section 5.4's last sentence for a
+  // board that never started. A held `scheduled` board owes no result however old its slot is; its hold is its whole Needs-you row.
+  it("EMPTY CASE FIRST: boards that never started owe nothing however late their slot is, held or not - the hold is the only row", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    const [held] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await hold(r, held, "no_show_white");
+    const desk = await deskOf(r.owner, r.competitionId);
+
+    expect(heldIds(attentionsOf(desk, r.divisionId)), "premise: the hold is raised").toEqual([held.fixtureId]);
+    expect(heldRows(desk, r)).toHaveLength(1);
+    expect(resultMissing(attentionsOf(desk, r.divisionId))).toEqual([]);
+    expect(missingRows(desk, r)).toEqual([]);
+    expect(resultsOwedOf(desk)).toBe(0);
+    const view = await getMatchDay(r.owner, r.competitionId, NOW);
+    expect(view.fixtures_today, "premise: a match day (the round opened today)").toBeGreaterThan(0);
+    expect(view.results_owed).toBe(0);
+  });
+
+  it("two started boards of an opened round past their window, nothing held - both owe a result, one row says so, and no board is held", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    await started(r);
     const [a, b] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     const desk = await deskOf(r.owner, r.competitionId);
 
@@ -811,6 +837,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("one board held: it is ONE row (board_held) in the list and the other still has its result_missing row - and results_owed still counts BOTH matches", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, held, "no_show_white");
     const desk = await deskOf(r.owner, r.competitionId);
@@ -828,6 +855,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("EVERY held board of the division is left out of the result_missing ROW, not only the first - and every one is still counted in results_owed; a flagged board that is not held keeps its own row set", async () => {
     const r = await seedOnlineChessRound({ fixtures: 3, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [h1, h2, plain] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
     await hold(r, h1, "no_show_white");
     await hold(r, h2, "provider_error");
@@ -841,6 +869,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("several boards still owe a result beside the held ones: the aggregated row's count is the ones NOT held, while results_owed counts them all", async () => {
     const r = await seedOnlineChessRound({ fixtures: 4, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [h1, h2] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
     await hold(r, h1, "no_show_white");
     await hold(r, h2, "provider_error");
@@ -856,6 +885,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("when EVERY board that owes a result is held, there is no result_missing row at all - and results_owed still counts them (the empty case after the dedupe)", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [h1, h2] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, h1, "no_show_white");
     await hold(r, h2, "provider_error");
@@ -874,6 +904,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("only a HELD board is left out of the row: a board with an open flag (a report to review, not the decision) keeps its missing result beside its board_flagged row", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [flagged, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await bridgeRow(flagged.fixtureId, r.orgId, { status: "live", moves: 10 });
     await openFlag(r.orgId, flagged.fixtureId, { kind: "multiple_devices" });
@@ -890,6 +921,7 @@ describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchange
   it("a division whose held read FAILED does not move results_owed: it is the healthy desk's count, whatever the lister did (m2)", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
+    await started(r);
     const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, held, "no_show_white");
     const healthy = await deskOf(r.owner, r.competitionId);

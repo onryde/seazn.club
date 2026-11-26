@@ -334,3 +334,30 @@ export function fromBoardConflictDetail(d: BoardConflictDetail): ConflictDetail 
 export function formatBoardConflictDetail(d: BoardConflictDetail, ctx: ConflictDetailCtx): string {
   return formatConflictDetail(fromBoardConflictDetail(d), ctx);
 }
+
+/** The detail kinds that mean "rounds out of order" rather than "plays before the match feeding it". */
+const ROUND_ORDER_KINDS: ReadonlySet<string> = new Set([
+  "round_order_day",
+  "round_order_same_day",
+  "round_order_end",
+  "no_slot_round_barrier",
+]);
+
+/** The wording for a round-order conflict, or null for every other conflict. Its API code is the
+ *  feeder's (`warn.order`) or the generic no-slot one, whose code-level help and label are wrong for
+ *  it: no Swiss or league match feeds another. */
+export function roundOrderDetailText(
+  details: ConflictDetail | undefined,
+  ctx: ConflictDetailCtx,
+): { label: string; help: string } | null {
+  if (details === undefined || !ROUND_ORDER_KINDS.has(details.kind)) return null;
+  return { label: ctx.msg("board.conflict.warn.round_order"), help: formatConflictDetail(details, ctx) };
+}
+
+/** {@link roundOrderDetailText} off the snake_case wire shape the board surfaces hold. */
+export function roundOrderText(
+  details: BoardConflictDetail | undefined,
+  ctx: ConflictDetailCtx,
+): { label: string; help: string } | null {
+  return roundOrderDetailText(details && fromBoardConflictDetail(details), ctx);
+}

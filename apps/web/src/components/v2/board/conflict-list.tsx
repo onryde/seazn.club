@@ -24,7 +24,7 @@ import {
   type BoardConflictDetail,
   type BoardFixture,
 } from "./types";
-import { formatBoardConflictDetail } from "./conflict-detail-format";
+import { formatBoardConflictDetail, roundOrderText } from "./conflict-detail-format";
 
 export function ConflictList({
   conflicts,
@@ -116,9 +116,9 @@ export function ConflictList({
                   c.blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"
                 }`}
               >
-                {label(c.code)}
+                {roundOrderText(c.details, { msg, entrantNames, fixtureTitles })?.label ?? label(c.code)}
               </span>
-              {help(c.code, c.details)}
+              {roundOrderText(c.details, { msg, entrantNames, fixtureTitles })?.help ?? help(c.code, c.details)}
             </p>
           </li>
         );

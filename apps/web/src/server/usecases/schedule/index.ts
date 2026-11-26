@@ -19,6 +19,7 @@ import "server-only";
 //   conflicts.ts      engine reasons -> API conflict codes, and the full-board validation
 //   solver-tuning.ts  the auto pass's wall-clock budget, cooldown, window bound and day spread
 //   reflow.ts         the reflow pass over an already-placed board
+//   held.ts           the auto pass's held cards (start before its floor): the solver request, round order
 //   auto.ts           autoSchedule: the propose-only auto pass
 //   apply.ts          applySchedule (transactional persist) and lastAiApply
 //   move.ts           moveFixture: the single-fixture drag-and-drop move

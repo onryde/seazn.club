@@ -153,9 +153,10 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "scheduled");
 
-  // 3c. Reach: the SAME fixture re-dated into the PAST, still unresulted
-  // (API PATCH). Read: a past kick-off is never "Next", and Needs You
-  // explains why instead. Coverage gap (fix round D): the walkthrough
+  // 3c. Reach: the SAME fixture re-dated into the PAST, never started
+  // (API PATCH). Read: a past kick-off is never "Next", and Needs You asks
+  // for NO result — only a started match owes one (owner ruling
+  // 2026-11-26). Coverage gap (fix round D): the walkthrough
   // ladder ran unscheduled -> future -> today -> in-play -> decided and
   // never "dated in the past, no result" — exactly the state G1 broke live:
   // "Next Tue 1 Sep 11:00 · 0 of 6 played · 5 unscheduled" printed directly
@@ -177,8 +178,9 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   // status-line.ts's G1 fix (a `now` floor the `scheduled` arm never had).
   await expect(row).not.toContainText("Next ");
   await expect(row).toContainText(`0 of ${ids.length} played`);
-  // Needs You must explain WHY — result_missing on the exact fixture.
-  await expect(needs.locator('[data-attention="result_missing"]')).toBeVisible();
+  // The match never started: Needs You still lists the other unscheduled matches (the positive pair) and no owed result.
+  await expect(needs.locator('[data-attention="unscheduled"]')).toContainText(`${ids.length - 1} fixtures unscheduled`);
+  await expect(needs.locator('[data-attention="result_missing"]')).toHaveCount(0);
   await shot("03c-past-kickoff-no-result");
 
   // 4. Reach: kick-off today (API PATCH). Read: a match day — the pill says Today (owner ruling Q2, task B4; it read

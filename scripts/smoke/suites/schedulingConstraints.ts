@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { newSession, check, signIn, tag, v1, v1data, setPlan, upcomingUtcDay } from "../harness.ts";
 
 // ---------------------------------------------------------------------------
 // #452 — the scheduling CONSTRAINT surface over real HTTP.
@@ -118,9 +118,13 @@ export async function schedulingConstraintsSuite(): Promise<void> {
       scope: { kind: "competition" },
     },
   ];
+  // Thursdays ahead, a week apart: the auto pass proposes nothing before now.
+  const dayAt = (day: number, hhmm: string) => `${new Date(day).toISOString().slice(0, 10)}T${hhmm}:00.000Z`;
+  const CUP_DAY = upcomingUtcDay(4);
+  const cupAt = (hhmm: string) => dayAt(CUP_DAY, hhmm);
   const cupSettings = (gapMinutes: number) => ({
     config: {
-      startAt: "2026-11-05T09:00:00.000Z",
+      startAt: cupAt("09:00"),
       matchMinutes: 30,
       gapMinutes,
       courts: [courtA.id, courtB.id],
@@ -281,8 +285,8 @@ export async function schedulingConstraintsSuite(): Promise<void> {
   }
   const cupBoard = (round2At: string) => ({
     assignments: [
-      { fixture_id: semis[0].id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtA.id },
-      { fixture_id: semis[1].id, scheduled_at: "2026-11-05T09:00:00.000Z", court_id: courtB.id },
+      { fixture_id: semis[0].id, scheduled_at: cupAt("09:00"), court_id: courtA.id },
+      { fixture_id: semis[1].id, scheduled_at: cupAt("09:00"), court_id: courtB.id },
       { fixture_id: round2[0].id, scheduled_at: round2At, court_id: courtA.id },
       { fixture_id: round2[1].id, scheduled_at: round2At, court_id: courtB.id },
     ],
@@ -297,7 +301,7 @@ export async function schedulingConstraintsSuite(): Promise<void> {
     s,
     `/api/v1/stages/${cupStage.id}/schedule/apply`,
     "POST",
-    cupBoard("2026-11-05T09:45:00.000Z"),
+    cupBoard(cupAt("09:45")),
   );
   const tightApply = v1data<ApplyOut>(tightRes);
   const tightRows = (tightApply?.conflicts ?? []).filter((c) => c.code === "warn.instruction");
@@ -327,7 +331,7 @@ export async function schedulingConstraintsSuite(): Promise<void> {
     s,
     `/api/v1/stages/${cupStage.id}/schedule/apply`,
     "POST",
-    cupBoard("2026-11-05T11:00:00.000Z"),
+    cupBoard(cupAt("11:00")),
   );
   const looseApply = v1data<ApplyOut>(looseRes);
   check(
@@ -408,9 +412,11 @@ export async function schedulingConstraintsSuite(): Promise<void> {
   // and ERASED the division rule.
   const DIVISION_REST = 30;
   const STRICT_POOL_REST = 90;
+  const POOL_DAY = upcomingUtcDay(4, 2);
+  const at = (hhmm: string) => dayAt(POOL_DAY, hhmm);
   const poolSettings = {
     config: {
-      startAt: "2026-11-12T09:00:00.000Z",
+      startAt: at("09:00"),
       matchMinutes: 30,
       gapMinutes: 0,
       courts: [courtA.id, courtB.id],
@@ -475,7 +481,6 @@ export async function schedulingConstraintsSuite(): Promise<void> {
   );
 
   // ---- Surfaces 2 & 3: the APPLY gate and the board report ----
-  const at = (hhmm: string) => `2026-11-12T${hhmm}:00.000Z`;
   // One court per pool, so nothing here can produce a court clash and every row
   // reported is a rest row. The third fixture of each pool sits at 14:00, clear
   // of both the others under either rule — so it is never expected to appear,

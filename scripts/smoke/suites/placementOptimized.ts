@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { newSession, check, signIn, tag, v1, v1data, setPlan, upcomingUtcDay } from "../harness.ts";
 
 /**
  * Task 11 (placement cutover) — the scenario `autoScheduleSuite`'s own
@@ -139,7 +139,8 @@ export async function placementOptimizedSuite(): Promise<void> {
   await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
-      startAt: "2026-09-21T09:00:00.000Z",
+      // A Monday ahead: with a past start the board would open at the time of day the run happens to start.
+      startAt: new Date(upcomingUtcDay(1) + 9 * 60 * 60_000).toISOString(),
       matchMinutes: 30,
       gapMinutes: 0,
       courts: [optCourtA.id, optCourtB.id],

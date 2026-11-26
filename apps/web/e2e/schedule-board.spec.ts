@@ -7,6 +7,7 @@ import {
   competitionPath,
   divisionPath,
   seedVenueWithCourts,
+  upcomingUtcDay,
 } from "./helpers";
 
 // The scheduling board's write paths (schedule-panels.spec covers officials /
@@ -15,6 +16,12 @@ import {
 // taxonomy and the plan/mode guards. Drag-and-drop itself is HTML5
 // dataTransfer (not reliably scriptable) — the keyboard MovePanel and the
 // PATCH route cover the same code path.
+
+// A Monday ahead for the board the first test Auto-schedules (it proposes nothing before now); the hand
+// placements later in that block sit on the days after it.
+const BOARD_DAY = upcomingUtcDay(1);
+const boardAt = (day: number, hour: number): string => new Date(BOARD_DAY + (day * 24 + hour) * 3_600_000).toISOString();
+
 test.describe.serial("schedule board", () => {
   let divisionId: string;
   let stageId: string;
@@ -66,7 +73,7 @@ test.describe.serial("schedule board", () => {
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: boardAt(0, 9),
         matchMinutes: 45,
         gapMinutes: 5,
         courts: [courtA, courtB],
@@ -167,7 +174,7 @@ test.describe.serial("schedule board", () => {
   });
 
   test("double-booking a court is a blocking conflict", async ({ request }) => {
-    const when = new Date(Date.UTC(2026, 8, 22, 10, 0)).toISOString();
+    const when = boardAt(1, 10);
     const clash = await apiJson<{ conflicts: { code: string; blocking: boolean }[] }>(
       request,
       `/api/v1/stages/${stageId}/schedule/apply`,
@@ -275,7 +282,7 @@ test.describe.serial("schedule board", () => {
     // memory).
     const allFixtures = await Promise.all(fixtureIds.map((id) => getFixture(request, id)));
     const lastRound = allFixtures.reduce((max, f) => (f.round_no > max.round_no ? f : max));
-    const free = new Date(Date.UTC(2026, 8, 24, 15, 0)).toISOString();
+    const free = boardAt(3, 15);
     const moved = await apiJson(request, `/api/v1/fixtures/${lastRound.id}`, "PATCH", {
       scheduled_at: free,
       court_id: courtB,
@@ -324,7 +331,7 @@ test.describe.serial("schedule board", () => {
     expect(frozen.status).toBe(200);
 
     const blocked = await apiJson(request, `/api/v1/fixtures/${fixtureIds[4]!}`, "PATCH", {
-      scheduled_at: new Date(Date.UTC(2026, 8, 25, 9, 0)).toISOString(),
+      scheduled_at: boardAt(4, 9),
       court_id: courtA,
     });
     expect(blocked.status).toBeGreaterThanOrEqual(400);
@@ -348,7 +355,7 @@ test.describe.serial("schedule board", () => {
     expect(cp.status).toBe(201);
 
     await apiJson(request, `/api/v1/fixtures/${target}`, "PATCH", {
-      scheduled_at: new Date(Date.UTC(2026, 8, 26, 18, 0)).toISOString(),
+      scheduled_at: boardAt(5, 18),
       court_id: courtA,
     });
 

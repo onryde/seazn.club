@@ -1118,6 +1118,7 @@ export type DictionaryKey =
   | "board.conflict.warn.order"
   | "board.conflict.warn.person_overlap"
   | "board.conflict.warn.rest"
+  | "board.conflict.warn.round_order"
   | "board.conflict.warn.window"
   | "board.conflictHelp.conflict.court"
   | "board.conflictHelp.conflict.start_window"

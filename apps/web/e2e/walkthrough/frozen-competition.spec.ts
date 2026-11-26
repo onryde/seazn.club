@@ -128,7 +128,8 @@ async function seedFrozenDay(request: APIRequestContext, orgId: string, label: s
   await withDb(async (sql) => {
     await sql`update fixtures set court_id = ${c1.id}, scheduled_at = ${within(-20)} where id = ${anaBen}`;
     await sql`update fixtures set court_id = ${c2.id}, scheduled_at = ${within(30)} where id = ${calDee}`;
-    // A window that closed three hours ago, on no court, no result: the organiser's Needs-you row (the desk's result_missing).
+    // A slot that ran three hours ago, on no court, never started: it owes no result (owner ruling 2026-11-26). The
+    // organiser's Needs-you list (step 5's positive pair) comes from the other rows, the unscheduled one among them.
     await sql`update fixtures set court_id = null, scheduled_at = ${new Date(now - 3 * 3_600_000).toISOString()} where id = ${eveFay}`;
   });
   // Court 1 in play for real: a core.start through the engine, the way a scorer's pad starts a match.

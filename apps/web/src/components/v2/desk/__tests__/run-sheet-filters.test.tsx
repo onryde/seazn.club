@@ -69,27 +69,32 @@ function fx(no: number, o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-/** One division's worth of rows, chosen so the OLD predicates and the new
- *  ones disagree on both COUNT and MEMBERSHIP — a set where they merely
- *  disagreed on membership would let a count-only assertion pass a mutant. */
+/** One division's worth of rows. Owner ruling 2026-11-26: only a match that was STARTED and has no result owes one.
+ *  So the set holds started-and-late rows (owed), a never-started row long past its slot (not owed), and a started row
+ *  whose PLAN is hours old but whose actual start is inside the grace (not owed - it witnesses `kickoffs`). */
 const FIXTURES: RunSheetFixture[] = [
-  // Two overdue results: `scheduled`, dated, kick-off + matchMinutes in the
-  // past. The old `open_pad` predicate counted NEITHER.
-  fx(1, { scheduled_at: "2026-09-05T10:00:00.000Z" }),
-  fx(2, { scheduled_at: "2026-09-05T08:00:00.000Z" }),
-  // Inside the matchMinutes grace (starts 17:30, still running at 18:00) —
-  // not yet an owed result. This is the row that pins that `matchMinutes` is
-  // actually consulted rather than being a decorative prop.
+  // Two owed results: started, and the actual start + matchMinutes is in the past.
+  fx(1, { status: "in_play", scheduled_at: "2026-09-05T10:00:00.000Z" }),
+  fx(2, { status: "in_play", scheduled_at: "2026-09-05T08:00:00.000Z" }),
+  // Never started, its slot not yet run out (the row `matchMinutes` and the status both excuse).
   fx(3, { scheduled_at: "2026-09-05T17:30:00.000Z" }),
-  // Live right now. The OLD predicate counted exactly this row as "needs
-  // result"; the authority does not.
+  // Planned nine hours ago, STARTED half an hour ago: still being played.
   fx(4, { status: "in_play", scheduled_at: "2026-09-05T09:00:00.000Z" }),
   // Two genuinely unscheduled rows.
   fx(5),
   fx(6),
   // A settled row, in neither filter.
   fx(7, { status: "decided", scheduled_at: "2026-09-04T10:00:00.000Z", outcome: { kind: "score" } }),
+  // Never started, ten hours past its slot: the reported "Enter result" on a match nobody played.
+  fx(8, { scheduled_at: "2026-09-05T08:00:00.000Z" }),
 ];
+
+/** The actual starts (`core.start`), as the division page hands them down - in-play rows only. */
+const KICKOFFS: Record<string, string> = {
+  f1: "2026-09-05T10:00:00.000Z",
+  f2: "2026-09-05T08:00:00.000Z",
+  f4: "2026-09-05T17:30:00.000Z",
+};
 
 const STAGES = [{ id: "s1", seq: 1, kind: "league", name: "League" }];
 
@@ -107,6 +112,7 @@ function sheetHtml(
       orgTz={TZ}
       nowMs={NOW_MS}
       matchMinutes={MATCH_MINUTES}
+      kickoffs={KICKOFFS}
       entrantNames={{ e1: "Alpha", e2: "Bravo" }}
       canEdit={canEdit}
       hrefFor={(f) => `/f/${f.fixture_no}`}
@@ -154,7 +160,7 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
       id: f.id,
       status: f.status,
       scheduledAt: f.scheduled_at,
-      startedAt: null,
+      startedAt: KICKOFFS[f.id] ?? null,
       eventCount: 1,
       matchMinutes: MATCH_MINUTES,
       hasScorer: true,
@@ -181,15 +187,15 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
 }
 
 describe("run sheet filter chips — counts and membership", () => {
-  it("the fixture set itself makes the old and new predicates disagree", () => {
-    // Guards the guard: if a later edit to FIXTURES made the two predicates
-    // agree, every assertion below would pass against the unfixed code.
+  it("the fixture set itself makes the plan-only, status-blind and live-blind predicates disagree", () => {
+    // Guards the guard: if a later edit to FIXTURES made them agree, the assertions below would witness nothing.
     const { resultMissing, unscheduled } = authority();
     expect(resultMissing).toEqual([1, 2]);
     expect(unscheduled).toBe(2);
-    const inPlay = FIXTURES.filter((f) => f.status === "in_play").map((f) => f.fixture_no);
-    expect(inPlay).toEqual([4]);
-    expect(resultMissing).not.toContain(4);
+    expect(FIXTURES.filter((f) => f.status === "in_play").map((f) => f.fixture_no), "live is not the same as owed").toEqual([1, 2, 4]);
+    const planLate = (f: RunSheetFixture) => f.scheduled_at !== null && Date.parse(f.scheduled_at) + MATCH_MINUTES * 60_000 < NOW_MS;
+    expect(planLate(FIXTURES[3]!), "f4 is late by its PLAN").toBe(true);
+    expect(planLate(FIXTURES[7]!), "f8 is late by its plan too, and never started").toBe(true);
   });
 
   // FINDING 1 — permission-blind.
@@ -197,7 +203,7 @@ describe("run sheet filter chips — counts and membership", () => {
     const html = sheetHtml("all", canEdit);
     // Positive pair: the sheet rendered every row before anything is said
     // about a count. Without this, a blank page satisfies the assertion.
-    expect(renderedRows(html)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(renderedRows(html)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(chipCount(html, "unscheduled")).toBe(authority().unscheduled);
   });
 
@@ -210,7 +216,7 @@ describe("run sheet filter chips — counts and membership", () => {
   // FINDING 2 — the same authority as the "Needs you" panel.
   it.each([true, false])("counts Needs result from the W1 authority (canEdit=%s)", (canEdit) => {
     const html = sheetHtml("all", canEdit);
-    expect(renderedRows(html)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(renderedRows(html)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(chipCount(html, "needs_result")).toBe(authority().resultMissing.length);
   });
 
@@ -220,14 +226,23 @@ describe("run sheet filter chips — counts and membership", () => {
     expect(renderedRows(html)).toEqual(authority().resultMissing);
   });
 
-  it("a live fixture is not an owed result", () => {
+  it("a live match is measured from its ACTUAL start: late by its plan, inside the grace by its kick-off, it owes nothing", () => {
     const html = sheetHtml("needs_result", true);
     expect(renderedRows(html)).not.toContain(4);
   });
 
-  it("a fixture still inside its matchMinutes does not yet owe a result", () => {
-    const html = sheetHtml("needs_result", true);
-    expect(renderedRows(html)).not.toContain(3);
+  it("a match that never started owes nothing, in or past its slot (owner ruling 2026-11-26)", () => {
+    const rows = renderedRows(sheetHtml("needs_result", true));
+    expect(rows).not.toContain(3);
+    expect(rows).not.toContain(8);
+    // Positive pair: the filter is not simply empty.
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("with no kick-offs handed down, a live row falls back to its plan", () => {
+    const ctx: RunSheetKeepContext = { stageId: null, tz: TZ, today: "2026-09-05", nowMs: NOW_MS, matchMinutes: MATCH_MINUTES };
+    expect(runSheetKeeps(FIXTURES[3]!, "needs_result", ctx)).toBe(true);
+    expect(runSheetKeeps(FIXTURES[3]!, "needs_result", { ...ctx, kickoffs: KICKOFFS })).toBe(false);
   });
 });
 
@@ -268,9 +283,10 @@ const BRACKET_FIXTURES: RunSheetFixture[] = [
   fx(14, { stage_id: "k1", scheduled_at: "2026-09-05T08:00:00.000Z" }),
 ];
 
-// Gaps wave A fix round 1 (m4/A12): the chip on a HELD online board. The held board's slot has passed: `result_missing` counts it (spec
-// 2026-11-05 5.4, "the results-owed count is unchanged"; division-phase.test.ts pins the attention) and "Needs result" keeps it, so the
-// chip and the attention agree on it. Both expected values come from the authority (`resolveAttention` over the same rows), not typed in.
+// Gaps wave A fix round 1 (m4/A12): the chip on a HELD online board. A held board that STARTED and ran past its window is
+// counted by both the chip and the `result_missing` attention. A held board that never started is kept by the chip (it owes
+// the organiser's decision, T16) but owes no RESULT: owner ruling 2026-11-26 supersedes spec 2026-11-05 5.4's "the
+// results-owed count is unchanged" for it. Both expected values come from the authority (`resolveAttention` over the rows).
 describe("Needs result on a HELD online board agrees with the result_missing attention (gaps A fix round 1, m4)", () => {
   const held = (reason: "no_show_white" | "provider_error") => ({
     cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: reason, live: false, unopened: false,
@@ -279,7 +295,7 @@ describe("Needs result on a HELD online board agrees with the result_missing att
     stageId: null, tz: TZ, today: "2026-09-05", nowMs: NOW_MS, matchMinutes: MATCH_MINUTES, onlinePlay,
   });
   const phase = (f: RunSheetFixture) => ({
-    id: f.id, status: f.status, scheduledAt: f.scheduled_at, startedAt: null, eventCount: 0, matchMinutes: MATCH_MINUTES,
+    id: f.id, status: f.status, scheduledAt: f.scheduled_at, startedAt: null, eventCount: 1, matchMinutes: MATCH_MINUTES,
     hasScorer: true, stageId: f.stage_id, awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false,
   });
   const attentionIds = (rows: RunSheetFixture[]): string[] => {
@@ -290,17 +306,24 @@ describe("Needs result on a HELD online board agrees with the result_missing att
     return out?.kind === "result_missing" ? out.fixtureIds : [];
   };
 
-  it("a held board whose slot has passed: the chip keeps it and the attention counts it - the same set as the same board unheld", () => {
-    const heldLate = fx(1, { scheduled_at: "2026-09-05T10:00:00.000Z" });
-    const plainLate = fx(2, { scheduled_at: "2026-09-05T09:00:00.000Z" });
+  it("a held board that started and ran past its window: the chip keeps it and the attention counts it - the same set as the same board unheld", () => {
+    const heldLate = fx(1, { status: "in_play", scheduled_at: "2026-09-05T10:00:00.000Z" });
+    const plainLate = fx(2, { status: "in_play", scheduled_at: "2026-09-05T09:00:00.000Z" });
     const rows = [heldLate, plainLate];
     const fromAttention = attentionIds(rows);
     expect(fromAttention, "premise: the attention names both (the held board is not special to it)").toEqual(["f1", "f2"]);
     const onlinePlay = { f1: held("no_show_white") };
     const fromChip = rows.filter((f) => runSheetKeeps(f, "needs_result", ctx(onlinePlay))).map((f) => f.id);
     expect(fromChip, "the chip keeps exactly the attention's boards").toEqual(fromAttention);
-    // The same board unheld is kept by the same predicate: the hold does not change a late board's answer.
+    // The same board unheld is kept by the same predicate: the hold does not change a late live board's answer.
     expect(runSheetKeeps(heldLate, "needs_result", ctx({}))).toBe(true);
+  });
+
+  it("a held board that never started, past its slot: the chip keeps it for the hold alone; it is not a missing result", () => {
+    const heldUnstarted = fx(1, { scheduled_at: "2026-09-05T10:00:00.000Z" });
+    expect(attentionIds([heldUnstarted])).toEqual([]);
+    expect(runSheetKeeps(heldUnstarted, "needs_result", ctx({ f1: held("no_show_white") }))).toBe(true);
+    expect(runSheetKeeps(heldUnstarted, "needs_result", ctx({})), "the positive pair: unheld, not kept").toBe(false);
   });
 
   it("T16, the one place they differ on purpose: a held board that has NO slot passed (untimed, or still in its window) is kept by the chip - it owes its decision - and is not yet a missing result", () => {

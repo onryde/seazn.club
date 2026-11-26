@@ -45,7 +45,10 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const CLOSED_PORT_HOST = "127.0.0.1:1";
 const MIN = 60_000;
 const MATCH_MINUTES = 30;
-const START_AT = "2026-11-12T09:00:00.000Z";
+const START_AT = "2027-11-12T09:00:00.000Z";
+/** A schedule that has already ENDED: the auto pass has no start floor on it, so its slot lattice opens on the whole
+ *  of its day, as it did before the floor — for the rig that needs a solver board the greedy seed does not lay down. */
+const ENDED = { startAt: "2025-11-12T09:00:00.000Z", endAt: "2025-11-12T23:00:00.000Z" };
 
 /** The smoke check's declared rests (scripts/smoke/suites/schedulingConstraints.ts, #452). */
 const DIVISION_REST = 30;
@@ -76,7 +79,7 @@ interface PoolRig {
  * The #452 shape: a `group` stage, two pools of three, two courts. `poolEntries: false` is the empty case — the same
  * board with only the division's entry, so no pool rule exists to send.
  */
-async function seedPools(poolEntries: boolean): Promise<PoolRig> {
+async function seedPools(poolEntries: boolean, when: { startAt: string; endAt?: string } = { startAt: START_AT }): Promise<PoolRig> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"PoolRest " + suffix}, ${"poolrest-" + suffix})
@@ -137,7 +140,7 @@ async function seedPools(poolEntries: boolean): Promise<PoolRig> {
   // Parsed by the route's own schema, as smoke's PUT is: every constraint the check leaves out gets its API default.
   await putScheduleSettings(auth, division.id, PutScheduleSettings.parse({
     config: {
-      startAt: START_AT,
+      ...when,
       matchMinutes: MATCH_MINUTES,
       gapMinutes: 0,
       courts,
@@ -372,7 +375,7 @@ describe.skipIf(!HAS_DB)("layer 1: the solver request carries each pool's effect
 
 describe.skipIf(!HAS_DB)("layer 2: the AUTO pass refuses a solver board that breaks a declared rest", () => {
   it("empty case: with no pool entry, CI's board breaks nothing declared and ships as the solver's", async () => {
-    const rig = await seedPools(false);
+    const rig = await seedPools(false, ENDED);
     await solverReplies(ciBoard(rig));
 
     const out = await autoSchedule(rig.auth, rig.stageId, { only_unlocked: false, mode: "build" });

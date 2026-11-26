@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { newSession, check, signIn, tag, v1, v1data, setPlan, upcomingUtcDay } from "../harness.ts";
 
 /**
  * Task C2 — the per-court-grid capability gap. Before this task,
@@ -100,7 +100,8 @@ export async function placementPerCourtBlackoutSuite(): Promise<void> {
   }
   check("placement per-court blackout: 2 ad-hoc fixtures created", fixtureIds.length === 2);
 
-  const startAtMs = Date.UTC(2026, 8, 22, 9, 0);
+  // A Tuesday ahead: a BUILD proposes nothing before now, and the blackout below has to fall on its board.
+  const startAtMs = upcomingUtcDay(2) + 9 * 60 * 60_000;
   await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {

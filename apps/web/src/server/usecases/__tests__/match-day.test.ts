@@ -849,10 +849,11 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     const f24 = between(day.comp, p2, p4);
     // A started division: a division still in `setup` raises no live-activity row at all (division-phase.ts's gate).
     await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
-    // In play with nothing recorded (a status the console's Start can leave before the first event), 40 minutes past kick-off.
-    await place(day, f12.id, -40, day.courts.c1);
+    // In play with nothing recorded (a status the console's Start can leave before the first event), 22 minutes past kick-off:
+    // past the recording grace, inside the 30-minute window (past it the match is owed a result: owner ruling 2026-11-26).
+    await place(day, f12.id, -22, day.courts.c1);
     await setStatus(f12.id, "in_play");
-    await place(day, f34.id, -40, day.courts.c2);
+    await place(day, f34.id, -22, day.courts.c2);
     await setStatus(f34.id, "in_play");
     await nominate(day, f34.id);
     // In play with a ledger, and a match queued behind it.
@@ -1061,9 +1062,12 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);
     await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
-    // Two 30-minute matches planned at 11:00 and nothing recorded: at 12:00 both owe a result. The other four have no time.
-    await place(day, between(day.comp, p1, p2).id, 0, day.courts.c1);
-    await place(day, between(day.comp, p3, p4).id, 0, day.courts.c2);
+    // Two 30-minute matches planned at 11:00, started and nothing recorded: at 12:00 both owe a result (only a started match
+    // owes one: owner ruling 2026-11-26). The other four have no time.
+    for (const [f, court] of [[between(day.comp, p1, p2), day.courts.c1], [between(day.comp, p3, p4), day.courts.c2]] as const) {
+      await place(day, f.id, 0, court);
+      await setStatus(f.id, "in_play");
+    }
     const now = at(60);
 
     const [slugs] = await sql<{ org: string; comp: string }[]>`
@@ -1075,12 +1079,12 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(en.map((i) => i.kind)).toEqual(expect.arrayContaining(["result_missing", "unscheduled"]));
     expect(fr.map((i) => i.title)).not.toEqual(en.map((i) => i.title));
 
-    // B4 fix round 1 (R2): the unscheduled row of a division with ready matches on no court also says "Find a court" — Court 1,
-    // the first free court on the list its division plays on (every court here is free: the two planned matches never started).
+    // B4 fix round 1 (R2): the unscheduled row of a division with ready matches on no court also says "Find a court" — Court 3,
+    // the first free court on the list its division plays on (Courts 1 and 2 hold the two matches in play).
     const matchDay = routes.competitionMatchDay(slugs!.org, slugs!.comp);
     const findCourt = (items: typeof en, label: string) =>
       items.map((i) =>
-        i.kind === "unscheduled" ? { ...i, alt: { label, href: `${matchDay}?court=${day.courts.c1}`, court_id: day.courts.c1 } } : i,
+        i.kind === "unscheduled" ? { ...i, alt: { label, href: `${matchDay}?court=${day.courts.c3}`, court_id: day.courts.c3 } } : i,
       );
     const view = await getMatchDay(day.auth, day.comp.id, now);
     expect(view.needs_you).toEqual(findCourt(en, uiEn["matchDay.needsYou.findCourt.court"]));

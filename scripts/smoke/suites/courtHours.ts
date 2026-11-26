@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { newSession, check, signIn, tag, v1, v1data, setPlan, upcomingUtcDay } from "../harness.ts";
 
 export async function courtHoursSuite(): Promise<void> {
   const s = newSession();
@@ -8,10 +8,10 @@ export async function courtHoursSuite(): Promise<void> {
 
   const DAY_MS = 24 * 60 * 60 * 1000;
   const HOUR_MS = 60 * 60 * 1000;
-  // A pinned instant, arbitrary otherwise — every weekday below is read back
+  // A Wednesday ahead (a BUILD proposes nothing before now) — every weekday below is read back
   // with getUTCDay() rather than assumed, and tz is UTC throughout so civil
   // dates and calendar dates always agree.
-  const BASE = Date.UTC(2026, 10, 4, 0, 0);
+  const BASE = upcomingUtcDay(3);
 
   const minutesOfDay = (iso: string): number => {
     const d = new Date(iso);

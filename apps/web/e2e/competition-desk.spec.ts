@@ -13,7 +13,7 @@ import {
   expectNoHorizontalScroll,
   scoreFixture } from "./helpers";
 import { findBucketSplit, findPrintSplit, sweepZoneSplitFinders } from "./zone-split";
-import { NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
+import { DEFAULT_MATCH_MINUTES, NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
 import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
 
 /** "Sun 6 Sep" — matches division-status-line.ts's `nextDateLabel`/`whenLabel`
@@ -123,13 +123,11 @@ test.describe("competition desk", () => {
     await expect(list.locator("[data-attention]").filter({ visible: true }).first()).toHaveAttribute("data-attention", "no_scorer");
   });
 
-  // H2 fix (final review round 3, Important — corrected ruling): G3's gate
-  // (`divisionStatus === "active"`) also excluded `scheduled` — exactly what
-  // the ordinary Publish action sets. Live: six fixtures dated YESTERDAY on
-  // a published, never-started division produced NO "Needs you" section at
-  // all — an organiser who published a timetable and never pressed Start got
-  // no prompt of any kind. RULING: the gate excludes `setup` only.
-  test("published but not started: Needs you still names an overdue result", async ({ page, request }) => {
+  // Owner ruling 2026-11-26: "when match not started then don't show enter
+  // result". A published, never-started division cannot hold a started match,
+  // so a past slot asks for no result. (This reverses H2's expectation, which
+  // wanted the overdue row here.)
+  test("published but not started: a past slot asks for no result", async ({ page, request }) => {
     const org = await activeOrg(page);
     const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
       name: `Desk Pub ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
@@ -146,15 +144,14 @@ test.describe("competition desk", () => {
     expect(published.status).toBe(200);
     // Date one fixture in the past directly — the schedule engine's own
     // validation is not this test's concern, only what the desk does with a
-    // published-but-unstarted division that already owes a result.
+    // published-but-unstarted division whose slot has run.
     await setFixtureScheduledAtSql(fixtureIds[0]!, new Date(Date.now() - 24 * 3600_000).toISOString());
 
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
-    const needs = page.getByTestId("desk-needs-you");
-    await expect(needs).toBeVisible();
-    await expect(needs.locator('[data-attention="result_missing"]')).toHaveCount(1);
+    // The positive anchor first: the row is rendered, in the published state the seed built.
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Premier" }).first();
     await expect(row).toHaveAttribute("data-phase", "scheduled");
+    await expect(page.locator('[data-attention="result_missing"]')).toHaveCount(0);
   });
 
   test("all decided: finished, no Needs you section at all", async ({ page, request }) => {
@@ -305,7 +302,7 @@ test.describe("competition desk", () => {
   // was built around (a completed division beside a missing result) is no
   // longer reachable. What it still pins: the desk never says Finished while
   // the playoff is owed, and entering the playoff's result is the way out.
-  test("a knockout completed with its third-place playoff unplayed: never Finished beside a missing result", async ({
+  test("a knockout completed with its third-place playoff unplayed: never Finished while it is owed", async ({
     page,
     request,
   }) => {
@@ -345,12 +342,13 @@ test.describe("competition desk", () => {
 
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
     const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
-    // The row and the Needs-you section must not contradict each other.
-    await expect(page.getByTestId("desk-needs-you").locator('[data-attention="result_missing"]')).toHaveCount(1);
+    // The playoff never started, so nothing asks for its result (owner ruling 2026-11-26) — and the row must still
+    // not read Finished over it.
     await expect(row).not.toHaveAttribute("data-phase", "finished");
     await expect(row).toContainText("3 of 4 played");
+    await expect(page.locator('[data-attention="result_missing"]')).toHaveCount(0);
 
-    // And the other direction: entering the result the row asked for takes it
+    // And the other direction: entering the playoff's result takes it
     // to finished with nothing outstanding. Without this the fix could have
     // been "never finished while any fixture is non-decided" and no test would
     // say so.
@@ -542,11 +540,20 @@ test.describe("competition desk", () => {
     // the fixture would do nothing — which is the whole point of review 7's
     // Minor 8b, and is what this test caught on its first run. Age the start
     // event instead; the fixture still got in play through the real endpoint.
-    await backdateFixtureStartSql(fixtureId, NOT_RECORDING_GRACE_MINUTES + 40);
+    // Midway between the grace and the match window's end (this division keeps the default match length).
+    await backdateFixtureStartSql(fixtureId, Math.round((NOT_RECORDING_GRACE_MINUTES + DEFAULT_MATCH_MINUTES) / 2));
     await page.goto(compUrl);
     needs = await needsYouInMatchDay(page);
     await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(1);
     await expect(needs.locator('[data-attention="no_scorer"]')).toHaveCount(0);
+    await expect(needs.locator('[data-attention="result_missing"]')).toHaveCount(0);
+
+    // Past the window the same silent match is owed a result, and the recording row hands over to it — never both.
+    await backdateFixtureStartSql(fixtureId, DEFAULT_MATCH_MINUTES + 40);
+    await page.goto(compUrl);
+    needs = await needsYouInMatchDay(page);
+    await expect(needs.locator('[data-attention="result_missing"]')).toHaveCount(1);
+    await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(0);
 
     // And the first REAL recorded event clears it — the other direction, so
     // "always fires" cannot pass for "fires correctly".

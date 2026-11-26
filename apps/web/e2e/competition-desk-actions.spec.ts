@@ -2,11 +2,11 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import {
   TAG, apiJson, activeOrg, addEntrantsViaApi, competitionPath, scoreFixture, createStageAndGenerate,
   setFixtureStatusSql,
-  assignFixtureOfficialSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
+  assignFixtureOfficialSql, setFixtureScheduledAtSql, seedBareRegistrationSql, backdateFixtureStartSql,
 } from "./helpers";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
+import { ATTENTION_SEVERITY, DEFAULT_MATCH_MINUTES, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
 import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
 import { cancelFlaggedSql, holdNoShowSql } from "./match-day-online-kit";
 import { seedOnlineRound } from "./match-room-kit";
@@ -369,14 +369,14 @@ const ROWS: Row[] = [
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
       const fixtureId = rig.fixtureIds[0]!;
       // The complement of the `no_scorer` row above: someone IS assigned and
-      // the fixture is live with nothing recorded. The kick-off is pushed
-      // well past NOT_RECORDING_GRACE_MINUTES rather than sitting on it, so
-      // this fixture keeps producing the state it is built for if the grace
-      // is ever widened.
+      // the fixture is live with nothing recorded. The kick-off sits midway
+      // between NOT_RECORDING_GRACE_MINUTES and the match window's end: past
+      // the window the same silent match is owed a result instead (owner
+      // ruling 2026-11-26), so "well past the grace" would build that row.
       await assignFixtureOfficialSql(fixtureId);
       await setFixtureScheduledAtSql(
         fixtureId,
-        new Date(Date.now() - (NOT_RECORDING_GRACE_MINUTES + 45) * 60_000).toISOString(),
+        new Date(Date.now() - Math.round((NOT_RECORDING_GRACE_MINUTES + DEFAULT_MATCH_MINUTES) / 2) * 60_000).toISOString(),
       );
       await setFixtureStatusSql(fixtureId, "in_play");
       return { compSlug: rig.comp.slug, divSlug: rig.div.slug };
@@ -392,13 +392,22 @@ const ROWS: Row[] = [
     id: "result_missing",
     kind: "result_missing",
     label: en["desk.needsYou.result_missing.action"],
+    // Only a STARTED match owes a result (owner ruling 2026-11-26), and a match in play is a match today whatever its
+    // planned day, so this row's home is always Match Day.
+    matchDay: true,
+    // A silent match past its window is ONE row: `not_recording` has handed over to this one.
+    neverRaises: ["not_recording", "no_scorer"],
     build: async (request) => {
       const rig = await leagueOfFour(request, "result");
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
-      // B1: 26 hours ago — always an earlier calendar day (no day is longer than 25 hours), so this is never a match day and
-      // the row is the competition page's whatever the clock says. (Six hours ago was today for most of the day and not for
-      // the rest, which would move the row between surfaces with the time of the run.)
-      await setFixtureScheduledAtSql(rig.fixtureIds[0]!, new Date(Date.now() - 26 * 3600_000).toISOString());
+      const fixtureId = rig.fixtureIds[0]!;
+      await assignFixtureOfficialSql(fixtureId);
+      // Started the way a scorer starts it, then the kick-off aged well past the match window.
+      const started = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+        expected_seq: 0, type: "core.start", payload: {},
+      });
+      expect(started.status, "core.start must be accepted").toBeLessThan(400);
+      await backdateFixtureStartSql(fixtureId, DEFAULT_MATCH_MINUTES + 120);
       return { compSlug: rig.comp.slug, divSlug: rig.div.slug };
     },
     // The console's own result door. Its LABEL is the sport's
@@ -579,10 +588,9 @@ const ROWS: Row[] = [
   // for each). The row's action opens the board in
   // Match Day's own focus column - `md-focus` of THAT fixture - and the list's row for it is the current one.
   {
-    // A board held for the organiser, DATED in the past: the round's open already makes today a match day. A board that should have been played by
-    // now USED to raise `result_missing` too; since gaps A6 a hold is raised ONCE (spec 2026-11-05 5.4, "a hold is never counted twice"; a held board
-    // is left out of `result_missing`, `PhaseFixture.heldOnline`), so the rig keeps the late date on purpose - it is exactly the case the dedupe is for -
-    // and asserts the row's absence (`neverRaises`) beside the one row it raises.
+    // A board held for the organiser, DATED in the past: the round's open already makes today a match day. It never started, so it owes no
+    // result (owner ruling 2026-11-26) and raises only its hold (spec 2026-11-05 5.4, "a hold is never counted twice"): the rig keeps the
+    // late date on purpose and asserts the owed row's absence (`neverRaises`) beside the one row it raises.
     id: "board_held",
     kind: "board_held",
     // A board that should have been played by now makes today a match day: its Needs-you list is Match Day's (B1), not the page's.
