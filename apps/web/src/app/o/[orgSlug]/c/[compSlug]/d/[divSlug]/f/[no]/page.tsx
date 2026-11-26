@@ -270,15 +270,30 @@ export default async function FixturePage({
     rulesVersion,
   });
 
+  // Player self-check-in QR (PROMPT-53) — top of the match panel, and only BEFORE the match starts (owner feedback
+  // 2026-07-13): check-in is an arrival tool, once play begins it's just noise.
+  const showCheckin = !isOfficialScorer && canScore && !frozen && fixture.status === "scheduled";
+  // Back is desktop only for a member (owner 2026-11-26): the breadcrumb above already goes to the fixtures tab. So below
+  // md the arrow is hidden and the row keeps the page's own phone spacing: the QR row's, the courtside line's, or no row
+  // at all. A non-member has no breadcrumb (the org layout), so theirs shows at every width, pulled up into the page's
+  // top padding.
+  const topRowSpacing = !isMember
+    ? "-mt-6 mb-2"
+    : showCheckin
+      ? "max-md:mb-3"
+      : isOfficialScorer
+        ? "max-md:mb-4"
+        : "max-md:hidden";
+
   return (
     <>
       <main className="mx-auto max-w-5xl px-4 py-8">
-        {/* The top row, one DOM at every width: back on the left, the check-in QR on the right. It sits up inside the
-            page's top padding, so on a phone it costs the pad below only 28px of the first screen (AGENTS.md "The phone
+        {/* The top row, one DOM at every width: back on the left, the check-in QR on the right (AGENTS.md "The phone
             composition"). */}
-        <div data-role="match-top-row" className="-mt-6 mb-2 flex items-center gap-3 md:-mt-3 md:mb-3">
+        <div data-role="match-top-row" className={`flex items-center gap-3 md:-mt-3 md:mb-3 ${topRowSpacing}`}>
           <BackLink
             emphasis="round"
+            className={isMember ? "max-md:hidden" : undefined}
             href={isMember ? routes.division(orgSlug, compSlug, divSlug, "fixtures") : "/me"}
             label={t(ui, isMember ? "fixture.back.fixtures" : "fixture.back.myMatches")}
           />
@@ -297,17 +312,11 @@ export default async function FixturePage({
             </p>
           )}
 
-          {/* Player self-check-in QR (PROMPT-53) — top of the match panel, and
-              only BEFORE the match starts (owner feedback 2026-07-13): check-in
-              is an arrival tool, once play begins it's just noise. */}
-          {!isOfficialScorer &&
-            canScore &&
-            !(competition.frozen ?? false) &&
-            fixture.status === "scheduled" && (
-              <div className="ml-auto flex min-w-0 justify-end">
-                <CheckinQr fixtureId={fixture.id} />
-              </div>
-            )}
+          {showCheckin && (
+            <div className="ml-auto flex min-w-0 justify-end">
+              <CheckinQr fixtureId={fixture.id} />
+            </div>
+          )}
         </div>
 
         {/* Assigned-officials strip (design v11 §D2): organiser surface only —

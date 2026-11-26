@@ -644,6 +644,49 @@ describe("the match page's back button to the division's fixtures", () => {
     expect(withoutCheckin, "anti-vacuity: and some do not").toBeGreaterThan(0);
   });
 
+  // Whole class tokens, never a substring or a `\b` regex: `md:hidden` sits inside `max-md:hidden`, so a looser match
+  // passes on its own inversion.
+  const tokens = (className: unknown): string[] => String(className ?? "").split(/\s+/).filter(Boolean);
+  const hiding = (list: string[]) => list.filter((c) => c === "hidden" || c.endsWith(":hidden"));
+  const spacing = (list: string[]) => list.filter((c) => /(^|:)-?m[trblxy]?-/.test(c)).sort();
+
+  it("desktop only for anyone with the breadcrumb (owner 2026-11-26): below md a member sees the page as it was before the button", async () => {
+    // What origin/main drew below md: the QR's own row `mb-3`, a member official's courtside line `mb-4`, else NOTHING.
+    const PHONE_AS_BEFORE = { checkin: ["max-md:mb-3"], courtside: ["max-md:mb-4"], nothing: ["max-md:hidden"] } as const;
+    const seen = { checkin: 0, courtside: 0, nothing: 0, stranger: 0 };
+    let checked = 0;
+    for (const v of VIEWERS) {
+      for (const status of STATUSES) {
+        for (const frozen of [false, true]) {
+          Object.assign(scene, { role: v.role, canEdit: v.canEdit, canScore: v.canScore, status, frozen });
+          const at = `${v.who} · ${status} · frozen ${String(frozen)}`;
+          const p = await render();
+          const arrow = tokens(/class="([^"]*)"/.exec(renderToStaticMarkup(p.backs[0]!))![1]);
+          const row = tokens(props(p.rows[0]!).className);
+          if (!v.member) {
+            // No breadcrumb: the button is their only way back, so nothing hides it at any width.
+            expect(hiding(arrow), at).toEqual([]);
+            expect(hiding(row), at).toEqual([]);
+            expect(spacing(row), at).toEqual(["-mt-6", "mb-2", "md:-mt-3", "md:mb-3"].sort());
+            seen.stranger++;
+          } else {
+            expect(hiding(arrow), `${at}: the arrow is hidden below md only`).toEqual(["max-md:hidden"]);
+            const officialLine = v.canScore && !v.canEdit;
+            const phone = v.canEdit && status === "scheduled" && !frozen ? "checkin" : officialLine ? "courtside" : "nothing";
+            const margins = phone === "nothing" ? [] : PHONE_AS_BEFORE[phone];
+            expect(hiding(row), `${at}: ${phone}`).toEqual(phone === "nothing" ? [...PHONE_AS_BEFORE.nothing] : []);
+            // Every margin names its side of md: an unprefixed one would move the phone page too.
+            expect(spacing(row), `${at}: ${phone}`).toEqual([...margins, "md:-mt-3", "md:mb-3"].sort());
+            seen[phone]++;
+          }
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(VIEWERS.length * STATUSES.length * 2);
+    for (const [kind, n] of Object.entries(seen)) expect(n, `anti-vacuity: the ${kind} case is reached`).toBeGreaterThan(0);
+  });
+
   it("an official scorer's courtside line: a member keeps its My matches shortcut; a non-member's is the back button, not a second link", async () => {
     Object.assign(scene, { role: "viewer", canEdit: false, canScore: true });
     const member = await render();

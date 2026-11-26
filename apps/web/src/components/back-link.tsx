@@ -18,19 +18,23 @@ export const ROUND_BACK_LOOK =
  *
  *  `emphasis="round"` is the arrow alone in a 44px circle, for a row it shares
  *  with other actions (the match page's top row). `label` is then its accessible
- *  name and tooltip. */
+ *  name and tooltip. `className` adds to any look (the match page hides it below
+ *  md where the breadcrumb already goes back). */
 export function BackLink({
   href,
   label,
   emphasis = "quiet",
+  className,
 }: {
   href: string;
   label: string;
   emphasis?: "quiet" | "button" | "round";
+  className?: string;
 }) {
+  const withExtra = (look: string) => (className ? `${look} ${className}` : look);
   if (emphasis === "round") {
     return (
-      <Link href={href} aria-label={label} title={label} className={`${ROUND_BACK_LOOK} h-11 w-11 shrink-0`}>
+      <Link href={href} aria-label={label} title={label} className={withExtra(`${ROUND_BACK_LOOK} h-11 w-11 shrink-0`)}>
         <ArrowLeft className="h-4.5 w-4.5" strokeWidth={2} aria-hidden="true" />
       </Link>
     );
@@ -38,11 +42,11 @@ export function BackLink({
   return (
     <Link
       href={href}
-      className={
+      className={withExtra(
         emphasis === "button"
           ? "btn btn-ghost mb-3 inline-flex items-center gap-1.5 text-sm"
-          : "-ml-1 mb-2 inline-flex items-center gap-1.5 rounded-md px-1 py-1.5 text-sm text-slate-500 transition hover:text-slate-700"
-      }
+          : "-ml-1 mb-2 inline-flex items-center gap-1.5 rounded-md px-1 py-1.5 text-sm text-slate-500 transition hover:text-slate-700",
+      )}
     >
       <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
       {label}
