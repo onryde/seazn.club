@@ -1,6 +1,6 @@
 // Tells IndexNow (indexnow.org: Bing and the engines that share its list) which pages of the production site to fetch
-// again: every URL of https://seazn.club/sitemap.xml, posted to the shared endpoint. prod.yml runs it after the deploy,
-// as a step that cannot fail the job:
+// again: the help, blog and marketing URLs of https://seazn.club/sitemap.xml, posted to the shared endpoint. prod.yml
+// runs it after the deploy, as a step that cannot fail the job:
 //
 //     INDEXNOW_ORIGIN=https://seazn.club node --experimental-strip-types scripts/indexnow-submit.ts
 //
@@ -56,17 +56,26 @@ const onProduction = (url: string): boolean => {
   }
 };
 
+/**
+ * The pages a release changes: help, the blog and the marketing tree (/{lang}; the sitemap lists its /en URLs). An allow
+ * list on the path's first segment, so everything else the sitemap holds is left to the crawlers' own schedule, above all
+ * the public competition pages under /live, which change with every match and not with a deploy.
+ */
+const RELEASE_PAGE = /^\/(?:en|help|blog)(?:\/|$)/;
+
 export interface SubmitResult {
   submitted: number;
   batches: number;
   /** <loc> entries left out because they name another host, which the protocol refuses. */
   otherHost: number;
+  /** Production pages left out because they are not help, blog or marketing pages (RELEASE_PAGE). */
+  leftOut: number;
 }
 
 /**
- * Reads the production sitemap and posts its URLs. `fetch` has no default, so nothing reaches the network unless its
- * caller hands it the network. Throws on a refused environment (before any request), on a sitemap that does not answer
- * or lists no page of ours, and on the first batch IndexNow does not accept.
+ * Reads the production sitemap and posts its help, blog and marketing URLs. `fetch` has no default, so nothing reaches
+ * the network unless its caller hands it the network. Throws on a refused environment (before any request), on a sitemap
+ * that does not answer or lists none of those pages, and on the first batch IndexNow does not accept.
  */
 export async function submitIndexNow(io: { env: Env; fetch: typeof globalThis.fetch }): Promise<SubmitResult> {
   const refused = refusal(io.env);
@@ -76,8 +85,11 @@ export async function submitIndexNow(io: { env: Env; fetch: typeof globalThis.fe
   if (!sitemap.ok) throw new Error(`the sitemap answered ${sitemap.status}; nothing submitted`);
   const found = sitemapUrls(await sitemap.text());
   const ours = found.filter(onProduction);
-  const urls = [...new Set(ours)];
-  if (urls.length === 0) throw new Error(`the sitemap lists no ${PRODUCTION_ORIGIN} URL (${found.length} <loc> read); nothing submitted`);
+  const unique = [...new Set(ours)];
+  const urls = unique.filter((url) => RELEASE_PAGE.test(new URL(url).pathname));
+  if (urls.length === 0) {
+    throw new Error(`the sitemap lists no ${PRODUCTION_ORIGIN} help, blog or marketing URL (${found.length} <loc> read); nothing submitted`);
+  }
 
   let batches = 0;
   for (let at = 0; at < urls.length; at += BATCH_SIZE) {
@@ -99,13 +111,13 @@ export async function submitIndexNow(io: { env: Env; fetch: typeof globalThis.fe
     }
     batches++;
   }
-  return { submitted: urls.length, batches, otherHost: found.length - ours.length };
+  return { submitted: urls.length, batches, otherHost: found.length - ours.length, leftOut: unique.length - urls.length };
 }
 
 if (isMainModule(import.meta.url)) {
   try {
     const r = await submitIndexNow({ env: process.env, fetch: globalThis.fetch });
-    console.log(`IndexNow accepted ${r.submitted} URLs in ${r.batches} batch(es); ${r.otherHost} sitemap entries named another host and were left out.`);
+    console.log(`IndexNow accepted ${r.submitted} URLs in ${r.batches} batch(es); left out: ${r.leftOut} pages that are not help, blog or marketing, and ${r.otherHost} entries naming another host.`);
   } catch (e) {
     // The workflow step is continue-on-error, so the warning annotation is what makes a failure visible.
     console.log(`::warning::IndexNow submission did not happen: ${e instanceof Error ? e.message : String(e)}`);

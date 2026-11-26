@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { PUBLIC_HUB_ROOT } from "../../apps/web/src/lib/public-hub-root.mjs";
 import { INDEXNOW_KEY, refusal, sitemapUrls, submitIndexNow } from "../indexnow-submit.ts";
 
 const REPO = join(import.meta.dirname, "../..");
@@ -158,7 +159,43 @@ describe("what is submitted", () => {
       urlList: pages(3),
     });
     // The protocol refuses a URL of another host (422), so it is left out and counted; a repeat is sent once.
-    expect(result).toEqual({ submitted: 3, batches: 1, otherHost: 2 });
+    expect(result).toEqual({ submitted: 3, batches: 1, otherHost: 2, leftOut: 0 });
+  });
+
+  it("posts help, blog and marketing pages only: never a competition page, which changes too often to announce", async () => {
+    const wanted = [
+      `${FLY_ORIGIN}/en`,
+      `${FLY_ORIGIN}/en/pricing`,
+      // The marketing wall that lists live competitions: a marketing page, under /{lang}, not a competition's own page.
+      `${FLY_ORIGIN}/en${PUBLIC_HUB_ROOT}`,
+      `${FLY_ORIGIN}/help`,
+      `${FLY_ORIGIN}/help/scheduling/match-day-stream`,
+      `${FLY_ORIGIN}/blog`,
+      `${FLY_ORIGIN}/blog/round-robin-schedule`,
+    ];
+    const competitions = [
+      `${FLY_ORIGIN}${PUBLIC_HUB_ROOT}/a-club/an-open`,
+      `${FLY_ORIGIN}${PUBLIC_HUB_ROOT}/a-club/an-open/singles`,
+      // A club or a competition may be called anything: only the path's FIRST segment says what a page is.
+      `${FLY_ORIGIN}${PUBLIC_HUB_ROOT}/help/blog`,
+    ];
+    // Neither of the three, and names that only begin like one.
+    const others = [`${FLY_ORIGIN}/games`, `${FLY_ORIGIN}/legal/privacy`, `${FLY_ORIGIN}/helpdesk`, `${FLY_ORIGIN}/blogroll`, `${FLY_ORIGIN}/enquiry`];
+    expect(PUBLIC_HUB_ROOT, "premise: where the app builds a competition's page").toBe("/live");
+    const f = fakeFetch([...competitions, ...wanted, ...others]);
+    expect(sitemapUrls(await (await f.fetch(`${FLY_ORIGIN}/sitemap.xml`)).text()), "premise: the sitemap read does list the competition pages").toEqual(
+      expect.arrayContaining(competitions),
+    );
+    const result = await submitIndexNow({ env: PROD_ENV, fetch: f.fetch });
+    const sent = f.posted().flatMap((c) => (JSON.parse(String(c.init!.body)) as { urlList: string[] }).urlList);
+    expect(sent).toEqual(wanted);
+    expect(result).toEqual({ submitted: wanted.length, batches: 1, otherHost: 0, leftOut: competitions.length + others.length });
+  });
+
+  it("a sitemap of competition pages alone submits nothing, and says so", async () => {
+    const f = fakeFetch([`${FLY_ORIGIN}${PUBLIC_HUB_ROOT}/a-club/an-open`]);
+    await expect(submitIndexNow({ env: PROD_ENV, fetch: f.fetch })).rejects.toThrow(/sitemap/i);
+    expect(f.posted()).toEqual([]);
   });
 
   it("sends at most 10,000 URLs a post, and every URL exactly once", async () => {

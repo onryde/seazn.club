@@ -225,7 +225,7 @@ test.describe("the reading column", () => {
     { width: 320, size: { body: 18, title: "31px", lede: "18px", h2: "21px" } },
   ]) {
     test(`a post's type at ${width}: a ${size.body}px serif body at 1.6, a grey subtitle, the byline between two hairlines`, async ({ page }) => {
-      // The plate post has a list-free body, so the list item comes from the streaming guide.
+      // One post carries everything read here: paragraphs, list items, a generated example and a screenshot figure.
       await visit(page, "/blog/chess-points-and-half-points", width);
       let checked = 0;
       for (const selector of [".blog-prose > p", ".blog-prose li"]) {

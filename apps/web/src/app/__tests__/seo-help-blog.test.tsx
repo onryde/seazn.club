@@ -12,7 +12,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Metadata } from "next";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: vi.fn(async () => ({})) }));
 vi.mock("next/font/google", () => ({
@@ -66,6 +66,18 @@ const articlesOnDisk = () =>
     .flatMap((d) => readdirSync(join(HELP_ROOT, d.name)).filter((f) => f.endsWith(".md")).map((f) => `${d.name}/${f.slice(0, -3)}`))
     .sort();
 
+/**
+ * The help and blog loaders keep what they read only when NODE_ENV is "production" (the content is part of the build);
+ * anywhere else each call reads every file again, and one page's head makes several, so a sweep over every page took
+ * longer than its limit beside other suites. A sweep runs as production does, on content that cannot change under it.
+ * Nothing stale outlives it: out of production the loaders never answer from what they kept, and each test file has its
+ * own modules (vitest.config.ts `isolate`).
+ */
+function loadContentOnce(): void {
+  beforeEach(() => void vi.stubEnv("NODE_ENV", "production"));
+  afterEach(() => void vi.unstubAllEnvs());
+}
+
 /** The document title a page's metadata resolves to under its layout's template (Next: a string takes the template, `absolute` ignores it). */
 function documentTitle(title: Metadata["title"], template: string): string {
   if (typeof title === "string") return template.replace("%s", title);
@@ -91,8 +103,9 @@ interface HelpPage {
 }
 
 function helpPages(): HelpPage[] {
+  const loaded = allHelpArticles();
   const articles = articlesOnDisk().map((slug): HelpPage => {
-    const a = allHelpArticles().get(slug)!;
+    const a = loaded.get(slug)!;
     const params = { params: Promise.resolve({ slug: slug.split("/") }) };
     return {
       path: `/help/${slug}`,
@@ -137,7 +150,7 @@ function helpPages(): HelpPage[] {
 }
 
 describe("help pages: the head of every one", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  loadContentOnce();
 
   it("premise: the sweep holds every help route and every help article on disk", () => {
     expect(routeFiles().sort()).toEqual(["[...slug]/page.tsx", "formats/[family]/page.tsx", "formats/page.tsx", "page.tsx"]);
@@ -211,6 +224,7 @@ describe("help pages: the head of every one", () => {
 });
 
 describe("blog pages: the head of every one", () => {
+  loadContentOnce();
   const posts = allBlogPosts();
   const template = templateOf(blogLayout.metadata);
 

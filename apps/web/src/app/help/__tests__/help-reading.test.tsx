@@ -8,7 +8,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: vi.fn(async () => ({})) }));
 // next/font only exists inside a Next build. The mock's class name is what shows where a page puts the face.
@@ -54,7 +54,19 @@ const articleHtml = async (slug: string) => renderToStaticMarkup(await HelpArtic
 const h1Classes = (markup: string) => /<h1 class="([^"]*)"/.exec(markup)?.[1]?.split(" ") ?? [];
 const typeOnly = (classes: string[]) => classes.filter((c) => !/^m[tblrxy]?-/.test(c)).sort();
 
+/**
+ * The help and blog loaders keep what they read only when NODE_ENV is "production"; anywhere else each render reads every
+ * article and post again, several times over. A sweep over every page runs as production does. Nothing stale outlives it:
+ * out of production the loaders never answer from what they kept, and each test file has its own modules.
+ */
+function loadContentOnce(): void {
+  beforeEach(() => void vi.stubEnv("NODE_ENV", "production"));
+  afterEach(() => void vi.unstubAllEnvs());
+}
+
 describe("every help article page", () => {
+  loadContentOnce();
+
   it("loads the serif on its article, draws its body as reading prose, and gives the title the large treatment", async () => {
     const all = slugs();
     expect(all.length, "anti-vacuity: articles on disk").toBeGreaterThan(50);
@@ -70,6 +82,7 @@ describe("every help article page", () => {
       if (typeOnly(h1Classes(markup)).join(" ") !== [...TITLE_TYPE].sort().join(" ")) wrong.push(`${slug}: title ${h1Classes(markup).join(" ")}`);
       checked++;
     }
+    console.log(`help article pages read: ${checked}`);
     expect(wrong, `${checked} articles`).toEqual([]);
     expect(checked).toBe(all.length);
   }, 120_000);
@@ -84,6 +97,8 @@ describe("every help article page", () => {
 });
 
 describe("the help pages that are not articles", () => {
+  loadContentOnce();
+
   it("do not load the serif and have no reading prose: the home, the format gallery and every format page", async () => {
     const pages: [string, string][] = [
       ["/help", renderToStaticMarkup(HelpHome())],

@@ -65,7 +65,7 @@ What matters is **upload** speed, at the place where the tripod stands, while pe
 1. Add your YouTube stream key. In YouTube Studio, select **Go live**, then **Stream**, and copy the stream key. In Seazn, open **Streaming** and select **Add streaming key**. An owner or admin adds it once, and you can then pick it for any match.
    The other option is to select **Connect YouTube** on the same page and connect your channel. A phone that follows a court all day needs a connected channel: a court cannot use a stream key.
 2. Make sure you have a Seazn credit. Each video uses one. One credit covers one match stream, up to 3 hours: see [Seazn credits](/help/billing/match-credits).
-3. For one match, open the match, select **Stream** and pick the destination. In the Seazn Club Mobile App, open **Live Stream**, scan the match's code, then select **Go live**.
+3. For one match, open the match, select **Stream** and pick the destination. In the Seazn Club Mobile App, open **Live Stream**, scan the match's code, then press and hold **Go live** for 3 seconds.
 4. For a court, select **Stream this court** on Match Day, pick the connected channel, and scan the court's code the same way. Then switch on the matches to stream.
 
 ## Five-minute check at the venue
