@@ -26,6 +26,8 @@ import { compileCss } from "@/components/v2/__tests__/_compiled-css";
 const loadSpy = vi.hoisted(() => vi.fn());
 const fixtures = vi.hoisted(() => ({ list: [] as HelpArticle[] }));
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: loadSpy }));
+// The article page's serif (components/reading/reading-serif.ts) is next/font, which only exists inside a Next build.
+vi.mock("next/font/google", () => ({ Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }) }));
 vi.mock("@/server/help-content", async (orig) => {
   const real = await orig<typeof import("@/server/help-content")>();
   return {

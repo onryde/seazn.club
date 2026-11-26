@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { Source_Serif_4 } from "next/font/google";
 import { JsonLd } from "@/components/seo/json-ld";
 import { BlogPostView } from "@/components/blog/blog-post-view";
+import { readingSerif } from "@/components/reading/reading-serif";
 import { blogTopicKey, blogUrl, formatBlogDate } from "@/lib/blog";
 import { blogPostBreadcrumbLd, blogPostMetadata, blogPostingLd } from "@/lib/blog-seo";
 import { getDictionary, t } from "@/lib/i18n";
@@ -17,13 +17,6 @@ export const dynamic = "error";
 export const revalidate = 3600;
 export const dynamicParams = false;
 
-// The body's serif (owner pick "A", 2026-11-25). next/font downloads it at build and serves it from this site;
-// globals.css `.blog-prose` asks for `--blog-serif`. NOT preloaded, on purpose: a preload hint travels with the route,
-// so the blog index fetched the font as soon as it prefetched a post's link. Unpreloaded, the browser fetches it only
-// where text is drawn in it, which is a post; until then the text is next/font's metric-matched fallback.
-// Posts are English: ½, ×, the dashes and curly quotes are all in the Latin file, and one upright variable file covers
-// regular and bold. No italic is loaded: no post uses one.
-const bodySerif = Source_Serif_4({ subsets: ["latin"], variable: "--blog-serif", display: "swap", preload: false });
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -56,7 +49,7 @@ export default async function BlogPostPage({ params }: Props) {
   const related = resolveBlogRelated(post, blogPost).map((r) => ({ href: blogUrl(r.slug), title: r.title, topic: t(d, blogTopicKey(r.topic)) }));
 
   return (
-    <main className={bodySerif.variable}>
+    <main className={readingSerif.variable}>
       <JsonLd data={blogPostingLd(post)} />
       <JsonLd data={blogPostBreadcrumbLd(post)} />
       <BlogPostView

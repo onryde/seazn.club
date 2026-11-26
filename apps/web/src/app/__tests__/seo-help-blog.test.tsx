@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: vi.fn(async () => ({})) }));
 vi.mock("next/font/google", () => ({
   Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }),
-  Source_Serif_4: () => ({ variable: "--blog-serif", className: "" }),
+  Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }),
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),

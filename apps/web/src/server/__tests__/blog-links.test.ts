@@ -16,7 +16,7 @@ vi.mock("@/server/blog-content", async (importOriginal) => {
 });
 
 // The post page's serif is next/font, which only exists inside a Next build.
-vi.mock("next/font/google", () => ({ Source_Serif_4: () => ({ variable: "--blog-serif", className: "" }) }));
+vi.mock("next/font/google", () => ({ Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }) }));
 
 import BlogPostPage from "@/app/blog/[slug]/page";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";

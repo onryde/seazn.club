@@ -17,6 +17,8 @@ import type { ReactElement } from "react";
 
 const sw = vi.hoisted(() => ({ posts: null as null | readonly unknown[] }));
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: vi.fn(async () => ({})) }));
+// The article page's serif (components/reading/reading-serif.ts) is next/font, which only exists inside a Next build.
+vi.mock("next/font/google", () => ({ Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }) }));
 vi.mock("@/server/blog-content", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/blog-content")>();
   return {

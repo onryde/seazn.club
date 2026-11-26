@@ -230,13 +230,13 @@ describe("the reading column, as the markup declares it (pilot)", () => {
     const markup = await html(PILOT);
     const prose = [...markup.matchAll(/class="competition-prose ([^"]*)"/g)].map((m) => m[1]!.split(" "));
     expect(prose.length, "anti-vacuity: prose segments").toBeGreaterThan(1);
-    for (const classes of prose) expect(classes).toEqual(expect.arrayContaining(["help-prose", "blog-prose"]));
+    for (const classes of prose) expect(classes).toEqual(expect.arrayContaining(["help-prose", "blog-prose", "reading-prose"]));
     expect(markup).not.toContain("max-w-[34rem]");
   });
 
-  // `var(--blog-serif)` is what globals.css asks for, so the name is part of the contract.
+  // `var(--reading-serif)` is what globals.css asks for, so the name is part of the contract.
   it("the post page puts the serif's variable on its own root, and the blog index does not", async () => {
-    expect(await html(PILOT)).toMatch(/^<main class="serif-face-on\(--blog-serif\)">/);
+    expect(await html(PILOT)).toMatch(/^<main class="serif-face-on\(--reading-serif\)">/);
     const index = renderToStaticMarkup(await BlogIndexPage());
     expect(index.length, "premise: the index rendered").toBeGreaterThan(500);
     expect(index).not.toContain("serif-face-on");

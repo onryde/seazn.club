@@ -1,7 +1,7 @@
 // The blog at desktop width in a browser (Blog P2 Task 4; the seven phone and tablet widths are e2e/mobile/blog.spec.ts).
 // What the unit suite (src/app/blog/__tests__, node, no DOM) cannot see: no sideways page scroll at 1280, 768 and 320, axe,
 // a wide example table scrolling INSIDE a focusable named region (AGENTS.md class 23), the one reading column with no
-// "On this page", the serif a post page alone loads, the nav's client-side signed-in swap against the real session cookies,
+// "On this page", the serif only a post page and a help article load, the nav's client-side signed-in swap against the real session cookies,
 // the Help icon's hit area, and the feed.
 //
 // The pilot is the one post on disk; the index shows no sport chips until a post names a sport (the chips' rule is a unit
@@ -11,6 +11,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { CHECKLIST_POST, expectChecklist } from "./blog-checklist";
+import { SERIF, drawnWith, notTheSerif, serifFiles, style, watchFonts } from "./reading-font";
 
 const POST = "/blog/how-standings-points-work";
 const WIDTHS = [1280, 768, 320] as const;
@@ -145,7 +146,6 @@ test.describe("signed out", () => {
 // Everything in a post's column is the SAME width and starts at the same left edge. A screenshot is the one exception to
 // the width: it is never scaled up past its own pixels. Measured in the page, element by element; a kind with no element
 // found fails (anti-vacuity), so a renamed test id cannot pass by checking nothing.
-const REM = 16;
 const COLUMN = 680;
 const COLUMN_PARTS: Record<string, string> = {
   header: '[data-testid="blog-post"] > header',
@@ -168,67 +168,6 @@ const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
   { path: "/blog/how-a-ladder-works", kinds: [...COMMON, "diagram"] },
   { path: "/blog/what-you-need-to-stream-a-match", kinds: [...COMMON, "art"] },
 ];
-
-/** The face the body asks for, as the browser names it (next/font's own family name carries it). */
-const SERIF = /Source.?Serif.?4/i;
-
-const style = (page: Page, selector: string) =>
-  page.locator(selector).first().evaluate((el) => {
-    const s = getComputedStyle(el);
-    return { size: s.fontSize, line: parseFloat(s.lineHeight), transform: s.textTransform, family: s.fontFamily, color: s.color, top: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, bottom: `${s.borderBottomWidth} ${s.borderBottomStyle} ${s.borderBottomColor}` };
-  });
-
-/** The font files of the serif's faces, as this page's stylesheets declare them (the local fallback face has none). */
-const serifFiles = (page: Page) =>
-  page.evaluate((serif) => {
-    const files: string[] = [];
-    const walk = (rules: CSSRuleList, base: string) => {
-      for (const rule of rules) {
-        if (rule instanceof CSSFontFaceRule && new RegExp(serif, "i").test(rule.style.getPropertyValue("font-family"))) {
-          for (const m of rule.style.getPropertyValue("src").matchAll(/url\("?([^")]+)"?\)/g)) files.push(new URL(m[1]!, base).href);
-        } else if ("cssRules" in rule) walk((rule as CSSGroupingRule).cssRules, base);
-      }
-    };
-    for (const sheet of document.styleSheets) walk(sheet.cssRules, sheet.href ?? location.href);
-    return files;
-  }, SERIF.source);
-
-/** Every font the page asked the network for, and every font it preloads. */
-function watchFonts(page: Page): string[] {
-  const asked: string[] = [];
-  page.on("request", (r) => {
-    if (r.resourceType() === "font" || /\.(woff2?|ttf|otf)(\?|$)/.test(r.url()) || /fonts\.(googleapis|gstatic)\.com/.test(r.url())) asked.push(r.url());
-  });
-  return asked;
-}
-
-/**
- * The faces Chromium actually drew each of these elements' own text with (CDP `CSS.getPlatformFontsForNode`). A glyph the
- * web font lacks is drawn with a second, system face, which computed style cannot show.
- */
-async function drawnWith(page: Page, selector: string): Promise<{ nodes: number; glyphs: number; faces: Map<string, number> }> {
-  await page.evaluate(() => document.fonts.ready);
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("DOM.enable");
-  await cdp.send("CSS.enable");
-  const { root } = await cdp.send("DOM.getDocument", { depth: -1 });
-  const { nodeIds } = await cdp.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector });
-  const faces = new Map<string, number>();
-  let nodes = 0;
-  let glyphs = 0;
-  for (const nodeId of nodeIds) {
-    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
-    if (fonts.length > 0) nodes++;
-    for (const f of fonts) {
-      const face = `${f.isCustomFont ? "web" : "system"}:${f.familyName}`;
-      faces.set(face, (faces.get(face) ?? 0) + f.glyphCount);
-      glyphs += f.glyphCount;
-    }
-  }
-  await cdp.detach();
-  return { nodes, glyphs, faces };
-}
-const notTheSerif = (faces: Map<string, number>) => [...faces].filter(([face]) => !(face.startsWith("web:") && SERIF.test(face))).map(([face, n]) => `${face} x${n}`);
 
 test.describe("the reading column", () => {
   test.use(signedOut);
@@ -346,15 +285,17 @@ test.describe("the reading column", () => {
     expect(notTheSerif(drawn.faces)).toEqual([]);
   });
 
-  test("no other page asks for the serif: the blog index, help, the home page and pricing", async ({ page }) => {
+  // Help ARTICLE pages share the face (e2e/help.spec.ts "the reading style"); the help home and the format pages do not.
+  test("no other page asks for the serif: the blog index, the help home and format pages, the home page and pricing", async ({ page }) => {
     // The files are read from a post, then each other page is opened fresh and left to settle while its links prefetch.
     // A fixed settle, not "network idle": the home page keeps prefetching and is never idle.
-    test.setTimeout(150_000);
+    test.setTimeout(180_000);
     await visit(page, "/blog/chess-points-and-half-points", 1280);
     const files = await serifFiles(page);
     expect(files.length, "premise").toBeGreaterThan(0);
     let checked = 0;
-    for (const path of ["/blog", "/help", "/help/registration/card-payments", "/en", "/pricing"]) {
+    const others = ["/blog", "/help", "/help/formats", "/help/formats/knockout", "/en", "/pricing"];
+    for (const path of others) {
       const other = await page.context().newPage();
       const asked = watchFonts(other);
       const postPrefetches: string[] = [];
@@ -374,7 +315,7 @@ test.describe("the reading column", () => {
       await other.close();
       checked++;
     }
-    expect(checked, "anti-vacuity: pages checked").toBe(5);
+    expect(checked, "anti-vacuity: pages checked").toBe(others.length);
   });
 
   // The serif is a Latin subset: every character a post draws in it must be in it (the ½ of a drawn game, the × and the
@@ -437,20 +378,6 @@ test.describe("the reading column", () => {
       checked++;
     }
     expect(checked, "anti-vacuity: widths checked").toBe(4);
-  });
-
-  // The positive pair: `.help-prose` is shared, so a help article must still be help's own type, width and contents list.
-  test("a help article keeps help's own prose and its 'On this page': 15px sans, uppercase headings, a 34rem column", async ({ page }) => {
-    await visit(page, "/help/registration/card-payments", 1280);
-    await expect(page.locator(".help-prose")).toHaveCount(1);
-    await expect(page.locator(".blog-prose")).toHaveCount(0);
-    await expect(page.getByRole("navigation", { name: "On this page" })).toBeVisible();
-    const p = await style(page, ".help-prose > p");
-    expect(p.size).toBe("15px");
-    expect(p.family).not.toMatch(SERIF);
-    expect((await style(page, ".help-prose h2")).transform).toBe("uppercase");
-    const box = (await page.locator(".help-prose").boundingBox())!;
-    expect(Math.round(box.width)).toBe(34 * REM);
   });
 });
 
