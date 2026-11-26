@@ -136,12 +136,28 @@ Seen only when the app did not take the link.
 - No external script, no analytics, no cookies set, no request that carries the page URL. `noindex`.
 - `Referrer-Policy: no-referrer`. The `next.config.js` catch-all sets `strict-origin-when-cross-origin`, so a
   later `/app/:path*` rule must replace it; test the header as served.
-- One inline script under the proxy's CSP nonce, doing two things: `history.replaceState(null, "",
-  location.pathname)` to drop the fragment without reading it **(web call)**, and wiring **Score in browser
-  instead** to `history.back()`. It never reads `location.hash` and never builds a `/score/` URL. With no history
-  to go back to, the link is hidden **(web call)**.
-- Known limit: **Score in browser instead** returns to the page the person came from, which may have been
-  reloaded and lost the shown secret; they then tap **Show QR** again. It does not open the pad by itself.
+- **Score in browser instead opens the remote pad (owner, 2026-11-26, option A).** "Don't have the app, so score
+  remotely in the browser." On `/app/score` it opens the device-link pad for the code the link carried: the same
+  origin's `/score/<token>`, the address the QR and the panel's `padUrl` already use. This replaces the rule of
+  2026-11-25, under which the button was `history.back()` and so returned the person to the organiser's scoring
+  screen. The old statement that the page never reads `location.hash` and never builds a `/score/` URL **no longer
+  holds for `/app/score`**; it still holds for `/app/stream`, `/app/day` and the catch-all.
+- One inline script under the proxy's CSP nonce, a static constant (nothing from the request is written into it).
+  - `/app/stream`, `/app/day` and the catch-all: `history.replaceState(null, "", location.pathname)` only. They never
+    read the fragment.
+  - `/app/score`: read the fragment into the script's closure, then the same `replaceState` at once, whatever the
+    fragment holds. The button (served hidden) is unhidden only when the **whole** fragment is one device-link token,
+    `dl_` and 43 base64url characters (`mintDeviceLinkSecret`; the shape `CAPTURE_SCORING_LINK_URL_RE` pins). The tap
+    is `location.replace("/score/" + token)`.
+- Binding **until the tap**: the credential is only in the URL fragment and then the closure. No request, log,
+  analytics, replay, referrer or third party carries it; no cookie, no `localStorage` / `sessionStorage` / history
+  state, no global, and nothing in the DOM (no `href`, no `data-*`, no text). **After** the tap the arrival is a QR
+  scan's: the same address, with no referrer.
+- `replace`, not `assign` **(web call)**: Back from the pad goes to wherever the person came from. With `assign` it
+  would land on this page after its token was dropped.
+- With no usable token (none, junk, a reload after the strip) the button stays hidden **(web call)**, so it is never
+  dead. A page restored from the back/forward cache keeps its closure, so its button still works. The history length
+  no longer matters: a fresh tab or an in-app browser shows the button.
 - Residual risk, accepted **(web call)**: the phone's own browser history may keep the visited URL, and a synced
   profile may sync it.
 - On staging, confirm nothing at the edge injects a script into these pages.
@@ -212,7 +228,9 @@ The anchor's `href` holds a live credential on a page that does run analytics.
 
 - Link builder: round-trips the QR text byte for byte (with and without `exp`); credential never before `#`.
 - assetlinks: each origin's exact JSON, including the negative in §5.2.
-- Fallback pages: served headers; no external script; script never references `hash`.
+- Fallback pages: served headers; no external script; only the `/app/score` script references `hash` (§5.3); the served
+  script run in a bare realm against a table of fragments; with a real device link, nothing carries the token before
+  the tap and the tap opens the remote pad.
 - Buttons: absent on iPhone and desktop user agents, absent at `md` and up; e2e at phone width with an Android
   user agent, per surface, checking `href`.
 - Telemetry: §5.5.

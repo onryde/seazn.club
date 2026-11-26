@@ -3,7 +3,7 @@
 // card and the court stream sheet. Driven in a real browser because the whole question is WHO sees the button — an
 // Android user agent, after mount, below `md` — which the node unit suite cannot ask, and because the href must be the
 // panel's OWN live code: each one is compared with what the server answered, and the scoring one is TAPPED through to the
-// real /app/score fallback page (the page a phone without the app gets).
+// real /app/score fallback page (the page a phone without the app gets) and on through it to the remote pad.
 //
 // THE BUTTONS ARE BEHIND A BUILD FLAG (`NEXT_PUBLIC_OPEN_IN_APP`, baked into the client bundle; fly.stg.toml sets it,
 // production does not). This runner reads the same variable. Under CI it must be "1" — the beforeAll FAILS rather than
@@ -138,7 +138,7 @@ const hint = (key: string) => [key, EN[key]!];
 test.describe("Android phone", () => {
   test.use({ userAgent: ANDROID_UA });
 
-  test("Remote scoring on the fixture console: no button before Create; then the minted link, Score in browser, a reissue, and a tap through to the real /app/score page", async ({
+  test("Remote scoring on the fixture console: no button before Create; then the minted link, Score in browser, a reissue, and a tap through the real /app/score page to the remote pad", async ({
     page,
     request,
   }) => {
@@ -194,16 +194,23 @@ test.describe("Android phone", () => {
       expect(nextHref).toBe(`${origin}/app/score#${nextUrl.slice(`${origin}/score/`.length)}`);
       expect(nextHref).not.toBe(href);
       // The real consumer, with no app installed: a tap in the SAME tab loads the /app/score fallback page (the app's
-      // absent half of an Android App Link), which strips the secret from history; its own way back returns here.
+      // absent half of an Android App Link), which strips the secret from history; its Score in browser instead opens
+      // that code's remote pad, and Back from the pad returns here.
       const console_ = page.url();
       const tabs = page.context().pages().length;
       await panel.getByTestId("open-in-app").tap();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(EN["openApp.fallback.title"]!, { timeout: STEP_MS });
       await expect(page).toHaveURL(`${origin}/app/score`);
       expect(page.context().pages(), "no new tab").toHaveLength(tabs);
-      const back = page.getByTestId("score-in-browser");
-      await expect(back).toBeVisible();
-      await back.click();
+      const inBrowserInstead = page.getByTestId("score-in-browser");
+      await expect(inBrowserInstead).toBeVisible();
+      await inBrowserInstead.tap();
+      await expect(page).toHaveURL(nextUrl);
+      // This seed's division is not started, so the account-less pad opens on its not-started screen (the scoring
+      // screen itself is open-in-app.spec.ts's real-link walk).
+      await expect(page.getByTestId("scan-not-started")).toBeVisible({ timeout: STEP_MS });
+      await expect(pad, "the remote pad, not the signed-in console").toHaveCount(0);
+      await page.goBack();
       await expect(page).toHaveURL(console_);
     }
     expect(hydration).toEqual([]);
