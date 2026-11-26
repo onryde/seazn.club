@@ -640,7 +640,7 @@
           ]
         },
         "inputReceivedFps": {
-          "description": "Camera frames per second as the relay received them: decoded camera frames written into the programme's camera slot over the beat window, to one decimal. Omitted when not measured, never sent as 0: a present 0 is a measured zero (the camera sent nothing the window long). A beat that comes within 2.5 s (the rate's minimum window, OUTPUT_FPS_MIN_WINDOW_MS) of the last reading repeats that reading and keeps the window open: so the edge beat that announces a programme phase change can carry the previous window's camera rates, not the camera at the change.",
+          "description": "Camera frames per second as the relay received them: decoded camera frames written into the programme's camera slot over the beat window, to one decimal. It is counted after the relay's own drops (a frame its appsink replaced with a newer one, or one of a build the compositor had given up, never reaches the slot), so it is a lower bound on the frames the phone sent. Omitted when not measured, never sent as 0: a present 0 is a measured zero (the camera sent nothing the window long). A beat that comes within 2.5 s (the rate's minimum window, OUTPUT_FPS_MIN_WINDOW_MS) of the last reading repeats that reading and keeps the window open: so the edge beat that announces a programme phase change can carry the previous window's camera rates, not the camera at the change.",
           "anyOf": [
             {
               "type": "number",

@@ -55,7 +55,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "9781d9194ad9629194e99852ba47353c4a6a913f66adeb11ce6b6c6983f7192a";
+const SHA256 = "102e738c3004591bb679fc3b690d77f93ca160a2ce56f55472af9c7a998b87d9";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -1166,5 +1166,42 @@ describe("Task E: the camera's decoded picture size (inputWidth, inputHeight)", 
     }
     const kbps = propOf(beat, "inputReceivedKbps").description as string;
     for (const words of ["whole MPEG-TS stream", "audio", "overhead"]) expect(kbps, words).toContain(words);
+    // review E, m5: the frame rate is counted after the relay's own drops, so it reads low, never high.
+    const fps = propOf(beat, "inputReceivedFps").description as string;
+    for (const words of ["after the relay's own drops", "lower bound"]) expect(fps, words).toContain(words);
+  });
+
+  // Review E, I2: the deploy-order notes are what stops a Machine on the #118 image from sending a key web's strict heartbeat
+  // refuses (400 on every connected beat, stale_beat after ~15 s, the Machine destroyed and retried, machine_crash). They name
+  // every key the flag switches on and the order, and the keys are the contract's own two lists, not a count typed here.
+  it("the deploy-order notes (.env.example, runner-fly.ts, config.ts) name all eight keys the flag switches on and say web with both key sets deploys BEFORE the image moves", () => {
+    const root = resolve(import.meta.dirname, "../../../../../..");
+    const envExample = readFileSync(resolve(root, ".env.example"), "utf8");
+    const start = envExample.indexOf("# T44 and Task E, the camera's beat keys");
+    const end = envExample.indexOf("# RELAY_INPUT_BEAT=", start);
+    expect(start, "the flag's block is in .env.example").toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const block = envExample.slice(start, end);
+    let checked = 0;
+    for (const key of [...CAMERA_KEYS, ...PICTURE_KEYS]) {
+      expect(block, `.env.example names ${key}`).toContain(key);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the six and the two").toBe(8);
+    for (const words of ["eight more fields", "T44 AND Task E (#1326)", "RELAY_IMAGE", "#118", "refused 400"]) expect(block, words).toContain(words);
+    // The order: web's key sets (step 1) come before the image (step 2), which comes before the flag (step 3).
+    const at = (words: string): number => block.indexOf(words);
+    expect(at("1) web with T44 AND Task E"), "step 1 is web").toBeGreaterThanOrEqual(0);
+    expect(at("2) only then move RELAY_IMAGE")).toBeGreaterThan(at("1) web with T44 AND Task E"));
+    expect(at("3) set RELAY_INPUT_BEAT=1")).toBeGreaterThan(at("2) only then move RELAY_IMAGE"));
+    const fly = readFileSync(resolve(import.meta.dirname, "../../relay/runner-fly.ts"), "utf8");
+    const flyAt = fly.indexOf("T44 (the same shape): RELAY_INPUT_BEAT=1");
+    expect(flyAt, "the runner's note is there").toBeGreaterThanOrEqual(0);
+    const flyNote = fly.slice(flyAt, fly.indexOf("env: {", flyAt));
+    for (const words of ["eight beat keys", "inputWidth", "#1326", "RELAY_IMAGE", "#118"]) expect(flyNote, words).toContain(words);
+    const config = readFileSync(resolve(import.meta.dirname, "../../relay/config.ts"), "utf8");
+    const cfgAt = config.indexOf("whether web copies `RELAY_INPUT_BEAT=1`");
+    const cfgNote = config.slice(cfgAt, config.indexOf("export function relayInputBeat", cfgAt));
+    for (const words of ["BOTH must be deployed", "#1326", "#118"]) expect(cfgNote, words).toContain(words);
   });
 });

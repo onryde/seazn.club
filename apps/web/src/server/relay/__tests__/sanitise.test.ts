@@ -137,14 +137,15 @@ describe("sanitise — allowlist", () => {
   // Task E: the camera's picture size is two numbers, kept as sent. The allowlist owns the KEYS; the type and the bound are the
   // beat contract's (RelayHeartbeat is strict and the route parses it before anything is stored), so the same pairs are put to
   // both: what the contract admits survives whole, what it refuses is a 400 before the sanitiser sees it.
-  it("Task E: inputWidth and inputHeight survive a sample's raw as the numbers sent (the contract's own bounds and a real size); a look-alike key is dropped; a value the contract refuses never reaches the sanitiser", () => {
+  it("Task E: inputWidth and inputHeight survive a sample's raw as the numbers sent (the proposal's own bounds and a real size); a look-alike key is dropped; a value the contract refuses never reaches the sanitiser", () => {
     const bounds = (key: string): { min: number; max: number } => {
       expect(Object.keys(RelayHeartbeat.shape), `${key} is declared`).toContain(key);
-      // The bounds are read off the contract's published declaration, never typed here.
-      const declared = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/relay-job.v1.json"), "utf8")) as {
-        $defs: { heartbeat: { properties: Record<string, { anyOf: { type: string; minimum?: number; maximum?: number }[] }> } };
-      };
-      const branch = declared.$defs.heartbeat.properties[key]!.anyOf.find((b) => b.type === "integer")!;
+      // The bounds are the compositor's proposal's (the pinned copy that relay-contract.test.ts compares the contract and the twin
+      // to), never read off the generated contract this change also writes and never typed here.
+      const proposed = JSON.parse(
+        readFileSync(resolve(import.meta.dirname, "../../api-v1/__tests__/compositor-proposals/2026-11-26-heartbeat-input-picture.proposed.json"), "utf8"),
+      ) as { properties: Record<string, { anyOf: { type: string; minimum?: number; maximum?: number }[] }> };
+      const branch = proposed.properties[key]!.anyOf.find((b) => b.type === "integer")!;
       return { min: branch.minimum!, max: branch.maximum! };
     };
     let kept = 0;

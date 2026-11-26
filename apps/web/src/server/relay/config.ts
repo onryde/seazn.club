@@ -433,8 +433,11 @@ export function seaznHostedCost(env: Record<string, string | undefined> = proces
   return seaznFlag("SEAZN_HOSTED_COST", env);
 }
 /** T44 (compositor Owed 110 + 111): whether web copies `RELAY_INPUT_BEAT=1` into each relay Machine's env, which makes the
- *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat) and, from Task E, its decoded picture's size (`inputWidth`, `inputHeight`). Web's heartbeat
- *  contract declares them from T44, so it accepts the beat either way; the flag is what asks for them. DEFAULT OFF, and OFF in prod
+ *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat) and, from
+ *  Task E, its decoded picture's size (`inputWidth`, `inputHeight`). Web's heartbeat contract declares the six from T44 and the
+ *  two from Task E (#1326), so it accepts the beat either way once both are deployed, and BOTH must be deployed before
+ *  RELAY_IMAGE moves to a compositor image that sends the size (#118): the heartbeat is strict, so an undeclared key is a 400.
+ *  The flag is what asks for the keys. DEFAULT OFF, and OFF in prod
  *  until the owner says: the keys add a few fields to every beat and every sample's raw, and nothing reads them yet. Named like
  *  RELAY_AIRINGS, the other switch web passes through to the Machine, and read the same way (runner-fly.ts): ONLY the exact "1"
  *  turns it on, so a typo reads as off rather than throwing in the middle of a Machine create (the money path). Read at each create,
