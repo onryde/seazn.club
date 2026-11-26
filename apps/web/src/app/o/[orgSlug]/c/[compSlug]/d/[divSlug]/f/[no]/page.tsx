@@ -29,7 +29,7 @@ import {
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { matchRulesBlockProps, offersMatchRules } from "@/components/v2/match-rules-block-model";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
 import { fixtureStreamMode, offersStandaloneReplays } from "@/lib/fixture-stream-mount";
@@ -40,6 +40,7 @@ import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
+import { BackLink } from "@/components/back-link";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
@@ -73,6 +74,9 @@ export default async function FixturePage({
   const id = page.fixtureId;
   // Accepted officials scoring without edit rights get the courtside chrome.
   const isOfficialScorer = canScore && !canEdit;
+  // The one way back (top row). Every member can open this division, so it goes to its fixtures tab. An accepted official
+  // who is not a member (role null) cannot open any division page (requireOrgPage 404s them): theirs is their matches.
+  const isMember = auth.role !== null;
   const fixture = await getFixture(auth, id);
   // §T4 — the cfg the PAD renders against: the fixture's frozen snapshot if it
   // has been scored, otherwise the division config with this stage's overlay
@@ -173,6 +177,7 @@ export default async function FixturePage({
   // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
   const frozen = competition.frozen ?? false;
   const locale = await resolveLocale();
+  const ui = await getDictionary(locale, "ui");
   const organiserRules = offersMatchRules({ canEdit, frozen });
   const [streamContext, openStreams, matchRules, formatLine] = await Promise.all([
     loadStreamPanelContext({
@@ -265,31 +270,54 @@ export default async function FixturePage({
     rulesVersion,
   });
 
+  // Player self-check-in QR (PROMPT-53) — top of the match panel, and only BEFORE the match starts (owner feedback
+  // 2026-07-13): check-in is an arrival tool, once play begins it's just noise.
+  const showCheckin = !isOfficialScorer && canScore && !frozen && fixture.status === "scheduled";
+  // Back is desktop only for a member (owner 2026-11-26): the breadcrumb above already goes to the fixtures tab. So below
+  // md the arrow is hidden and the row keeps the page's own phone spacing: the QR row's, the courtside line's, or no row
+  // at all. A non-member has no breadcrumb (the org layout), so theirs shows at every width, pulled up into the page's
+  // top padding.
+  const topRowSpacing = !isMember
+    ? "-mt-6 mb-2"
+    : showCheckin
+      ? "max-md:mb-3"
+      : isOfficialScorer
+        ? "max-md:mb-4"
+        : "max-md:hidden";
+
   return (
     <>
       <main className="mx-auto max-w-5xl px-4 py-8">
-        {isOfficialScorer && (
-          <p className="mb-4 text-xs text-slate-400">
-            <Link href="/me" className="hover:text-purple-600">
-              ← My matches
-            </Link>
-            <span className="ml-2">
-              {competition.name} · {division.name}
-            </span>
-          </p>
-        )}
+        {/* The top row, one DOM at every width: back on the left, the check-in QR on the right (AGENTS.md "The phone
+            composition"). */}
+        <div data-role="match-top-row" className={`flex items-center gap-3 md:-mt-3 md:mb-3 ${topRowSpacing}`}>
+          <BackLink
+            emphasis="round"
+            className={isMember ? "max-md:hidden" : undefined}
+            href={isMember ? routes.division(orgSlug, compSlug, divSlug, "fixtures") : "/me"}
+            label={t(ui, isMember ? "fixture.back.fixtures" : "fixture.back.myMatches")}
+          />
 
-        {/* Player self-check-in QR (PROMPT-53) — top of the match panel, and
-            only BEFORE the match starts (owner feedback 2026-07-13): check-in
-            is an arrival tool, once play begins it's just noise. */}
-        {!isOfficialScorer &&
-          canScore &&
-          !(competition.frozen ?? false) &&
-          fixture.status === "scheduled" && (
-            <div className="mb-3 flex justify-end">
+          {isOfficialScorer && (
+            <p className="min-w-0 text-xs text-slate-400">
+              {/* A member official also keeps the shortcut to their own matches. For a non-member the back button IS it. */}
+              {isMember && (
+                <Link href="/me" className="mr-2 underline underline-offset-2 hover:text-purple-600">
+                  {t(ui, "fixture.myMatches")}
+                </Link>
+              )}
+              <span>
+                {competition.name} · {division.name}
+              </span>
+            </p>
+          )}
+
+          {showCheckin && (
+            <div className="ml-auto flex min-w-0 justify-end">
               <CheckinQr fixtureId={fixture.id} />
             </div>
           )}
+        </div>
 
         {/* Assigned-officials strip (design v11 §D2): organiser surface only —
             a red "Declined" badge is the cue to re-pick. */}
