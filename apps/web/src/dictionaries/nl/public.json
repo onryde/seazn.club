@@ -50,6 +50,7 @@
   "matchCentre.status.timeNotRecorded": "Tijd niet vastgelegd",
   "matchCentre.winner": "Winnaar:",
   "matchCentre.updatedAgo": "Bijgewerkt {seconds}s geleden",
+  "matchCentre.scoreUpdatedAgo": "Score {seconds} s geleden bijgewerkt",
   "matchCentre.goalsByPeriod": "Doelpunten per periode",
   "matchCentre.discipline": "Discipline",
   "matchCentre.toss": "{side} won de toss, koos voor {elected}",
