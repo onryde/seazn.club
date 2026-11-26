@@ -362,6 +362,7 @@ const ALL_JOBS = WORKFLOW_FILES.flatMap((f) => jobsOf(f));
 /** The jobs that docker-run the CI placement image: facts, from the plan's table — not from the scan under test. */
 const RUNNERS = [
   "ci.yml:smoke-db",
+  "ci.yml:smoke-db-ad",
   "ci.yml:smoke-db-app",
   "ci.yml:smoke-db-outliers",
   "ci.yml:smoke-db-usecases",

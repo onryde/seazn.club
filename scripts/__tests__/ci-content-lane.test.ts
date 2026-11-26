@@ -1,5 +1,5 @@
 // ci.yml's content lane: a pull request that touches only help or blog articles (and the
-// pictures they show) skips four jobs and runs everything else. That is safe only while
+// pictures they show) skips five jobs and runs everything else. That is safe only while
 // NOTHING the skipped jobs run reads that content, and "nothing reads it" is a property of
 // ~60 test files that no one job shows. This file derives it.
 //
@@ -81,7 +81,7 @@ const skippedOnContent = (all: Job[]): string[] => {
 };
 
 /** What the design says, stated here: the jobs a content-only pull request does not run. */
-const EXPECTED_SKIPPED = ["matrix-rows", "matrix-sample", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases"];
+const EXPECTED_SKIPPED = ["matrix-rows", "matrix-sample", "smoke-db-ad", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases"];
 /** Everything that reads content, and so runs on a content-only change. */
 const EXPECTED_RUNNING = ["changes", "container", "gates", "placement-pin", "scheduler-live", "security", "smoke-db", "smoke-e2e", "test"];
 

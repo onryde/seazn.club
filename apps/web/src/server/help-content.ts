@@ -20,13 +20,12 @@ import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
 import { rehypeHelpCallouts } from "@/server/help-callouts";
 import { rehypeHelpScrollBoxes } from "@/server/help-scroll-boxes";
 import { rehypeBlogStackedTables } from "@/server/blog-table-stack";
-import type { HelpSectionEntry } from "@/lib/help";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
 
 // Section order = the product's own hierarchy (v3/06 §3). `blurb` is the line under the section's
 // card on the help home: what its pages cover, in the pages' own words. Every folder under
-// content/help needs an entry here, or its pages are missing from the section list (the template
+// content/help needs an entry here, or its pages are missing from the help home (the template
 // test, app/help/__tests__/help-template.test.tsx, pins that against the folders on disk).
 export const HELP_SECTIONS: { key: string; label: string; blurb: string }[] = [
   { key: "getting-started", label: "Getting started", blurb: "Set up an organisation, a competition and its first fixtures" },
@@ -271,24 +270,6 @@ export function helpPlainText(markdown: string, matrix?: MatrixData): string {
     .replace(/[#>*_`|-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-export type { HelpSectionEntry } from "@/lib/help";
-
-/**
- * The section list every help page shows (sections as headings, their pages beneath): the Markdown
- * sections in HELP_SECTIONS order, then Formats, whose one page is the generated format gallery
- * (`/help/formats` and its family pages are not Markdown), at the end as before the redesign.
- */
-export function helpSectionList(): HelpSectionEntry[] {
-  return [
-    ...helpNav().map((s) => ({
-      key: s.section,
-      label: s.label,
-      pages: s.articles.map((a) => ({ href: `/help/${a.slug}`, title: a.title })),
-    })),
-    { key: "formats", label: "Formats", pages: [{ href: "/help/formats", title: "Format gallery" }] },
-  ];
 }
 
 /** A section's display label (its key when it has none). */

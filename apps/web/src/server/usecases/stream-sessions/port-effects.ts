@@ -134,9 +134,10 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
  *  are switched OFF, so Cloudflare rejects any further push. A phone left sending after a Stop, a failure or the live limit
  *  otherwise keeps a connection open to Cloudflare for nothing. Found by role from `fixture_stream_inputs` — never
  *  `ingest_input_uid`, which is the OUTPUT input (Input B, the compositor's programme, on a composed session), and never a
- *  `programme` row — and switched OFF, never deleted: the input carries the recording (C2). A session with no camera input
- *  at the provider (it ended before it was provisioned, or the retention sweep has reclaimed it) has nothing to disable and
- *  records nothing.
+ *  `programme` row — and switched OFF, never deleted: the input carries the recording (C2). A session whose rows name no
+ *  camera input (none made, none stored YET, or the retention sweep has reclaimed it) has nothing to disable here and records
+ *  nothing. "None stored yet" is not "none": a session can end while its create is still out, and that input is switched off
+ *  by `provisionSession`, which calls this when it finds the session already ended as it stores the ids.
  *
  *  BEST EFFORT, and it NEVER throws (the `releaseOutput` precedent), not for a provider fault and not for a database one:
  *  the terminal transition that asked for it has committed and stays, so nothing here blocks or fails the Stop, or skips the
@@ -152,8 +153,9 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
  *  fresh pair per session), so nothing starts on it again, and it is reclaimed with the session's recordings by the
  *  retention sweep.
  *
- *  Idempotent at the provider (a disable of a disabled or gone input is success), and the domain emits the effect once per
- *  session — on ENTERING a terminal state — so a second Stop of an ended session decides nothing and calls nothing.
+ *  Idempotent at the provider (a disable of a disabled or gone input is success). The domain emits the effect once per
+ *  session — on ENTERING a terminal state — so a second Stop of an ended session decides nothing and calls nothing. The one
+ *  other caller is `provisionSession` (above), so an end racing the store can switch the same input twice.
  *  `true` when no input was left on by a provider fault (and none was missed by a read fault). */
 export async function disablePhoneInput(sessionId: string, deps: SessionDeps): Promise<boolean> {
   let s: Session;

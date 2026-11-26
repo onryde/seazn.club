@@ -53,7 +53,7 @@ export default async function FormatExplainerPage({ params }: Props) {
   const trail = [{ href: "/help/formats", label: "Format gallery" }];
 
   return (
-    <HelpShell currentHref="/help/formats">
+    <HelpShell>
     <article>
       <JsonLd data={helpArticleLd({ path, name: f.title, description: familyDescription(f) })} />
       <JsonLd data={helpBreadcrumbLd(trail, { path, name: f.title })} />

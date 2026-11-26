@@ -1,5 +1,5 @@
-// ci.yml splits src/server + src/lib across several DB jobs (four today:
-// smoke-db, smoke-db-app, smoke-db-outliers, smoke-db-usecases) by giving each
+// ci.yml splits src/server + src/lib across several DB jobs (five today:
+// smoke-db, smoke-db-ad, smoke-db-app, smoke-db-outliers, smoke-db-usecases) by giving each
 // an exclude-glob, USECASES_EXCLUDE, that drops every src/server/usecases test
 // outside that job's own first-letter range. That split is only safe while the
 // globs stay exhaustive (no file runs in no job) and disjoint (no file runs in
@@ -35,6 +35,12 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(import.meta.dirname, "../..");
 const CI_YML = join(REPO_ROOT, ".github/workflows/ci.yml");
 const USECASES = "src/server/usecases/";
+/**
+ * The one job that takes NO usecases letters (2026-11-26: smoke-db keeps src/lib and the rest of src/server, and
+ * its old [a-d] letters moved to smoke-db-ad). Stated here, so a boundary typo that empties any OTHER job's share
+ * is still a failure, and so is this job quietly taking letters back.
+ */
+const NO_USECASES = ["smoke-db"];
 
 interface DbJob {
   id: string;
@@ -44,6 +50,8 @@ interface DbJob {
   runPaths: string[];
   /** The paths after `--` of the reconciliation call that passes the same exclude. */
   reconciledPaths: string[];
+  /** The whole job, comment lines dropped and continuation lines joined. */
+  live: string;
 }
 
 /**
@@ -81,7 +89,7 @@ const dbJobs = (): DbJob[] => {
     expect(recon, `${id}: exactly one reconciliation narrowed by USECASES_EXCLUDE`).toHaveLength(1);
 
     const words = (s: string) => s.trim().split(/\s+/);
-    jobs.push({ id, glob: globs[0], runPaths: words(runs[0][1]), reconciledPaths: words(recon[0][1]) });
+    jobs.push({ id, glob: globs[0], runPaths: words(runs[0][1]), reconciledPaths: words(recon[0][1]), live });
   }
   return jobs;
 };
@@ -207,13 +215,63 @@ describe("ci.yml's DB-job partition of src/server + src/lib", () => {
     const shares = perJob.map((s) => [...s].filter((f) => f.startsWith(USECASES)).length);
     expect(shares.reduce((a, b) => a + b, 0), "usecases files summed over the jobs").toBe(uc);
 
-    const even = uc / jobs.length;
+    const claiming = jobs.filter((j) => !NO_USECASES.includes(j.id));
+    expect(jobs.length - claiming.length, "the jobs named as taking no usecases all exist").toBe(NO_USECASES.length);
+    const even = uc / claiming.length;
     jobs.forEach((j, i) => {
+      if (NO_USECASES.includes(j.id)) {
+        expect(shares[i], `${j.id} takes no usecases letters`).toBe(0);
+        return;
+      }
       expect(shares[i], `${j.id}: usecases files`).toBeGreaterThan(0);
       expect(
         shares[i],
         `${j.id} runs ${shares[i]} of ${uc} usecases files (even share ${even.toFixed(1)}). Recompute the boundary letters from a real run's per-file times (the DB jobs' vitest-results artifacts).`,
       ).toBeLessThan(even * 1.5);
     });
+  });
+
+  // ENV IS PRESERVED PER FILE (ci.yml, header above smoke-db). usecases [a-d] ran inside smoke-db until 2026-11-26,
+  // so smoke-db-ad has to hand them the same process environment and the same database: a variable lost or gained in
+  // the move changes which legs of a test run (a Stripe or AI-fixture gate skips, a date-boundary suite stops
+  // crossing its boundary) with no test file changing and the job still green.
+  it("gives usecases [a-d] the environment and the Postgres time zone they had inside smoke-db", () => {
+    const jobs = dbJobs();
+    const from = jobs.find((j) => j.id === "smoke-db");
+    const to = jobs.find((j) => j.id === "smoke-db-ad");
+    expect(from, "a smoke-db job").toBeDefined();
+    expect(to, "a smoke-db-ad job").toBeDefined();
+
+    const jobEnv = (live: string): string[] => {
+      const block = /\n {4}env:\n((?: {6}.*\n|\s*\n)+)/.exec(live);
+      expect(block, "a job-level env block").not.toBeNull();
+      return block![1]
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l !== "" && !l.startsWith("USECASES_EXCLUDE:"))
+        .sort();
+    };
+    const env = jobEnv(from!.live);
+    expect(env.length, "anti-vacuity: variables compared").toBeGreaterThan(10);
+    expect(jobEnv(to!.live)).toEqual(env);
+
+    /** The step-level env of the one run step narrowed by the job's glob. */
+    const runStepEnv = (live: string): string[] => {
+      const step = live.split(/\n {6}- /).filter((s) => /npm test --workspace apps\/web -- .*--exclude "\$USECASES_EXCLUDE"/.test(s));
+      expect(step, "the narrowed run step").toHaveLength(1);
+      return step[0]
+        .slice(step[0].indexOf("\n        env:\n"))
+        .split("\n")
+        .filter((l) => /^ {10}[A-Z_]+:/.test(l))
+        .map((l) => l.trim())
+        .sort();
+    };
+    const stepEnv = runStepEnv(from!.live);
+    expect(stepEnv.length, "anti-vacuity: step variables compared").toBeGreaterThan(1);
+    expect(runStepEnv(to!.live)).toEqual(stepEnv);
+
+    for (const j of [from!, to!]) {
+      expect(j.live, `${j.id}: the non-UTC session time zone`).toMatch(/\n {8}command: postgres -c timezone=Etc\/GMT-14\n/);
+    }
   });
 });

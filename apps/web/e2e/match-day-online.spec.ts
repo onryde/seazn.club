@@ -21,7 +21,8 @@
 import { test, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { QUIET_POLL_MS } from "../src/components/v2/desk/band-poll";
-import { apiJson, loginUi, TAG, withDb } from "./helpers";
+import { dismissConsent, freshOrg } from "./directory-kit";
+import { apiJson, invalidateOrgEntitlements, loginUi, setOrgPlanBySql, TAG, withDb } from "./helpers";
 import { putArrival } from "./match-day-kit";
 import {
   boardPanelUrl,
@@ -62,6 +63,23 @@ async function seedRound(request: Parameters<typeof seedOnlineRound>[0], names: 
   return seedOnlineRound(request, names, { camera: "required", open: true, ...opts });
 }
 
+/** An organisation of the test's own, on Pro, for a test that expects the DEFAULT focus to be the online round (the page starts signed out:
+ *  `BLANK`). A court outranks a round there (`resolveDayFocus`), and a division with no courts configured is offered every court of its
+ *  ORGANISATION (`resolveCandidateCourts`). The shared Pro org cannot promise it has none: other specs in the same job add venues to it. */
+async function ownOrg(page: Page, label: string): Promise<void> {
+  const { orgId } = await freshOrg(page, label);
+  await dismissConsent(page);
+  await setOrgPlanBySql({ orgId }, "pro");
+  await invalidateOrgEntitlements(page.request, orgId);
+}
+const BLANK = { cookies: [], origins: [] };
+
+/** The premise of "the default focus is the round", read from the table the day's courts come from. A failure names the courts. */
+async function expectNoCourt(orgId: string): Promise<void> {
+  const courts = await withDb((sql) => sql<{ name: string }[]>`select name from courts where org_id = ${orgId} order by name`);
+  expect(courts.map((c) => c.name), "premise: the organisation has no court (one would take the default focus from the online round)").toEqual([]);
+}
+
 /** Both players of a board have ARRIVED: the room, the player on file in it, a counted check-in and a presence row (the loader's `joinable`). */
 async function arrive(r: SeededRound, board: RoundBoard, sides: readonly ("home" | "away")[] = ["home", "away"]): Promise<void> {
   for (const side of sides) await putArrival(board.fixtureId, r.orgId, side, board[side].personId);
@@ -92,7 +110,7 @@ const outage = (page: Page) => page.getByTestId("arbiter-outage");
 const tiles = (page: Page) => page.getByTestId("md-camera-tile");
 const tileOf = (page: Page, colour: "white" | "black") => page.locator(`[data-testid="md-camera-tile"][data-colour="${colour}"]`);
 const wordOf = (page: Page, colour: "white" | "black") => tileOf(page, colour).getByTestId("md-camera-word");
-/** A BOARD in focus. The default focus on a wide screen is a round (`data-online="round"`), so "no board opened" is no board panel, not no focus. */
+/** A BOARD in focus. The default focus on a wide screen, on a day with no court, is a round (`data-online="round"`), so "no board opened" is no board panel, not no focus. */
 const boardFocus = (page: Page) => page.locator('[data-testid="md-focus"][data-online="board"]');
 const rowOf = (page: Page, board: RoundBoard) => page.locator(`[data-testid="md-board-row"][data-fixture-id="${board.fixtureId}"]`);
 const roundRow = (page: Page, r: SeededRound, roundNo: number) => page.locator(`[data-testid="md-round-row"][data-key="${r.stageId}:${roundNo}"]`);
@@ -555,29 +573,35 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
   });
 
   // ── I3: a link to a board that is not here (old L835) ─────────────────────────────────────────────────────────────────────────
-  test("I3: a ?board= that is not here opens nothing - never another board - and the list stays home, with no notice", async ({ page, request }) => {
-    test.setTimeout(240_000);
-    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
-    // Another division of the same organiser: its board is not THIS day's.
-    const elsewhere = await seedRound(request, ["Eli Novak", "Fay Osei", "Gus Ito", "Hana Berg"]);
-    await page.setViewportSize({ width: 1280, height: 900 });
-    let checked = 0;
-    for (const asked of [randomUUID(), elsewhere.boards[0]!.fixtureId, "not-a-board"]) {
-      const res = await page.goto(`${r.matchDayPath}?board=${encodeURIComponent(asked)}`);
-      expect(res!.status(), asked).toBe(200);
-      await expect(page.getByTestId("md-board-row"), `${asked}: the list is on screen`).toHaveCount(r.boards.length, { timeout: 30_000 });
-      await expect(boardFocus(page), `${asked}: no board opened in its place`).toHaveCount(0);
-      // Ignored as an unknown ?court= is: the default focus (a round), no notice. The positive pair of the absence above.
-      await expect(focus(page), `${asked}: the default focus answers instead`).toHaveAttribute("data-online", "round");
-      await expect(page.getByTestId("md-lost"), `${asked}: ignored with no notice`).toHaveCount(0);
-      checked++;
-    }
-    expect(checked).toBe(3);
-    expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
-    // The positive pair: the same address with a board that IS here opens it.
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(boardPanelUrl(r, r.boards[1]!.fixtureId));
-    await expect(focus(page)).toHaveAttribute("data-fixture-id", r.boards[1]!.fixtureId, { timeout: 30_000 });
+  test.describe("a link that opens nothing, in an organisation with no court", () => {
+    test.use({ storageState: BLANK });
+
+    test("I3: a ?board= that is not here opens nothing - never another board - and the list stays home, with no notice", async ({ page }) => {
+      test.setTimeout(240_000);
+      await ownOrg(page, "mdi3");
+      const r = await seedRound(page.request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+      // Another division of the same organiser: its board is not THIS day's.
+      const elsewhere = await seedRound(page.request, ["Eli Novak", "Fay Osei", "Gus Ito", "Hana Berg"]);
+      await expectNoCourt(r.orgId);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      let checked = 0;
+      for (const asked of [randomUUID(), elsewhere.boards[0]!.fixtureId, "not-a-board"]) {
+        const res = await page.goto(`${r.matchDayPath}?board=${encodeURIComponent(asked)}`);
+        expect(res!.status(), asked).toBe(200);
+        await expect(page.getByTestId("md-board-row"), `${asked}: the list is on screen`).toHaveCount(r.boards.length, { timeout: 30_000 });
+        await expect(boardFocus(page), `${asked}: no board opened in its place`).toHaveCount(0);
+        // Ignored as an unknown ?court= is: the default focus (a round), no notice. The positive pair of the absence above.
+        await expect(focus(page), `${asked}: the default focus answers instead`).toHaveAttribute("data-online", "round");
+        await expect(page.getByTestId("md-lost"), `${asked}: ignored with no notice`).toHaveCount(0);
+        checked++;
+      }
+      expect(checked).toBe(3);
+      expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
+      // The positive pair: the same address with a board that IS here opens it.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(boardPanelUrl(r, r.boards[1]!.fixtureId));
+      await expect(focus(page)).toHaveAttribute("data-fixture-id", r.boards[1]!.fixtureId, { timeout: 30_000 });
+    });
   });
 
   // ── N1: a board of an earlier round (old L861) ────────────────────────────────────────────────────────────────────────────────
@@ -628,47 +652,53 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
   });
 
   // ── N3: a board the organiser plays on (old L912) ─────────────────────────────────────────────────────────────────────────────
-  test("N3: a board the organiser plays on is left out of their list, ONE line says so, and it cannot be opened by address; an organiser who plays nowhere sees both and no line", async ({ browser, page, request }) => {
-    test.setTimeout(180_000);
-    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
-    const [b1, b2] = r.boards as [RoundBoard, RoundBoard];
-    // The organiser who plays: board 1's home player, made an admin of the club, signed in on their own browser (the shared Pro user stays as is).
-    await withDb((sql) => sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${b1.home.userId}, 'admin')`);
-    const own = await coldContext(browser);
-    try {
-      const p = await own.newPage();
-      await loginUi(p, b1.home.email);
-      await p.setViewportSize({ width: 1280, height: 900 });
-      await p.goto(r.matchDayPath);
-      await expect(p.getByTestId("md-board-row"), "only the board they do not play on").toHaveCount(1, { timeout: 30_000 });
-      await expect(rowOf(p, b2)).toHaveCount(1);
-      await expect(rowOf(p, b1), "never the board they play on: not watchable, not offered").toHaveCount(0);
-      // Design 6.4: the board is unlisted AND one line says so - in the list where the board would be (the List column only: no panel repeats it).
-      const ownLine = uiEn["matchDay.online.ownHidden"]!;
-      const listLine = p.getByTestId("md-online").getByTestId("md-own-hidden");
-      await expect(listLine, "one line in the list").toHaveCount(1);
-      await expect(listLine).toHaveText(ownLine);
-      await expect(listLine, "and it is on screen, not folded away").toBeVisible();
-      // The panel is asserted UP before it is asserted to repeat nothing: a count of 0 under a locator whose parent has not mounted is true of any page.
-      await expect(focus(p), "premise: the default focus (the other board's round) is on screen").toHaveAttribute("data-online", "round", { timeout: 30_000 });
-      await expect(focus(p).getByTestId("md-own-hidden"), "the panel repeats nothing").toHaveCount(0);
-      // By address too: a board the viewer plays on is never opened (not as another board either).
-      await p.goto(boardPanelUrl(r, b1.fixtureId));
-      await expect(p.getByTestId("md-board-row")).toHaveCount(1, { timeout: 30_000 });
-      await expect(boardFocus(p), "the address of their own board opens nothing").toHaveCount(0);
-      await expect(focus(p), "the default focus answers instead").toHaveAttribute("data-online", "round");
-      await expect(p.getByTestId("md-own-hidden"), "the line is still there by address (the list's)").toHaveCount(1);
-      expect(await noSidewaysScroll(p, [320, 768, 1280])).toBe(3);
-    } finally {
-      await own.close();
-    }
-    // The positive pair: the club's owner plays nowhere - both boards.
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.matchDayPath);
-    await expect(page.getByTestId("md-board-row")).toHaveCount(2, { timeout: 30_000 });
-    await expect(page.getByTestId("md-own-hidden"), "and no line: nothing is left out of their list").toHaveCount(0);
-    await page.goto(boardPanelUrl(r, b1.fixtureId));
-    await expect(focus(page)).toHaveAttribute("data-fixture-id", b1.fixtureId, { timeout: 30_000 });
+  test.describe("a board the organiser plays on, in an organisation with no court", () => {
+    test.use({ storageState: BLANK });
+
+    test("N3: a board the organiser plays on is left out of their list, ONE line says so, and it cannot be opened by address; an organiser who plays nowhere sees both and no line", async ({ browser, page }) => {
+      test.setTimeout(180_000);
+      await ownOrg(page, "mdn3");
+      const r = await seedRound(page.request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+      await expectNoCourt(r.orgId);
+      const [b1, b2] = r.boards as [RoundBoard, RoundBoard];
+      // The organiser who plays: board 1's home player, made an admin of the club, signed in on their own browser (the club's owner stays as is).
+      await withDb((sql) => sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${b1.home.userId}, 'admin')`);
+      const own = await coldContext(browser);
+      try {
+        const p = await own.newPage();
+        await loginUi(p, b1.home.email);
+        await p.setViewportSize({ width: 1280, height: 900 });
+        await p.goto(r.matchDayPath);
+        await expect(p.getByTestId("md-board-row"), "only the board they do not play on").toHaveCount(1, { timeout: 30_000 });
+        await expect(rowOf(p, b2)).toHaveCount(1);
+        await expect(rowOf(p, b1), "never the board they play on: not watchable, not offered").toHaveCount(0);
+        // Design 6.4: the board is unlisted AND one line says so - in the list where the board would be (the List column only: no panel repeats it).
+        const ownLine = uiEn["matchDay.online.ownHidden"]!;
+        const listLine = p.getByTestId("md-online").getByTestId("md-own-hidden");
+        await expect(listLine, "one line in the list").toHaveCount(1);
+        await expect(listLine).toHaveText(ownLine);
+        await expect(listLine, "and it is on screen, not folded away").toBeVisible();
+        // The panel is asserted UP before it is asserted to repeat nothing: a count of 0 under a locator whose parent has not mounted is true of any page.
+        await expect(focus(p), "premise: the default focus (the other board's round) is on screen").toHaveAttribute("data-online", "round", { timeout: 30_000 });
+        await expect(focus(p).getByTestId("md-own-hidden"), "the panel repeats nothing").toHaveCount(0);
+        // By address too: a board the viewer plays on is never opened (not as another board either).
+        await p.goto(boardPanelUrl(r, b1.fixtureId));
+        await expect(p.getByTestId("md-board-row")).toHaveCount(1, { timeout: 30_000 });
+        await expect(boardFocus(p), "the address of their own board opens nothing").toHaveCount(0);
+        await expect(focus(p), "the default focus answers instead").toHaveAttribute("data-online", "round");
+        await expect(p.getByTestId("md-own-hidden"), "the line is still there by address (the list's)").toHaveCount(1);
+        expect(await noSidewaysScroll(p, [320, 768, 1280])).toBe(3);
+      } finally {
+        await own.close();
+      }
+      // The positive pair: the club's owner plays nowhere - both boards.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(r.matchDayPath);
+      await expect(page.getByTestId("md-board-row")).toHaveCount(2, { timeout: 30_000 });
+      await expect(page.getByTestId("md-own-hidden"), "and no line: nothing is left out of their list").toHaveCount(0);
+      await page.goto(boardPanelUrl(r, b1.fixtureId));
+      await expect(focus(page)).toHaveAttribute("data-fixture-id", b1.fixtureId, { timeout: 30_000 });
+    });
   });
 
   // ── no page for anyone else (old L943) ────────────────────────────────────────────────────────────────────────────────────────

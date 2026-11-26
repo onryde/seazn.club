@@ -22,7 +22,7 @@
 // badminton's own game/set boundaries.
 //
 // COST: every UI assertion below happens BEFORE the held event is flushed
-// ("Send now" / the hold expiring), because the fixture-console shell polls
+// ("Send now"; the hold cannot expire, see `stopPageClock`), because the fixture-console shell polls
 // the fixture's SERVER status independently of the pad's own optimistic
 // fold and can unmount the pad the instant it observes "decided" — so this
 // file never touches the UI again after flushing. The eventual ledger/
@@ -97,6 +97,32 @@ async function beat(page: Page): Promise<void> {
   if (PACE > 0) await page.waitForTimeout(PACE);
 }
 
+/**
+ * Stop the page's clock BEFORE the tap that opens a dock, so the hold cannot
+ * end under the checks and captures that follow. A dock lives HOLD_MS (3000 in
+ * CI) and then closes itself, taking its chips and "Send now" with it, while
+ * `shot` takes three full-page captures. In CI run 45738706774 those took
+ * 2.5s and 2.2s: both tests clicked into a dock that was gone, and each click
+ * (the config sets no `actionTimeout`) waited out the whole test.
+ *
+ * Before the tap, not after it: the hold's timer is then armed on a stopped
+ * clock, so no run is fast or slow enough to matter. Needs
+ * `page.clock.install()` ahead of `goto`. The small jump is how `pauseAt`
+ * pauses, and no hold is armed yet (same as soft-commit-visual's own freeze).
+ * Resume only once "Send now" has put the row on the ledger.
+ */
+async function stopPageClock(page: Page): Promise<number> {
+  await page.clock.pauseAt((await pageNow(page)) + 1_000);
+  return pageNow(page);
+}
+function pageNow(page: Page): Promise<number> {
+  return page.evaluate(() => Date.now());
+}
+/** Fails on a live clock however quick the run was, so the freeze cannot be dropped and stay green by luck. */
+async function expectPageClockStopped(page: Page, stoppedAt: number): Promise<void> {
+  expect(await pageNow(page), "the page clock must stay stopped while the dock is checked and captured").toBe(stoppedAt);
+}
+
 let shotNo = 0;
 async function shot(page: Page, caption: string): Promise<void> {
   shotNo += 1;
@@ -132,6 +158,7 @@ test("R7/A2 — boardgame: a half tap commits the result immediately, and a Meth
     emitCoreStart: true,
   });
 
+  await page.clock.install(); // ahead of every page timer, so `stopPageClock` can pause them
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   await expect(half(page, "home"), "a live fixture must render a tappable half").toBeVisible();
@@ -145,6 +172,7 @@ test("R7/A2 — boardgame: a half tap commits the result immediately, and a Meth
   // ---- THE TAP: commits `boardgame.result` IMMEDIATELY. No sheet, no
   // Confirm — the rejected tapModel-T design is the ONE this proves absent.
   await beat(page);
+  const stoppedAt = await stopPageClock(page);
   await half(page, "home").click();
 
   // ---- ASSERTED WITH NOTHING ELSE TAPPED YET — the ruling's own core
@@ -178,6 +206,7 @@ test("R7/A2 — boardgame: a half tap commits the result immediately, and a Meth
     "D15: no Forfeit method chip — a chess forfeit is core.forfeit, from the console's dialog",
   ).toHaveCount(0);
   await shot(page, "committed-immediately");
+  await expectPageClockStopped(page, stoppedAt);
 
   // ---- A METHOD CHIP ENRICHES THE HELD ROW, never posts a second event ----
   // `DockChip.mutate` writes straight to the durable IndexedDB queue store
@@ -206,6 +235,7 @@ test("R7/A2 — boardgame: a half tap commits the result immediately, and a Meth
       message: "the tap never reached the server ledger",
     })
     .toBe(1);
+  await page.clock.resume(); // the stopped clock could not have ended the hold: "Send now" is what sent the row
   const results = await resultsOf(page.request, fx.fixtureId);
   expect(results.length, "the Method chip must enrich the held row, never post a second event").toBe(1);
   expect(results[0]!.payload.winner, "the wrong side was recorded as winner").toBe(fx.homeEntrantId);
@@ -238,6 +268,7 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
     emitCoreStart: true,
   });
 
+  await page.clock.install(); // ahead of every page timer, so `stopPageClock` can pause them
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   const drawTile = tile(page, "draw");
@@ -248,6 +279,7 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
   // SAME `boardgame.result` type, `winner: null`, directly (a tile action
   // CAN post an event with no sheet at all).
   await beat(page);
+  const stoppedAt = await stopPageClock(page);
   await drawTile.click();
 
   // Asserted with nothing else tapped, same posture as the decisive test.
@@ -277,6 +309,7 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
   });
   await expect(awayBig).toHaveText("½");
   await shot(page, "drawn-half-point");
+  await expectPageClockStopped(page, stoppedAt);
 
   // Flush now — no more UI assertions past this point.
   await dock(page).getByRole("button", { name: "Send now", exact: true }).click();
@@ -287,6 +320,7 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
       message: "the draw tile's tap never reached the server ledger",
     })
     .toBe(1);
+  await page.clock.resume(); // the stopped clock could not have ended the hold: "Send now" is what sent the row
   const results = await resultsOf(page.request, fx.fixtureId);
   expect(results[0]!.payload.winner, "a draw must record winner: null, never an entrant id").toBeNull();
 

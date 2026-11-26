@@ -1,5 +1,5 @@
 // ci.yml's `changes` job answers docs-only, content-only or code, the heavy jobs skip on
-// a docs-only answer (and four of them on a content-only one), and `ci-gate` is the one
+// a docs-only answer (and five of them on a content-only one), and `ci-gate` is the one
 // check that reports for all of them. Three wiring facts make that safe, and none is
 // visible from any one job:
 //
@@ -26,7 +26,7 @@ const GATED_NOT_CONTENT_IF = "if: needs.changes.outputs.code == 'true' && needs.
  * The jobs whose `if:` skips them on a docs-only change AND on a content-only one: nothing they run reads help or blog
  * content (scripts/__tests__/ci-content-lane.test.ts proves it). The design, stated here, not read back from the file.
  */
-const GATED_NOT_ON_CONTENT = ["matrix-rows", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases"];
+const GATED_NOT_ON_CONTENT = ["matrix-rows", "smoke-db-ad", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases"];
 /** The jobs that skip on a docs-only change only: each reads content (see the header of `changes` in ci.yml). */
 const GATED_DOCS_ONLY = ["container", "smoke-db", "smoke-e2e", "test"];
 const GATED = [...GATED_NOT_ON_CONTENT, ...GATED_DOCS_ONLY];
@@ -105,8 +105,8 @@ describe("ci.yml: the docs-only gate and ci-gate", () => {
     expect(changes!.text).toMatch(/id: verdict\n(?:.*\n)*? {8}run: bash scripts\/ci-docs-only\.sh\n/);
   });
   it("every job with a Postgres service runs scripts/ci-pg-fast.sh before db:apply", () => {
-    // Stated here, not read back: the five database-bound jobs.
-    const DB_JOBS = ["smoke-db", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases", "smoke-e2e"];
+    // Stated here, not read back: the six database-bound jobs.
+    const DB_JOBS = ["smoke-db", "smoke-db-ad", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases", "smoke-e2e"];
     const withPg = jobs().filter((j) => j.text.includes("image: postgres:17"));
     expect(withPg.map((j) => j.id).sort()).toEqual([...DB_JOBS].sort());
     for (const j of withPg) {

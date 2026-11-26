@@ -6,7 +6,7 @@
 // The header, prose, headings, examples, pictures, "How Seazn handles it" and Related all share that column. The body's
 // serif is the page's (it loads the face) and globals.css `.reading-prose`'s (it asks for it; help articles share both, and
 // the title's type: components/reading/); headings, tables, captions
-// and everything else stay in the house sans. Help keeps its own frame and its "On this page".
+// and everything else stay in the house sans. Help articles share the column (components/reading/reading-column.ts).
 // e2e/blog.spec.ts "the reading column" measures every part in a browser.
 import Link from "next/link";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
@@ -15,6 +15,7 @@ import { BlogExample } from "@/components/blog/blog-example-table";
 import { BlogHandlesIt } from "@/components/blog/blog-handles-it";
 import { BlogRelated, type BlogRelatedPost } from "@/components/blog/blog-related";
 import { BlogArtFigure } from "@/components/blog/blog-art";
+import { READING_COLUMN } from "@/components/reading/reading-column";
 import { READING_TITLE } from "@/components/reading/reading-title";
 import type { BlogPart } from "@/server/blog-render";
 
@@ -35,7 +36,7 @@ export interface BlogPostViewProps {
 
 export function BlogPostView(p: BlogPostViewProps) {
   return (
-    <article className="mx-auto max-w-[42.5rem]" data-testid="blog-post">
+    <article className={READING_COLUMN} data-testid="blog-post">
       <header>
         <nav aria-label="Breadcrumb">
           <ol className="flex flex-wrap items-center gap-x-1.5 text-sm text-slate-500">

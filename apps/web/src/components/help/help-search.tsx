@@ -5,7 +5,7 @@
 // /api/help-index): no service, no dependency. The index is fetched on the box's FIRST focus or keystroke
 // and shared by every box on the page — it is never inside a help page's HTML.
 //
-// Two sizes, one behaviour: `hero` on the help home, `rail` at the top of the section list.
+// Two sizes, one behaviour: `hero` on the help home, `column` at the head of a page's reading column (HelpShell).
 //
 // KEYBOARD. The results are ordinary links right after the box, so Tab reaches them. Down from the box
 // moves to the first result, Up/Down move between results, Up from the first returns to the box, Enter
@@ -48,7 +48,7 @@ function Marked({ text, query }: { text: string; query: string }) {
   );
 }
 
-export function HelpSearch({ variant }: { variant: "hero" | "rail" }) {
+export function HelpSearch({ variant }: { variant: "hero" | "column" }) {
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<HelpSearchRow[] | null>(null);
   const [failed, setFailed] = useState(false);

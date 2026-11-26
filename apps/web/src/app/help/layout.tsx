@@ -7,10 +7,9 @@ export const metadata: Metadata = {
   description: HELP_DESCRIPTION,
 };
 
-// The help tree's frame: the site's nav and footer around a centred column. Each page draws its own
-// insides — the article and format pages through HelpShell (components/help/help-shell.tsx: search,
-// section list, the page), the help home its own search and section cards — because a page knows on
-// the server which page it is, and the section list marks it without reading the URL in the browser.
+// The help tree's frame: the site's nav and footer around a centred column, as the blog's. Each page draws its own
+// insides: the article and format pages through HelpShell (components/help/help-shell.tsx: the blog post's
+// reading column, with the search at its head), the help home its own search and section cards.
 //
 // Every help page is prerendered and served from Cloudflare's edge to every visitor (Blog P2, owner ruling
 // 2026-11-19: help and blog cached together), so nothing in this tree may read a cookie, a header or the session on

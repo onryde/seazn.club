@@ -57,6 +57,25 @@ test.describe("signed out", () => {
     }
   }
 
+  test("signed out, help and blog show Log in and Start free: in the bar from 640, in the menu on a phone", async ({ page }) => {
+    let checked = 0;
+    for (const path of ["/help", "/help/scoring/basics", "/blog", POST]) {
+      for (const width of [1280, 768, 640, 320]) {
+        await visit(page, path, width);
+        const bar = page.locator("[data-mk-nav]");
+        if (width < 640) await bar.getByRole("button", { name: "Open menu" }).click();
+        const where = width < 640 ? bar.getByRole("menu") : bar;
+        const role = width < 640 ? "menuitem" : "link";
+        await expect(where.getByRole(role, { name: "Log in" }), `${path} at ${width}`).toBeVisible();
+        await expect(where.getByRole(role, { name: "Start free" }), `${path} at ${width}`).toBeVisible();
+        await expect(bar.getByText(/Dashboard/).filter({ visible: true }), `${path} at ${width}`).toHaveCount(0);
+        await expect(bar.getByRole("link", { name: /Dashboard/ })).toHaveCount(0);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(16);
+  });
+
   test("the example table scrolls inside its own focusable, named region, never the page (320)", async ({ page }) => {
     await visit(page, POST, 320);
     const region = page.getByRole("region", { name: /What one finished match is worth/ });
@@ -381,42 +400,150 @@ test.describe("the reading column", () => {
   });
 });
 
+// The bar's right end, as drawn: the Help icon (from md), the sign-in actions, the phone menu button (below md).
+async function barEnd(page: Page) {
+  return page.locator("[data-mk-nav]").evaluate((bar) => {
+    const box = (el: Element | null | undefined) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || getComputedStyle(el).visibility === "hidden") return null;
+      return { left: Math.round(r.left * 2) / 2, right: Math.round(r.right * 2) / 2, width: Math.round(r.width * 2) / 2 };
+    };
+    const row = [...bar.querySelectorAll("nav a, nav button")].filter((e) => !e.closest('[role="menu"]'));
+    const named = (text: RegExp) => box(row.find((e) => text.test((e.textContent ?? "").trim())));
+    return {
+      help: box(bar.querySelector('nav > a[href="/help"]')),
+      blog: named(/^Blog$/),
+      dashboard: named(/^Dashboard/),
+      login: named(/^Log in$/),
+      start: named(/^Start free$/),
+      menu: box(row.find((e) => e.getAttribute("aria-haspopup") === "menu" && !e.textContent?.trim())),
+      slot: box(bar.querySelector('[data-testid="nav-session-slot"]')),
+    };
+  });
+}
+
+/**
+ * Records, on every animation frame from the first, where each of the bar's own links and buttons stands (in document
+ * order, the session slot's excluded). A frame can come mid-parse and hold only the first few; those are compared too.
+ */
+async function sampleBarFrames(page: Page) {
+  await page.addInitScript(() => {
+    const frames: number[][] = [];
+    (window as unknown as { __barFrames: number[][] }).__barFrames = frames;
+    const tick = () => {
+      const bar = document.querySelector("[data-mk-nav]");
+      if (bar) {
+        const xs = [...bar.querySelectorAll("a.mk-nav-link, button")]
+          .filter((e) => !(e as HTMLElement).closest("[data-testid=nav-session-slot]"))
+          .map((e) => Math.round((e as HTMLElement).getBoundingClientRect().left * 2) / 2);
+        if (xs.length) frames.push(xs);
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/** Cold loads per case. One load is not proof: with the mark inside the slot the stray frame showed on most loads, not all. */
+const FRAME_LOADS = 6;
+
+/** Loads `path` FRAME_LOADS times; every item present in any frame must already stand where it ends up. */
+async function expectNothingMoves(page: Page, path: string, width: number, ready: () => Promise<void>) {
+  let framesChecked = 0;
+  const moved: string[] = [];
+  for (let load = 0; load < FRAME_LOADS; load++) {
+    await visit(page, path, width);
+    await ready();
+    await page.waitForTimeout(300);
+    const frames = await page.evaluate(() => (window as unknown as { __barFrames: number[][] }).__barFrames);
+    expect(frames.length, "anti-vacuity: frames sampled").toBeGreaterThan(5);
+    const final = frames.at(-1)!;
+    expect(final.length, "premise: the bar's items").toBeGreaterThanOrEqual(6);
+    for (const f of frames) if (f.some((x, i) => x !== final[i])) moved.push(`load ${load}: ${f.join(",")} (ends ${final.join(",")})`);
+    framesChecked += frames.length;
+  }
+  expect([...new Set(moved)], `no bar item stood anywhere but its final place, over ${framesChecked} frames`).toEqual([]);
+}
+
+/** The bar's own spacing between its items from `sm` up (`sm:gap-2`). */
+const BAR_GAP = 8;
+const SWAP_WIDTHS = [1280, 768, 640] as const;
+/** Server-rendered for the visitor (MarketingNav `auth="server"`): the signed-in bar every other page draws. */
+const SERVER_NAV_PAGE = "/pricing";
+
 // The default project state is a real signed-in session (auth.setup.ts: a magic-link login, which sets BOTH cookies). The page
 // is cached and shared, so it was drawn for a stranger; the swap happens in the browser from the readable hint cookie.
 test.describe("signed in", () => {
-  test("nothing in the bar moves when the Dashboard swap happens (every frame, then against a signed-out visit)", async ({ page, browser }) => {
-    // Sample the left edge of every bar link on every animation frame from the first paint, so a jump that lasts a single
-    // frame is caught, then compare the settled signed-in bar with the signed-out one.
-    await page.addInitScript(() => {
-      const samples: string[] = [];
-      (window as unknown as { __barSamples: string[] }).__barSamples = samples;
-      const tick = () => {
-        const bar = document.querySelector("[data-mk-nav]");
-        if (bar) {
-          const xs = [...bar.querySelectorAll("a.mk-nav-link, button")].filter((e) => !(e as HTMLElement).closest("[data-testid=nav-session-slot]")).map((e) => Math.round((e as HTMLElement).getBoundingClientRect().left * 2) / 2);
-          if (xs.length) samples.push(xs.join(","));
-        }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
+  for (const width of SWAP_WIDTHS) {
+    test(`${width}: Dashboard sits right after the Help icon, as on a server-drawn page, with no gap left by the signed-out pair`, async ({ page, browser }) => {
+      await visit(page, SERVER_NAV_PAGE, width);
+      await expect(page.locator("[data-mk-nav]").getByRole("link", { name: /Dashboard/ })).toBeVisible();
+      const server = await barEnd(page);
+      expect(server.slot, "premise: a server-drawn page has no swap slot").toBeNull();
+      const signedOutCtx = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width, height: 900 } });
+      const out = await signedOutCtx.newPage();
+      await visit(out, "/help", width);
+      await expect(out.locator("[data-mk-nav]").getByRole("link", { name: "Log in" })).toBeVisible();
+      const stranger = await barEnd(out);
+      await signedOutCtx.close();
+
+      let checked = 0;
+      for (const path of ["/help", "/help/scoring/basics", "/blog", POST]) {
+        await visit(page, path, width);
+        await expect(page.locator("[data-mk-nav]").getByRole("link", { name: /Dashboard/ }), path).toBeVisible();
+        const bar = await barEnd(page);
+        expect(bar.slot, `${path}: premise, the swap slot`).not.toBeNull();
+        expect([bar.login, bar.start], `${path}: the signed-out pair is gone`).toEqual([null, null]);
+        // No empty room in the slot: it is exactly the button.
+        expect(bar.slot, path).toEqual(bar.dashboard);
+        if (width >= 768) expect(bar.dashboard!.left - bar.help!.right, `${path}: gap after the Help icon`).toBe(BAR_GAP);
+        else expect(bar.menu!.left - bar.dashboard!.right, `${path}: gap before the menu button`).toBe(BAR_GAP);
+        // The same place a server-drawn signed-in bar puts everything.
+        expect([bar.blog, bar.help, bar.dashboard, bar.menu], `${path}: as ${SERVER_NAV_PAGE}`).toEqual([server.blog, server.help, server.dashboard, server.menu]);
+        // And the bar ends where a signed-out visitor's does.
+        if (width >= 768) expect(bar.dashboard!.right, `${path}: right edge`).toBe(stranger.start!.right);
+        checked++;
+      }
+      expect(checked, "anti-vacuity").toBe(4);
     });
-    await visit(page, "/blog", 1280);
-    const bar = page.locator("[data-mk-nav]");
-    await expect(bar.getByRole("link", { name: /Dashboard/ })).toBeVisible();
-    await page.waitForTimeout(300);
-    const samples = await page.evaluate(() => (window as unknown as { __barSamples: string[] }).__barSamples);
-    const distinct = [...new Set(samples)];
-    expect(samples.length, "anti-vacuity: frames sampled").toBeGreaterThan(5);
-    expect(distinct.length, `the other bar items stayed put in every frame: ${distinct.join(" | ")}`).toBe(1);
-    const left = async (pg: Page) => pg.locator("[data-mk-nav]").getByRole("link", { name: "Blog", exact: true }).evaluate((e) => Math.round(e.getBoundingClientRect().left * 2) / 2);
-    const signedInLeft = await left(page);
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 900 } });
-    const out = await ctx.newPage();
-    await visit(out, "/blog", 1280);
-    await expect(out.locator("[data-mk-nav]").getByRole("link", { name: "Log in" })).toBeVisible();
-    expect(await left(out), "the Blog link is where it is for a signed-out visitor").toBe(signedInLeft);
-    await ctx.close();
-  });
+  }
+
+  for (const width of SWAP_WIDTHS) {
+    test(`${width}: nothing in the bar moves when the Dashboard swap happens (every frame, and before the page's scripts arrive)`, async ({ page }) => {
+      await sampleBarFrames(page);
+      await expectNothingMoves(page, "/blog", width, () => expect(page.locator("[data-mk-nav]").getByRole("link", { name: /Dashboard/ })).toBeVisible());
+      const hydrated = await barEnd(page);
+
+      // The page before React: the framework's scripts never arrive, so only the markup, the stylesheet and the inline
+      // mark are at work. The slot already has the button's width, and the signed-out pair is not shown.
+      let blocked = 0;
+      await page.route(/\/_next\/static\/.*\.js/, (route) => {
+        blocked++;
+        return route.abort();
+      });
+      const res = await page.goto("/blog", { waitUntil: "load" });
+      expect(res?.status()).toBe(200);
+      await page.evaluate(() => document.fonts.ready);
+      expect(blocked, "premise: the page's scripts were held back").toBeGreaterThan(0);
+      const early = await barEnd(page);
+      expect(early.dashboard, "premise: React has not drawn the button").toBeNull();
+      expect([early.login, early.start]).toEqual([null, null]);
+      const slot = await page.getByTestId("nav-session-slot").boundingBox();
+      expect(slot!.width, "the room held is the button's").toBeCloseTo(hydrated.dashboard!.width, 0);
+      expect([early.blog, early.help, early.menu]).toEqual([hydrated.blog, hydrated.help, hydrated.menu]);
+    });
+  }
+
+  for (const width of [1280, 768] as const) {
+    test(`${width}: a signed-out visitor's bar does not move either while the page is parsed`, async ({ browser }) => {
+      const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width, height: 900 } });
+      const page = await ctx.newPage();
+      await sampleBarFrames(page);
+      await expectNothingMoves(page, "/blog", width, () => expect(page.locator("[data-mk-nav]").getByRole("link", { name: "Log in" })).toBeVisible());
+      await ctx.close();
+    });
+  }
 
   test("the bar swaps its sign-in actions for Dashboard after hydration, with no server read of the session", async ({ page, playwright, baseURL }) => {
     await visit(page, "/blog", 1280);

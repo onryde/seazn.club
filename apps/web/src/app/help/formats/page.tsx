@@ -28,7 +28,7 @@ export default async function FormatGalleryPage() {
   });
   const blogLinks = await helpBlogLinks("formats/overview");
   return (
-    <HelpShell currentHref="/help/formats">
+    <HelpShell>
       <JsonLd data={helpCollectionLd({ path: "/help/formats", name: TITLE, description: DESCRIPTION })} />
       <JsonLd data={helpBreadcrumbLd(TRAIL, { path: "/help/formats", name: TITLE })} />
       <HelpBreadcrumb trail={TRAIL} />

@@ -31,7 +31,7 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\.spec\.ts/;
 
-// --- how e2e.yml splits the `parallel` project across six jobs -------------
+// --- how e2e.yml splits the `parallel` project across seven jobs -----------
 //
 // Playwright's own `--shard` splits by TEST COUNT over a CONTIGUOUS run of
 // test groups in file order (`filterForShard` in the runner: it sums
@@ -51,7 +51,8 @@ const SERIAL_SPECS =
 // lets the others shard the remainder:
 //   "heavy"  -> only PARALLEL_HEAVY
 //   "mid"    -> only PARALLEL_MID (added 2026-11-19, see its comment below)
-//   "rest"   -> everything except PARALLEL_HEAVY and PARALLEL_MID, then --shard=N/4
+//   "extra"  -> only PARALLEL_EXTRA (added 2026-11-26, see its comment below)
+//   "rest"   -> everything except the three carve-outs above, then --shard=N/4
 //   unset    -> the whole project, unchanged — every local run, and
 //               `npm run test:e2e`, take this path
 //
@@ -153,6 +154,25 @@ const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|online-c
 // overlay-compositor-e2e-wiring.test.ts pins that this spec runs in an e2e-parallel leg that starts the composed-session
 // server; every e2e-parallel leg shares that one Start server step, so "mid" satisfies it as "rest" did.
 const PARALLEL_MID = /(match-room|overlay-compositor)\.spec\.ts/;
+// THE "extra" LEG, 2026-11-26. `parallel 4/4` was cancelled at the 20-minute cap on two main pushes in a row with
+// nothing failing: run 45745874538 had started 400 of 402 tests, 45742678701 (attempt 1) 392 of 392, no retries.
+// Its 14 earlier green runs were 17.1 min median, 19.8 max. The four "rest" shards still held equal counts and
+// unequal cost. A FIFTH count shard does not fix it: replayed over the real `--shard=K/5` listing, 5/5 still takes
+// ~813s of step (4/4 ~926s), because the files that cost sit together at the end of the alphabet. So six named files
+// get a leg of their own and "rest" stays four ways. Replayed Playwright step over the real listings (2 workers; two
+// per-test cost sources, start gaps in the line logs of six green runs and durations in the JSON reports; the first
+// reproduced the four measured shards of the old split within 9%):
+//
+//   before            rest 1/4 632        2/4 746  3/4 653  4/4 926
+//   after, line logs  extra 574   rest        579      588      554      666
+//   after, reports    extra 662   rest        571      570      540      544
+//
+// ESTIMATES until a CI run of this split reports. The files: stream-overlay, w3-swiss-app-a, w5-round-robin-app-b
+// and youtube-panel.shots (4/4's four dearest), marketing-product (it opened 2/4) and quick-match-home (it was
+// most of 3/4's weight). Re-search the set rather than appending one file when a rest leg grows again.
+// The dot in `youtube-panel\.shots` is why the wiring test unescapes the names before checking they exist.
+const PARALLEL_EXTRA =
+  /(marketing-product|quick-match-home|stream-overlay|w3-swiss-app-a|w5-round-robin-app-b|youtube-panel\.shots)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
 // --- the walkthrough leg ---------------------------------------------------
@@ -233,17 +253,26 @@ const MOBILE_SPECS = /[\\/]e2e[\\/]mobile[\\/][^\\/]+\.spec\.ts$/;
 
 // Walkthrough carve-outs, selected by E2E_WALKTHROUGH_SLICE (see the block
 // above the project for the measurements and the reasoning). "capture",
-// "stream" and "sponsor" each select ONE group of files; "rest" ignores all
-// three and is the catch-all; unset runs the whole directory, which is what a
-// local run wants.
+// "stream", "sponsor" and "heavy" each select ONE group of files; "rest"
+// ignores all four and is the catch-all; unset runs the whole directory, which
+// is what a local run wants.
 const WALKTHROUGH_CAPTURE = /walkthrough[\\/]capture-(phone|panel-pr2|auto)\.spec\.ts/;
 const WALKTHROUGH_STREAM = /walkthrough[\\/]stream-relay\.spec\.ts/;
 const WALKTHROUGH_SPONSOR = /walkthrough[\\/]sponsor-stream-matrix\.spec\.ts/;
+// SIXTH LEG, 2026-11-26: "heavy". `walkthrough rest 1/4` was the e2e workflow's median last-but-one finisher and
+// within 14% of the 20-minute cap (job 16.1 min median, 17.3 max over 14 green runs) while rest 3/4 took 7.8: the
+// head of the alphabet carried the dear serial files and a count shard cannot see that. quick-match and
+// rs007-money-matrix leave "rest", which stays four ways. Replayed step (3 workers; the model reproduced the four
+// measured shards, 770 / 390 / 282 / 438s, within 14%): before 704 / 384 / 242 / 436s, after (real listings) heavy
+// ~308s and rest ~546 / 402 / 220 / 360s. ESTIMATES until a CI run reports. rs007-money-matrix SKIPS without the Stripe
+// secrets, so on a run without them this leg is quick-match alone.
+const WALKTHROUGH_HEAVY = /walkthrough[\\/](quick-match|rs007-money-matrix)\.spec\.ts/;
 const WALKTHROUGH_SLICE = process.env.E2E_WALKTHROUGH_SLICE;
 const WALKTHROUGH_SLICE_MATCH: Record<string, RegExp> = {
   capture: WALKTHROUGH_CAPTURE,
   stream: WALKTHROUGH_STREAM,
   sponsor: WALKTHROUGH_SPONSOR,
+  heavy: WALKTHROUGH_HEAVY,
 };
 
 export default defineConfig({
@@ -282,6 +311,7 @@ export default defineConfig({
       // testMatch, instead of handing it an explicit undefined.
       ...(PARALLEL_SLICE === "heavy" ? { testMatch: PARALLEL_HEAVY } : {}),
       ...(PARALLEL_SLICE === "mid" ? { testMatch: PARALLEL_MID } : {}),
+      ...(PARALLEL_SLICE === "extra" ? { testMatch: PARALLEL_EXTRA } : {}),
       testIgnore: [
         SERIAL_SPECS,
         MOBILE_SPECS,
@@ -289,7 +319,7 @@ export default defineConfig({
         WALKTHROUGH,
         // STG-local probes: their own opt-in project only (see PROBES).
         PROBES,
-        ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY, PARALLEL_MID] : []),
+        ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY, PARALLEL_MID, PARALLEL_EXTRA] : []),
       ],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
@@ -302,7 +332,7 @@ export default defineConfig({
         ? WALKTHROUGH_SLICE_MATCH[WALKTHROUGH_SLICE]
         : WALKTHROUGH,
       ...(WALKTHROUGH_SLICE === "rest"
-        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM, WALKTHROUGH_SPONSOR] }
+        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM, WALKTHROUGH_SPONSOR, WALKTHROUGH_HEAVY] }
         : {}),
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],

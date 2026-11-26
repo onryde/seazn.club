@@ -22,9 +22,9 @@ name: E2E
 # ever ran in CI. AGENTS.md calls the seven-width matrix "the enforcement
 # backstop"; it was 2 of 7 in practice.
 #
-# The seven are now spread over FOUR matrix jobs (2 + 1 + 2 + 2 widths since
-# 2026-11-25; 3 + 2 + 2 before, see the e2e-mobile job), each
-# still running its own group with `--workers=1`. Read the two constraints
+# The seven are now spread over SIX matrix jobs (1 + 1 + 1 + 2 + 1 + 1 widths
+# since 2026-11-26; 2 + 1 + 2 + 2 from 2026-11-25, 3 + 2 + 2 before, see the
+# e2e-mobile job), each still running its own group with `--workers=1`. Read the two constraints
 # separately, because an earlier version of this comment conflated them and
 # concluded "deliberately NOT one job per width":
 #
@@ -92,6 +92,17 @@ name: E2E
 # now two legs, 320/360 and 375, by width rather than by shard; see the
 # e2e-mobile job for the measurements.
 #
+# 2026-11-26: `parallel 4/4` was cancelled at the cap twice on main (runs
+# 45745874538 and 45742678701, 400/402 and 392/392 tests started, no retries).
+# Four changes, each from 14 green runs: a "parallel extra" leg (4/4's dear
+# files), a "walkthrough heavy" leg (rest 1/4, median 16.1 min, max 17.3), and
+# one leg per width for phones-small (14.9 / 16.8) and tablets (14.3 / 17.9),
+# which would otherwise have been the next to set the wall clock. The numbers
+# beside each leg below are PREDICTIONS until a CI run of this split reports.
+# `timeout-minutes: 20` is unchanged. e2e-ci-wiring.test.ts now reads these
+# matrices and proves every spec is dispatched by exactly one leg, shards
+# complete.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -103,8 +114,9 @@ name: E2E
 # pins its V8 heap to half the runner's RAM and restarts itself past ~80% use
 # (with transient 404s from Turbopack's on-demand compiles as it nears the
 # ceiling) — flaky under a full Playwright run. `next start` has neither the
-# watchdog nor per-request compiles, and is what production runs anyway. The
-# compiler cache is persisted between runs so the build only pays for changes.
+# watchdog nor per-request compiles, and is what production runs anyway. No
+# compiler cache is carried between runs: every job pays a full build (the
+# comment above each Build step says why the old cache step was removed).
 #
 # Because production builds never dev-expose `login_url`, every job sets
 # E2E_PROD_TARGET=1: the auth helpers mint login tokens straight in the DB
@@ -424,6 +436,16 @@ jobs:
     # 39288837798, 18.8 on 39320198519) and 3/3 850-1083s, under the same cap.
     # That is the walkthrough cut, not PARALLEL_HEAVY, and it was re-cut the
     # same day: see the walkthrough block in the matrix below.
+    #
+    # RE-CUT 2026-11-26: `parallel 4/4` was cancelled at the cap twice on main
+    # (runs 45745874538 and 45742678701), nothing failing. Measured over 14
+    # green runs (job median / max, minutes): 1/4 13.6 / 15.4, 2/4 16.3 / 17.5,
+    # 3/4 14.0 / 16.3, 4/4 17.1 / 19.8, heavy 13.5 / 15.6, mid 11.6 / 12.2. A
+    # fifth count shard leaves 5/5 at ~813s of step, so six files went to a new
+    # "extra" leg and "rest" stays four-way. PARALLEL_EXTRA's comment in
+    # playwright.config.ts carries the replay: predicted step extra 574-662s,
+    # rest 540-666s, against 926s for the old 4/4. With ~3 min of setup the
+    # slowest of the five is ~14 min. PREDICTED, not measured.
     strategy:
       fail-fast: false # one leg's failure must not hide another's
       matrix:
@@ -460,6 +482,11 @@ jobs:
             slug: parallel-mid
             project: parallel
             slice: mid
+            args: ""
+          - group: parallel extra
+            slug: parallel-extra
+            project: parallel
+            slice: extra
             args: ""
           # Whole matches played by hand, through the decider — the suite's
           # product-level proofs (#667, #670). Its own project so a failure
@@ -603,25 +630,26 @@ jobs:
           # slash, as `parallel 1/4` above already does.
           #
           # THREE THINGS THAT WENT FROM 1x TO 3x with the first split, and are
-          # 7x now (capture, stream, sponsor - joined 2026-11-12 - and "rest"
-          # sharded four ways since 2026-11-19), because every leg carries
+          # 8x now (capture, stream, sponsor - joined 2026-11-12 - "rest"
+          # sharded four ways since 2026-11-19, and heavy since 2026-11-26),
+          # because every leg carries
           # `project: walkthrough` and the conditions below key on that. Read
           # these before diagnosing a red as a product defect:
           #
-          #   * `stripe:sync` runs seven times concurrently against one
+          #   * `stripe:sync` runs eight times concurrently against one
           #     Stripe test account. It MUST — the step writes price ids into
           #     each leg's own Postgres — and its own comment below traces
           #     what the concurrency does and what is left unverified.
-          #   * seven `stripe listen` forwarders run against that same account.
+          #   * eight `stripe listen` forwarders run against that same account.
           #     Each posts to its own server with its own minted secret, so the
-          #     leg holding a money spec is served correctly; the other six
+          #     leg holding a money spec is served correctly; the other seven
           #     also receive that leg's events and post them to a server whose
           #     database has none of those rows. Noise, not a failure — but it is
           #     where to look first if a money spec reds naming an id nothing in
           #     its own DB owns.
           #   * the "Connect walkthrough not configured" `::warning::` is now
-          #     emitted up to seven times for one missing secret. Cosmetic; do
-          #     not read seven warnings as seven problems.
+          #     emitted up to eight times for one missing secret. Cosmetic; do
+          #     not read eight warnings as eight problems.
           #
           # The Event Pass money-path check below was BROKEN by the first split
           # and is repaired in the same commit — see its own comment. It is the
@@ -629,6 +657,21 @@ jobs:
           # Playwright JSON report sees only ITS OWN leg's tests. It keys on the
           # FILE, so it is correct for this cut too: event-pass.spec.ts lands in
           # "rest" (one of its four shards) and the other legs report a notice.
+          # SIXTH CARVE, 2026-11-26: "heavy" = quick-match and
+          # rs007-money-matrix. `walkthrough rest 1/4` measured 16.1 min median
+          # and 17.3 max over 14 green runs (step 12.8 min) while rest 2/4,
+          # 3/4 and 4/4 ran 9.5 / 7.8 / 10.4: the dear serial files sit at the
+          # head of the alphabet. Replayed step: heavy ~308s, rest ~546 / 402 /
+          # 220 / 360s, against ~704s for the old rest 1/4. PREDICTED, not
+          # measured. rs007-money-matrix is a real-Stripe spec, so this leg
+          # needs what every walkthrough leg already gets (keys, stripe:sync,
+          # forwarder); without the secrets it skips by name.
+          - group: walkthrough heavy
+            slug: walkthrough-heavy
+            project: walkthrough
+            slice: ""
+            walkthrough_slice: heavy
+            args: --workers=3
           - group: walkthrough capture
             slug: walkthrough-capture
             project: walkthrough
@@ -994,8 +1037,9 @@ jobs:
       # which syncs then runs against its own ephemeral Postgres for the
       # identical reason.
       #
-      # RUNS ON ALL SEVEN WALKTHROUGH LEGS, DELIBERATELY (2026-09-22 split;
-      # three legs then, seven since "rest" went to four shards 2026-11-19).
+      # RUNS ON ALL EIGHT WALKTHROUGH LEGS, DELIBERATELY (2026-09-22 split;
+      # three legs then, seven since "rest" went to four shards 2026-11-19,
+      # eight since the heavy leg 2026-11-26).
       # Review asked for it to be gated to one leg. It must not be: the
       # script's second half is a WRITE TO THIS JOB'S OWN DATABASE —
       # `applyPlanPrices` sets `plans.stripe_price_id_monthly/annual`
@@ -1004,7 +1048,7 @@ jobs:
       # to one leg would leave every other leg with NULL price ids and red the
       # money specs deterministically — trading a probabilistic hazard for a
       # certain break. There is no ordering primitive that helps either: the
-      # seven legs are sibling matrix legs with no `needs:` between them.
+      # eight legs are sibling matrix legs with no `needs:` between them.
       #
       # What the concurrency actually costs, traced through the script rather
       # than assumed. In the STEADY state (`scripts/stripe-sync.ts:3` "a price
@@ -2503,7 +2547,7 @@ jobs:
 
   # ---------------------------------------------------------------------
   # v3/02 §4 viewport gate + #349 responsive matrix, all seven widths, spread
-  # over three matrix legs. See this file's header comment for the two separate
+  # over six matrix legs. See this file's header comment for the two separate
   # constraints: `--workers=1` is mandatory WITHIN a leg (the widths in a leg
   # share that leg's `setup` org), and there is no race ACROSS legs (each gets
   # its own job-scoped Postgres and its own org). Full suite per width (owner
@@ -2542,6 +2586,17 @@ jobs:
     # mid-width by test count, and a red leg should still name a band.
     # `timeout-minutes: 20` STAYS, as everywhere in this file: it is a guard
     # against a hung job, not a budget to grow into.
+    #
+    # ONE LEG PER WIDTH for the 320/360 and 768/834 pairs, 2026-11-26. Over 14
+    # green runs (job / step, median, minutes): phones-small 14.9 / 11.9 (max
+    # 16.8), tablets 14.3 / 11.3 (max 17.9, 2 min under the cap), phones-large
+    # 12.9 / 10.2 (max 16.4), phone-se 8.6 / 5.6. Once the parallel and
+    # walkthrough legs were re-cut the same day, these two pairs would have set
+    # the workflow's wall clock, so each width now has its own leg: predicted
+    # ~6 min of step, ~9 min job (half the pair's step plus the same ~3 min of
+    # setup). Cost: two more setups, ~6 runner-minutes. phones-large 390/430
+    # stays a pair: it sits under the new parallel floor. Splitting it is the
+    # next move if it leads a run. PREDICTED, not measured.
     strategy:
       fail-fast: false # one width band's failure must not hide another's
       matrix:
@@ -2551,18 +2606,24 @@ jobs:
         # what a shared literal across three legs would produce). `slug` is the
         # artifact-safe half; do not collapse the two back into one field.
         include:
-          - group: phones-small 320/360
-            slug: phones-small
-            projects: --project=mobile-320 --project=mobile-360
+          - group: phone 320
+            slug: phone-320
+            projects: --project=mobile-320
+          - group: phone 360
+            slug: phone-360
+            projects: --project=mobile-360
           - group: phone-se 375
             slug: phone-se
             projects: --project=mobile-se
           - group: phones-large 390/430
             slug: phones-large
             projects: --project=mobile-14 --project=mobile-430
-          - group: tablets 768/834
-            slug: tablets
-            projects: --project=tablet-768 --project=tablet-834
+          - group: tablet 768
+            slug: tablet-768
+            projects: --project=tablet-768
+          - group: tablet 834
+            slug: tablet-834
+            projects: --project=tablet-834
 
     services:
       postgres:
