@@ -64,7 +64,7 @@ jobs:
   # -------------------------------------------------------------------------
   # Docs-only, content-only, or code? Two answers that the heavy jobs read:
   #
-  #   outputs.code     'false' only for a docs-only PR. `test`, `container`, the four DB
+  #   outputs.code     'false' only for a docs-only PR. `test`, `container`, the five DB
   #                    jobs, `smoke-e2e` and `matrix-rows` (and matrix-sample through it)
   #                    run only when it is 'true'.
   #   outputs.content  'true' only for a CONTENT-ONLY PR: every changed path is a help or
@@ -79,8 +79,8 @@ jobs:
   #                                that READS content
   #   code          true  false    everything
   #
-  # On a content-only PR these four skip, on a `&& content != 'true'` clause: smoke-db-app,
-  # smoke-db-outliers, smoke-db-usecases and matrix-rows (matrix-sample with it). Nothing
+  # On a content-only PR these five skip, on a `&& content != 'true'` clause: smoke-db-ad,
+  # smoke-db-app, smoke-db-outliers, smoke-db-usecases and matrix-rows (matrix-sample with it). Nothing
   # they run reads help or blog content, and the proof is a test, not this comment:
   # scripts/__tests__/ci-content-lane.test.ts derives every test file that reads content,
   # by behaviour, and fails if any of them is run only by a job that skips. What stays, and
@@ -738,12 +738,13 @@ jobs:
   # -------------------------------------------------------------------------
 
   # -------------------------------------------------------------------------
-  # THE DB SUITES, IN FOUR JOBS. Real Postgres container -> real HTTP -> real
+  # THE DB SUITES, IN FIVE JOBS. Real Postgres container -> real HTTP -> real
   # DB: the /api/v1 service layer + engine-db adapter end to end, plus src/lib,
   # src/app, the repo-root scripts and the named DB-gated outliers.
   #
-  #   smoke-db            src/lib + src/server minus usecases, usecases [a-d],
-  #                       repo-root scripts, Redis-gated + live-Stripe steps
+  #   smoke-db            src/lib + src/server minus usecases, repo-root
+  #                       scripts, Redis-gated + live-Stripe steps
+  #   smoke-db-ad         usecases [a-d]
   #   smoke-db-app        usecases [e-h] + src/app
   #   smoke-db-outliers   usecases [i-r] + the DB-gated suites outside
   #                       src/server|lib|app
@@ -768,6 +769,19 @@ jobs:
   # to its job summary, so the NEXT boundary move is made from real numbers.
   # A first-letter range cannot split `s`, so [s-z] stays one job.
   #
+  # WHY A FIFTH, 2026-11-26. `smoke-db` was the workflow's floor again, now by
+  # minutes. Over 12 green runs (job, median / max): smoke-db 17.4 / 21.7, with
+  # one step (src/lib + src/server, usecases [a-d]) at 913s median and 1162s
+  # worst; the next-slowest job, smoke-db-app, 14.7 / 15.6; smoke-db-usecases
+  # 14.0 / 17.3; smoke-db-outliers 13.0 / 14.0. This workflow's wall median was
+  # 17.9. This time the cut IS from per-file times: in the vitest JSON of three
+  # of those runs, usecases [a-d] (189 files) was 691s of the step's 1494s of
+  # per-file time, 46%. So [a-d] moved, whole, to smoke-db-ad, and smoke-db's
+  # glob now excludes every usecases test. PREDICTED, not measured: smoke-db
+  # ~10.5 min, smoke-db-ad ~9 min, workflow wall ~15 min with smoke-db-app the
+  # floor. Cost: one more install + migrate (~1.7 runner-minutes). No job here
+  # has a job-level cap, so this one is about wall clock only.
+  #
   # WHY EXCLUDE-GLOBS AND NOT `--shard`, which would need no boundary letters
   # and would rebalance itself: vitest 4.1.9 honours `vitest run --shard=1/2`
   # (verified: 7 + 7 files, zero overlap, union 14) but SILENTLY IGNORES
@@ -779,8 +793,9 @@ jobs:
   # off the saving. `--exclude` is honoured by BOTH, so each job reconciles
   # itself and needs no barrier. Do not "simplify" this to --shard.
   #
-  # Each job's USECASES_EXCLUDE is ONE negated-class glob, `[!a-d]*.test.*`:
-  # "every usecases test whose NAME does not start with my letters". A middle
+  # Each lettered job's USECASES_EXCLUDE is ONE negated-class glob, `[!a-d]*.test.*`:
+  # "every usecases test whose NAME does not start with my letters" (smoke-db,
+  # which takes none, excludes `*.test.*` under usecases whole). A middle
   # range ([e-h], [i-r]) cannot be cut by one positive glob, and a negated
   # class can (vitest list AND vitest run both honour `[!…]`: measured 151 =
   # e..k by count on 2026-11-10, and `[!jn]` ran exactly the j and n files).
@@ -790,7 +805,11 @@ jobs:
   # glob, and the paths each job runs, from THIS FILE and fails when any file
   # under src/server + src/lib runs in no job or in two.
   #
-  # ENV IS PRESERVED PER FILE, not per job. smoke-db's job env carries the
+  # ENV IS PRESERVED PER FILE, not per job. smoke-db-ad therefore carries
+  # smoke-db's whole job env, its step's placement variables and its Postgres
+  # time zone, because [a-d] ran under them until 2026-11-26 (the partition test
+  # compares the two). It carries no Redis service: [a-d] ran in the step that
+  # has no REDIS_URL. smoke-db's job env carries the
   # Stripe and AI-fixture variables; the old smoke-db-usecases job deliberately
   # did not. A test file keeps exactly the env it ran under before the split:
   # usecases [e-h] used to run in smoke-db, so smoke-db-app's usecases step
@@ -799,9 +818,9 @@ jobs:
   # or lost STRIPE_SECRET_KEY or SCHEDULING_AI_BASE_URL in a CI refactor would
   # change which legs run without a line of test code changing.
   #
-  # All four skip on a docs-only pull request (see `changes`); ci-gate is the
+  # All five skip on a docs-only pull request (see `changes`); ci-gate is the
   # one check that reports for them either way. On a CONTENT-ONLY pull request
-  # the other three skip, and smoke-db runs, but NOT its suite: it holds the DB-gated
+  # the other four skip, and smoke-db runs, but NOT its suite: it holds the DB-gated
   # halves of the help-copy tests, and nothing else a content change can move. So
   # there it runs only the readers in scripts/content-db-readers.json (the same
   # job, the same name, so ci-gate sees the same check): the database is migrated and
@@ -820,7 +839,7 @@ jobs:
   # manifest disagrees, and when a step's lane condition changes.
   # -------------------------------------------------------------------------
   smoke-db:
-    name: Smoke — DB + Redis suites, usecases [a-d] (Postgres container)
+    name: Smoke — DB + Redis suites (Postgres container)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -895,9 +914,8 @@ jobs:
       # Pass leg skips — which is the one leg proving a bought rung is the rung
       # stored, credited and enforced. Mirrors e2e's whsec_e2e_payments.
       STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
-      # This job's QUARTER of src/server/usecases ([a-d]) — see the header above
-      # smoke-db for the partition, how the letters were picked, and why the cut
-      # is an exclude-glob rather than `--shard`.
+      # This job takes NO src/server/usecases letters: it excludes the whole of
+      # usecases, which the other four DB jobs share out (header above smoke-db).
       #
       # Declared ONCE, at job scope, and read by BOTH the test run and its
       # reconciliation. That is the point: the reconciliation narrows the LISTING
@@ -906,15 +924,11 @@ jobs:
       # other jobs' files as "listed but not run", and that reads as "the gate is
       # broken" rather than "the globs drifted".
       #
-      # The letter split is by TEST FILE name at any depth under usecases/, so a
-      # nested `usecases/<area>/__tests__/` lands in exactly one job too. The
-      # `.test.*` anchor is load-bearing: vitest's exclude also prunes a matching
-      # DIRECTORY, and a bare `[a-h]*` swallowed `external-play/` whole, so its
-      # [i-z] tests ran in neither job (measured with `vitest list`, 2026-10-11).
-      # Without the anchor `[!a-d]*` would prune `external-play/` here — fine for
-      # this job — and `[!i-r]*` would prune it in smoke-db-outliers, whose `o`
-      # files live there, so they would run nowhere.
-      USECASES_EXCLUDE: "**/server/usecases/**/[!a-d]*.test.*"
+      # The glob is anchored on `.test.*` like every other DB job's: vitest's
+      # exclude also prunes a matching DIRECTORY, and a bare `[a-h]*` swallowed
+      # `external-play/` whole, so its [i-z] tests ran in neither job (measured
+      # with `vitest list`, 2026-10-11).
+      USECASES_EXCLUDE: "**/server/usecases/**/*.test.*"
 
     steps:
       - uses: actions/checkout@v5
@@ -1092,9 +1106,9 @@ jobs:
             exit 1
           fi
 
-      # `--exclude "$USECASES_EXCLUDE"` hands every src/server/usecases test
-      # outside [a-d] to the other three DB jobs. Everything else under
-      # src/server, and all of src/lib, still runs here.
+      # `--exclude "$USECASES_EXCLUDE"` hands every src/server/usecases test to
+      # the other four DB jobs. Everything else under src/server, and all of
+      # src/lib, still runs here.
       #
       # The quotes are load-bearing: unquoted, the shell glob-expands the pattern
       # against the CWD before vitest ever sees it, and on a no-match zsh errors
@@ -1145,9 +1159,9 @@ jobs:
       #
       # It carries the SAME `--exclude` the run above did, so the listing it
       # reconciles against is this job's share and not the whole tree. Without
-      # it every usecases file outside [a-d] reads as "listed but not run" — a
-      # red on a correct run, which is how a gate gets deleted instead of fixed.
-      # smoke-db-shard-partition.test.ts proves the four shares are still
+      # it every usecases file reads as "listed but not run" — a red on a
+      # correct run, which is how a gate gets deleted instead of fixed.
+      # smoke-db-shard-partition.test.ts proves the five shares are still
       # exhaustive and disjoint, so nothing can fall between them unnoticed.
       #
       # The `src/app` reconciliation moved with its suite (smoke-db-app).
@@ -1218,7 +1232,7 @@ jobs:
 
       # Per-file timing for the NEXT boundary move (see the header above this
       # job: the current letters came from file counts, because no run had kept
-      # its vitest JSON). The same two steps close all four DB jobs. always():
+      # its vitest JSON). The same two steps close all five DB jobs. always():
       # a red run's timings are as useful as a green one's, and a suite that
       # failed to collect simply has no report here — the summary says so
       # instead of failing the job a second time.
@@ -1244,6 +1258,200 @@ jobs:
         run: |
           docker logs placement-smoke || true
           docker rm -f placement-smoke >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # usecases [a-d], split out of smoke-db on 2026-11-26 (the measurement is in
+  # the header above smoke-db, "WHY A FIFTH"). Every file here ran inside
+  # smoke-db's src/lib + src/server step, so this job carries that job's env,
+  # that step's placement variables and that job's Postgres time zone, all
+  # unchanged. smoke-db-shard-partition.test.ts compares the two. It does NOT
+  # carry smoke-db's repo-root scripts, Redis-gated or live-Stripe steps: none
+  # of them is a [a-d] file, and no Redis service or REDIS_URL either, because
+  # these files ran in the step that has none.
+  # -------------------------------------------------------------------------
+  smoke-db-ad:
+    name: Smoke — usecases [a-d] (Postgres container)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.content != 'true'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        # Same non-UTC, non-seasonal session TZ as smoke-db (#320). The
+        # date-boundary suite credits-period-boundary is one of this job's files,
+        # and on a UTC server it skips.
+        command: postgres -c timezone=Etc/GMT-14
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # CI logs errors only: pino defaults to info and floods the Actions log
+      # (schedule_court_filtered etc.), burying the failure.
+      LOG_LEVEL: error
+      # Superuser connection so the app can `set role app_user` (RLS). Local =>
+      # no SSL. Port 5432 keeps prepared statements on (not the Supabase pooler).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      # Session signing secret (jose HS256) — CI-only dummy.
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
+      NEXT_PUBLIC_SUPABASE_URL: ""
+      NEXT_TELEMETRY_DISABLED: "1"
+      # v4 AI smoke (scripts/smoke/suites/v4Ai.ts): point the server's
+      # Anthropic provider at the smoke-started model fixture on 4319 with a
+      # non-empty dummy key, so the fixture-gated AI checks actually run in CI
+      # instead of silently skipping. Mirrors e2e.yml. No real Anthropic call.
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      AI_FIXTURE_PORT: "4319"
+      ANTHROPIC_API_KEY: sk-ant-ci-smoke-fixture
+      # Stripe test-mode key (sk_test) so the smoke card-attach / billing paths
+      # exercise real test-mode Stripe instead of skipping (`pm: skipped …`).
+      # Withheld from fork PRs (they skip); present on the owner's branch PRs.
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      # Job-scoped so the server under test and scripts/smoke/ share ONE
+      # value — that is the whole requirement. It is an HMAC secret between two
+      # processes in this container, never a real Stripe endpoint secret, and
+      # the only reader is api/webhooks/stripe. Without it passRungLSuite (v17
+      # #294) cannot sign an event the server will accept and its paid Event
+      # Pass leg skips — which is the one leg proving a bought rung is the rung
+      # stored, credited and enforced. Mirrors e2e's whsec_e2e_payments.
+      STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
+      # This job's share of src/server/usecases ([a-d]): every test whose name
+      # does NOT start with a-d is excluded. Read by both the run and its
+      # reconciliation; see smoke-db's copy for why it is one variable rather
+      # than two literals, and the header above smoke-db for the partition.
+      #
+      # The letter split is by TEST FILE name at any depth under usecases/, so a
+      # nested `usecases/<area>/__tests__/` lands in exactly one job too. The
+      # `.test.*` anchor is load-bearing: vitest's exclude also prunes a matching
+      # DIRECTORY, and a bare `[a-h]*` swallowed `external-play/` whole, so its
+      # [i-z] tests ran in neither job (measured with `vitest list`, 2026-10-11).
+      # Without the anchor `[!a-d]*` would prune `external-play/` here — fine for
+      # this job — and `[!i-r]*` would prune it in smoke-db-outliers, whose `o`
+      # files live there, so they would run nowhere.
+      USECASES_EXCLUDE: "**/server/usecases/**/[!a-d]*.test.*"
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@seazn-club'
+      - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+
+      # Order kept as in smoke-db (database chain, then the image pull); see the
+      # note there for why the pull is not hoisted unmeasured.
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      # `db:apply` alone is NOT a usable schema here: without sync:sports the
+      # sports catalog is empty and the catalog-dependent suites fail
+      # environmentally rather than on their own merits.
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      # A REAL solver, for the reason smoke-db gives: without a reachable service
+      # build.ts folds the transport failure into a greedy board carrying
+      # `solver_unavailable`, useless to a test asserting `already_optimal`.
+      - name: Pull the pinned placement image
+        run: bash packages/scheduler/scripts/placement-image.sh pull
+
+      # Own container name, so teardown logs stay attributable when the DB jobs'
+      # output is read together. The secret must be non-empty and IDENTICAL on
+      # both sides, or the board silently folds to greedy.
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-ad -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
+            placement-service:ci
+
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              opened=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-ad || true
+            exit 1
+          fi
+
+      # Quoted `"$USECASES_EXCLUDE"` — unquoted, the shell glob-expands the
+      # pattern against the CWD before vitest sees it.
+      - name: usecases [a-d] integration tests (real Postgres)
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-usecases-ad.json --exclude "$USECASES_EXCLUDE" src/server/usecases
+        env:
+          # `localhost`, not 127.0.0.1 — consistent with the rest of this repo's
+          # local-service conventions.
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+
+      # Same #339 guard smoke-db carries, over this job's share, narrowed by the
+      # SAME glob the run above used.
+      - name: Vitest collection reconciliation
+        run: |
+          node --experimental-strip-types scripts/check-vitest-collection.ts \
+            --results apps/web/vitest-results-usecases-ad.json \
+            --exclude "$USECASES_EXCLUDE" -- src/server/usecases
+
+      # Per-file timing for the next boundary move; see smoke-db's copy.
+      - name: Upload vitest results (per-file timing)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-results-${{ github.job }}
+          path: |
+            apps/web/vitest-results-*.json
+            vitest-results-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Slowest test files (job summary)
+        if: always()
+        run: |
+          shopt -s nullglob
+          node --experimental-strip-types scripts/vitest-timing-summary.ts apps/web/vitest-results-*.json vitest-results-*.json
+
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-ad || true
+          docker rm -f placement-ad >/dev/null 2>&1 || true
 
   # -------------------------------------------------------------------------
   # usecases [e-h] + src/app. The partition, the letters and the env rule are
@@ -1349,7 +1557,7 @@ jobs:
       - name: Pull the pinned placement image
         run: bash packages/scheduler/scripts/placement-image.sh pull
 
-      # Own container name, so teardown logs stay attributable when the four DB
+      # Own container name, so teardown logs stay attributable when the DB
       # jobs' output is read together. The secret must be non-empty and
       # IDENTICAL on both sides, or the board silently folds to greedy.
       - name: Start the placement service
@@ -3046,6 +3254,7 @@ jobs:
       - security
       - container
       - smoke-db
+      - smoke-db-ad
       - smoke-db-app
       - smoke-db-outliers
       - smoke-db-usecases
@@ -3098,7 +3307,7 @@ jobs:
             # `smoke-db` would count as inside ["smoke-db-app", ...] and a skipped smoke-db would pass.
             allowed='["matrix-sample"]'
             if [ "$content" = true ]; then
-              allowed='["matrix-rows","matrix-sample","smoke-db-app","smoke-db-outliers","smoke-db-usecases"]'
+              allowed='["matrix-rows","matrix-sample","smoke-db-ad","smoke-db-app","smoke-db-outliers","smoke-db-usecases"]'
             fi
             skipped="$(printf '%s' "$NEEDS" | jq -r --argjson ok "$allowed" 'to_entries[] | select(.value.result == "skipped" and (.key | IN($ok[]) | not)) | .key')"
             if [ -n "$skipped" ]; then
