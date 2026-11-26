@@ -26,7 +26,7 @@ import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "../s
 import { routes } from "../src/lib/routes";
 import publicEn from "../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../src/components/public-site/match-centre/seazn-video-schedule";
-import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
+import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
 import { finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
 
 const SPONSOR_HOST = "sponsor-s10.example";
@@ -195,6 +195,11 @@ test("a stream click counts: the short code a viewer types redirects and records
 const SEAZN_SEED_MS = 60_000;
 const SEAZN_NAV_MS = 30_000;
 const ONE_RE_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS + 15_000;
+/** The expiry a stubbed live read carries when the test wants the refresh to HAPPEN: the island holds the address it plays while its
+ *  token has more than SEAZN_TOKEN_REFRESH_BEFORE_SECONDS left (seazn-held-address.ts), so the FIRST answer's token is already inside that
+ *  window (due at the next re-read) and every later one is a fresh token's, a full life away: one swap, then held. */
+const refreshDueThenFresh = (read: number): string =>
+  new Date(Date.now() + (read === 1 ? SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000 - 1_000 : SEAZN_LIVE_TOKEN_TTL_SECONDS * 1000)).toISOString();
 const VIDEO_ROUTE = /\/api\/v1\/public\/fixtures\/[^/]+\/video$/;
 const seaznPlayer = (page: Page) => page.locator('[data-testid="seazn-player"] video');
 /** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming — a live on its way up, or the replay of a
@@ -462,20 +467,21 @@ test.describe("the Seazn player over time (1280)", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
   test("warming turns live with NO reload, and a refreshed address keeps the same element and does not reload the player", async ({ page }) => {
-    // Seed + load, then two re-reads: warming -> live, and the live's refresh (its expiry is made to fall due at the floor below).
+    // Seed + load, then two re-reads: warming -> live, and the live's refresh (the first live answer's token is already refresh-due, so
+    // the next answer's address is handed over: `refreshDueThenFresh`).
     test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
     const m = await seedSeaznMatch(page, { name: `Seazn Over Time ${TAG}` });
     try {
       const stub = await stubFakePlaybackHost(page);
-      // The answer is the REAL route's; only its expiry (so the island's own schedule re-reads at the floor, as a token near its end
-      // would) and, from the second live read on, the token segment of its address are changed.
+      // The answer is the REAL route's; only its expiry (the first token is due for a refresh, as one near its end would be) and, from
+      // the second live read on, the token segment of its address are changed.
       let liveReads = 0;
       await page.route(VIDEO_ROUTE, async (route) => {
         const real = await route.fetch();
         const body = (await real.json()) as { ok: boolean; data: { live: { src: string; expiresAt: string } | null } };
         if (body.data?.live) {
           liveReads += 1;
-          body.data.live.expiresAt = new Date(Date.now() + (SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS + 1_000)).toISOString();
+          body.data.live.expiresAt = refreshDueThenFresh(liveReads);
           if (liveReads >= 2) body.data.live.src = body.data.live.src.replace(/\/fake\.[^/]+\//, `/refreshed-${liveReads}/`);
         }
         await route.fulfill({ response: real, json: body });
@@ -618,15 +624,15 @@ test.describe("the Seazn player over time (1280)", () => {
     try {
       await forceHlsJs(page);
       const stub = await stubFakePlaybackHost(page);
-      // The REAL route's answer; only its expiry (the island's own schedule re-reads at the floor) and, from the second read on, the token
-      // segment of its address are changed.
+      // The REAL route's answer; only its expiry (the first token is due for a refresh) and, from the second read on, the token segment
+      // of its address are changed.
       let liveReads = 0;
       await page.route(VIDEO_ROUTE, async (route) => {
         const real = await route.fetch();
         const body = (await real.json()) as { ok: boolean; data: { live: { src: string; expiresAt: string } | null } };
         if (body.data?.live) {
           liveReads += 1;
-          body.data.live.expiresAt = new Date(Date.now() + (SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS + 1_000)).toISOString();
+          body.data.live.expiresAt = refreshDueThenFresh(liveReads);
           if (liveReads >= 2) body.data.live.src = body.data.live.src.replace(/\/fake\.[^/]+\//, `/refreshed-${liveReads}/`);
         }
         await route.fulfill({ response: real, json: body });
@@ -650,6 +656,50 @@ test.describe("the Seazn player over time (1280)", () => {
         .poll(() => stub.requests.some((u) => /\/refreshed-\d+\/manifest\/seg0\.ts$/.test(u)), { message: "the segment went out under the refreshed token", timeout: 15_000 })
         .toBe(true);
       expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // The other half of the refresh rule (seazn-held-address.ts), through the real route's own `id`: a re-read that brings the SAME video
+  // under another token (the app's second machine mints its own) must not re-point a playing element while the held token is not due,
+  // and another video, a new Go live with no answer between, is a new player at once. Takes whichever path this Chromium has: the
+  // native one is where a re-point stops the picture.
+  test("a re-read of the same video under another token is NOT handed to the player while its token is not due; a different video's address is, on a new element", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 5 * ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Held ${TAG}`, live: true });
+    try {
+      await stubFakePlaybackHost(page);
+      let liveReads = 0;
+      await page.route(VIDEO_ROUTE, async (route) => {
+        const real = await route.fetch();
+        const body = (await real.json()) as { ok: boolean; data: { live: { src: string; expiresAt: string; id?: string } | null } };
+        if (body.data?.live) {
+          liveReads += 1;
+          // Every token is a full life from not due. From the second read on the token segment is another one; from the fourth the
+          // route names ANOTHER video (the id).
+          body.data.live.expiresAt = new Date(Date.now() + SEAZN_LIVE_TOKEN_TTL_SECONDS * 1000).toISOString();
+          if (liveReads >= 2) body.data.live.src = body.data.live.src.replace(/\/fake\.[^/]+\//, `/other-token-${liveReads}/`);
+          if (liveReads >= 4) body.data.live.id = "another-video";
+        }
+        await route.fulfill({ response: real, json: body });
+      });
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const video = seaznPlayer(page);
+      await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
+      const first = (await video.getAttribute("data-src"))!;
+      expect(first, "premise: the first address is the route's own").not.toMatch(/\/other-token-\d+\//);
+      const element = await video.elementHandle();
+      // Reads 2 and 3 carry another token for the same video. By the time the third has been served, a swap at the second has had a whole
+      // floor to show.
+      await expect.poll(() => liveReads, { message: "two re-reads happened", timeout: 2 * ONE_RE_READ_MS }).toBeGreaterThanOrEqual(3);
+      await page.waitForTimeout(1_000);
+      expect(await video.getAttribute("data-src"), "the held address stays: the same video, its token not due").toBe(first);
+      expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, element)), "the same <video> node").toBe(true);
+      // Read 4 names another video: its address is handed over, on a fresh element (the player's key carries the video).
+      await expect(video, "another video's address is taken at once").toHaveAttribute("data-src", /\/other-token-4\//, { timeout: ONE_RE_READ_MS });
+      expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, element)), "on a new <video> node").toBe(false);
     } finally {
       await finishSeaznMatch(m);
     }
