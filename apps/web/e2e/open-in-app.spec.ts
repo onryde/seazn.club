@@ -13,7 +13,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const KINDS = ["stream", "score", "day"] as const;
 // The brief's English, typed here; the other locales' titles are the dictionaries' own (unit test).
-const TITLE = "Seazn Club isn't on this phone yet";
+const TITLE = "Seazn Club Mobile App isn't on this phone yet";
 const PLAY = "https://play.google.com/store/apps/details?id=com.seazn.capture";
 /** Shaped like a device-link token, and held by no link. */
 const SECRET = `dl_${"a".repeat(43)}`;

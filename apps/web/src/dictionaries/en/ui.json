@@ -9275,7 +9275,7 @@
   "runsheet.round.loading": "Loading this round…",
   "runsheet.round.loadFailed": "This round’s matches didn’t load.",
   "runsheet.round.retry": "Try again",
-  "openApp.fallback.title": "Seazn Club isn't on this phone yet",
+  "openApp.fallback.title": "Seazn Club Mobile App isn't on this phone yet",
   "openApp.fallback.play": "Get it on Google Play",
   "openApp.fallback.retry": "Then come back and tap Open in app again",
   "openApp.fallback.scoreInBrowser": "Score in browser instead",

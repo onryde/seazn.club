@@ -9275,7 +9275,7 @@
   "runsheet.round.loading": "Chargement de ce tour…",
   "runsheet.round.loadFailed": "Les matchs de ce tour n’ont pas pu être chargés.",
   "runsheet.round.retry": "Réessayer",
-  "openApp.fallback.title": "Seazn Club n'est pas encore sur ce téléphone",
+  "openApp.fallback.title": "Seazn Club Mobile App n'est pas encore sur ce téléphone",
   "openApp.fallback.play": "Télécharger sur Google Play",
   "openApp.fallback.retry": "Revenez ensuite et touchez à nouveau Ouvrir dans l'application",
   "openApp.fallback.scoreInBrowser": "Saisir le score dans le navigateur",
