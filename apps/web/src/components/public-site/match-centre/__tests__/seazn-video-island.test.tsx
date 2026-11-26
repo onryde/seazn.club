@@ -818,6 +818,12 @@ describe("playerKey: what keeps a player across a token refresh and rebuilds it 
     expect(new Set(keys).size, "every identity is its own key (no part/epoch pair can collide)").toBe(keys.length);
     expect(keys.length, "anti-vacuity").toBeGreaterThanOrEqual(8);
   });
+  it("with the route's video id: another video under one slot is another key, the same video is the same key, and no id is the slot's own key", () => {
+    expect(playerKey("live", 0, "aaaa")).toBe(playerKey("live", 0, "aaaa"));
+    const keys = [playerKey("live", 0, "aaaa"), playerKey("live", 0, "bbbb"), playerKey("live", 1, "aaaa"), playerKey(1, 0, "aaaa"), playerKey("live", 0)];
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(playerKey("live", 0, ""), "an empty id names nothing").toBe(playerKey("live", 0));
+  });
 });
 
 // Task 25 carry 3, the seam from the frame to the loop: a frame holding a lapsed address asks for a fresh READ (`readSoon`), never a

@@ -260,7 +260,9 @@ describe("native HLS: a read that carries a different token for the same live vi
     await viewer.advance(FLOOR);
     step = { live: true, parts: [1] };
     await viewer.advance(FLOOR);
-    expect(viewer.players.map((p) => p.key), "live, then the part, then a live again: three players").toEqual(["live:0", "1:0", "live:0"]);
+    expect(viewer.players.map((p) => p.key), "live, then the part, then a live again: three players").toEqual([
+      `live:${reads[0]!.live!.id}:0`, `1:${reads[2]!.replay[0]!.id}:0`, `live:${reads[3]!.live!.id}:0`,
+    ]);
     expect(viewer.players[0]!.video.assigned, "the first live: one address across its two polls").toEqual([reads[0]!.live!.src]);
     expect(viewer.players[1]!.video.assigned).toEqual([reads[2]!.replay[0]!.src]);
     expect(viewer.players[2]!.video.assigned, "the second live is a NEW video: its own address, not the first live's held one").toEqual([reads[3]!.live!.src]);
@@ -278,10 +280,11 @@ describe("native HLS: a read that carries a different token for the same live vi
     await viewer.advance(FLOOR);
     expect(reads).toHaveLength(3);
     expect(new Set(reads.map((r) => r.live!.id)).size, "PREMISE: two inputs, two identities").toBe(2);
-    expect(viewer.players, "one player slot: its key does not change for a new live").toHaveLength(1);
-    expect(viewer.last.video.assigned, "the first live held across its second poll, then the new input's address at once").toEqual([reads[0]!.live!.src, reads[2]!.live!.src]);
+    expect(viewer.players.map((p) => p.key), "the same `live` slot, a different video: a fresh player").toEqual([`live:${reads[0]!.live!.id}:0`, `live:${reads[2]!.live!.id}:0`]);
+    expect(viewer.players[0]!.video.assigned, "the first live was held across its second poll").toEqual([reads[0]!.live!.src]);
+    expect(viewer.players[1]!.video.assigned, "the new input's own address, at once").toEqual([reads[2]!.live!.src]);
     await viewer.advance(FLOOR);
-    expect(viewer.last.video.assigned, "and the new input is held in its turn").toHaveLength(2);
+    expect(viewer.players[1]!.video.assigned, "and the new input is held in its turn").toHaveLength(1);
     island.unmount();
   });
 
@@ -314,7 +317,7 @@ describe("native HLS: a read that carries a different token for the same live vi
     viewer.giveUp();
     await viewer.advance(FLOOR);   // the read the player's ask brings forward (never sooner than a floor after the last)
     expect(reads, "the rebuild's read").toHaveLength(3);
-    expect(viewer.players.map((p) => p.key), "an epoch later: a fresh player").toEqual(["live:0", "live:1"]);
+    expect(viewer.players.map((p) => p.key), "an epoch later: a fresh player").toEqual([`live:${reads[0]!.live!.id}:0`, `live:${reads[0]!.live!.id}:1`]);
     expect(viewer.players[1]!.video.assigned).toEqual([reads[2]!.live!.src]);
     expect(viewer.players[1]!.video.assigned[0]).not.toBe(heldAddress);
     island.unmount();
@@ -360,6 +363,42 @@ describe("hls.js path: unchanged (one load, the token swapped per request, only 
     expect(hls.instances[0]!.loaded, "a refresh is never a second load").toHaveLength(1);
     expect(tokenOf(requestTokenFor()), "after the refresh point, requests carry the newer token").toBe(tokenOf(refreshRead.live!.src));
     expect(tokenOf(refreshRead.live!.src)).not.toBe(tokenOf(reads[0]!.live!.src));
+    island.unmount();
+  });
+
+  it("TWO IDS, NO GAP: a new live is a FRESH player (a new controller and hls.js instance, one load of the new address), never a token swap onto the old video's manifest", async () => {
+    let uid = "in-1";
+    const { reads } = routeStub({ cache: "per-read", next: () => ({ live: true, uid }) });
+    const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels });
+    // The browser around the island, for a browser that does not play HLS itself: one controller per player key.
+    let key: string | null = null;
+    let playback: Playback | null = null;
+    let src: string | null = null;
+    const sync = () => {
+      const p = playerOf(island.tree()[0]!);
+      if (p === null) return;
+      if (key !== p.key) {
+        playback?.dispose();
+        playback = createPlayback(new FakeHlsVideo() as unknown as HTMLVideoElement, { onFatal: () => {} });
+        key = p.key;
+        src = null;
+      }
+      if (src !== p.src) playback!.setSource(p.src);
+      src = p.src;
+    };
+    const advance = async (ms: number) => {
+      await advanceSyncing(ms, sync);
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    await advance(0);
+    await advance(FLOOR);
+    expect(hls.instances, "one video so far: one instance, one load").toHaveLength(1);
+    uid = "in-2";
+    await advance(FLOOR);
+    expect(reads).toHaveLength(3);
+    expect(hls.instances, "the new live is a new instance").toHaveLength(2);
+    expect(hls.instances[0]!.loaded, "the old instance loaded its own manifest once and was not pointed at the new video").toEqual([reads[0]!.live!.src]);
+    expect(hls.instances[1]!.loaded, "the new instance loads the new address, once").toEqual([reads[2]!.live!.src]);
     island.unmount();
   });
 });
