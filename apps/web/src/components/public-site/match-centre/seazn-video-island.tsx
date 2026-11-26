@@ -41,6 +41,7 @@ import { api } from "@/lib/client";
 import { interpolate } from "@/lib/i18n-runtime";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SEAZN_LIVE_DELAY_SECONDS } from "@/server/relay/config";
+import { holdAddresses } from "./seazn-held-address";
 import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
 import { SeaznReplayFrame } from "./seazn-replay-frame";
 import { holdWait, parseHold, showsPlayer, waitAfterAnswer, type Wait } from "./seazn-video-hold";
@@ -309,6 +310,8 @@ export function SeaznVideoIsland({
   liveExpected = false,
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
+  // The answer the players were last handed, for `holdAddresses`: the next answer is compared with this one, never with a raw read.
+  const shownRef = useRef<PublicFixtureVideo | null>(initial ?? null);
   // The wait (seazn-video-hold.ts `Wait`), from the page's plan at first and from EVERY answer after (`waitAfterAnswer`; Task 33g: an
   // open page follows the latest session through a Stop, a cancel or a missed live, not only the render it was drawn from).
   //   - `liveNext` (Task 33c, 33f): whether the held box keeps the delay line's row and its line says the live video is coming, or the replay.
@@ -332,7 +335,12 @@ export function SeaznVideoIsland({
     const poll = startVideoPoll({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
       onVideo: (next, { rebuild }) => {
-        setVideo(next);
+        // A video already on screen keeps its address while its token is not refresh-due, whichever machine signed this answer
+        // (seazn-held-address.ts: a native player is re-pointed, and stops, by every changed address). A rebuild takes the fresh
+        // answer whole: the player it replaces gave up on the address it held.
+        const shown = rebuild ? next : holdAddresses(shownRef.current, next, Date.now());
+        shownRef.current = shown;
+        setVideo(shown);
         setWait((w) => waitAfterAnswer(w, next, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
