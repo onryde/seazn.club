@@ -691,3 +691,93 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
     expect(steps).toBeGreaterThan(runs);
   });
 });
+
+// Owner ruling 2026-11-26: a playback URL is never logged or stored. The phone's scrub list classes `playbackUrl` as a
+// public URL, so the screen reads it as ok; the line is KEPT and only the key is dropped from what is stored. The
+// expected stored text is built here from the input minus the one key — never from the module.
+describe("screenRecordLine — a playbackUrl is never stored (owner ruling 2026-11-26): the line is kept, minus the key", () => {
+  const SID = "5f2c8a1e-3b4d-4e6f-8a9b-0c1d2e3f4a5b";
+  const PLAYBACK = "https://customer-k7q2.cloudflarestream.com/0f1e2d3c4b5a69788796a5b4c3d2e1f0/manifest/video.m3u8";
+  const armed = (): Json => ({ at: "2026-10-11T21:19:03.123Z", kind: "armed", sid: SID, playbackUrl: PLAYBACK, stalledMs: 12000, mode: "srt" });
+  const without = (o: Json, key: string): Json => Object.fromEntries(Object.entries(o).filter(([k]) => k !== key));
+  const stored = (v: ScreenedLine): string => {
+    if (!v.ok) throw new Error("premise: the line must screen ok");
+    return v.text;
+  };
+
+  it("an armed line with a playbackUrl is ok, and what is stored lacks the key while every other field is unchanged (same keys, same order, same values)", () => {
+    const input = armed();
+    const v = screenRecordLine(JSON.stringify(input), OTHER_TOK);
+    expect(v.ok, "premise: ok, so the line is kept").toBe(true);
+    const text = stored(v);
+    expect(text.includes("playbackUrl"), "the key is gone from the stored text").toBe(false);
+    expect(text.includes("m3u8"), "so is its value").toBe(false);
+    expect(text).toBe(JSON.stringify(without(input, "playbackUrl")));
+    expect(Object.keys(JSON.parse(text) as Json)).toEqual(["at", "kind", "sid", "stalledMs", "mode"]);
+    // The verdict's own line object (read for attribution) does not carry it either: nothing downstream can store it.
+    expect(v.ok && "playbackUrl" in v.line).toBe(false);
+    expect(v.ok && v.line.sid).toBe(SID);
+  });
+
+  it("a line without a playbackUrl is stored byte for byte as the object was serialised (the strip touches nothing else) — counted over every ok line fixture that has none", () => {
+    let checked = 0;
+    for (const name of lineNames.filter((n) => /^line-valid/.test(n))) {
+      const value = fixture(name);
+      if ("playbackUrl" in value) continue;
+      const v = screenRecordLine(JSON.stringify(value), OTHER_TOK);
+      expect(stored(v), name).toBe(JSON.stringify(value));
+      checked++;
+    }
+    expect(checked, "valid fixtures without the key").toBeGreaterThan(20);
+    // Hand-built, and the key ORDER is the sender's: playbackUrl absent, `url` and `overlayUrl` (other URL keys) untouched.
+    const other = { at: "2026-10-11T21:19:03.123Z", kind: "armed", url: "https://example.test/a", overlayUrl: "https://example.test/o", ms: 3 };
+    expect(stored(screenRecordLine(JSON.stringify(other), OTHER_TOK))).toBe(JSON.stringify(other));
+  });
+
+  it("every valid contract fixture that carries the key: ok before and after, stored without it — counted (zero is a failure)", () => {
+    let checked = 0;
+    for (const name of lineNames.filter((n) => /^line-valid/.test(n))) {
+      const value = fixture(name);
+      if (!("playbackUrl" in value)) continue;
+      const v = screenRecordLine(JSON.stringify(value), OTHER_TOK);
+      expect(v.ok, `${name}: still kept`).toBe(true);
+      expect(stored(v), name).toBe(JSON.stringify(without(value, "playbackUrl")));
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the strip changes no verdict: a line whose playbackUrl is the ONLY off-class value is still unreadable (query), a masked playbackUrl is ok and stripped, a secret elsewhere still drops the line", () => {
+    const withQuery = { ...armed(), playbackUrl: `${PLAYBACK}?token=abc` };
+    expect(screenRecordLine(JSON.stringify(withQuery), OTHER_TOK)).toEqual({ ok: false, why: "shape" });
+    const masked = { ...armed(), playbackUrl: "***" };
+    expect(stored(screenRecordLine(JSON.stringify(masked), OTHER_TOK))).toBe(JSON.stringify(without(masked, "playbackUrl")));
+    const secret = { ...armed(), message: "Bearer abcdefghijklmnopqrstuvwxyz" };
+    const v = screenRecordLine(JSON.stringify(secret), OTHER_TOK);
+    expect(v.ok === false && v.why === "secret" ? v.rule : null).toBe("S5");
+  });
+
+  it("nesting is not possible: a playbackUrl inside an object value is unreadable (the allow-list takes scalars and strings only), so the line is dropped whole and nothing is stored", () => {
+    let checked = 0;
+    for (const nested of [{ extra: { playbackUrl: PLAYBACK } }, { message: { playbackUrl: PLAYBACK } }, { problems: [{ playbackUrl: PLAYBACK }] }]) {
+      const line = { at: "2026-10-11T21:19:03.123Z", kind: "armed", ...nested };
+      expect(screenRecordLine(JSON.stringify(line), OTHER_TOK)).toEqual({ ok: false, why: "shape" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the sequence: two armed lines screened one after the other each lose their own key, a second screening of the stored text is a fixed point, and a mixed set keeps its count", () => {
+    const a = armed();
+    const b = { ...armed(), sid: null, stalledMs: 5 };
+    const plain = { at: "2026-10-11T21:19:03.123Z", kind: "thermal", status: 3 };
+    const texts = [a, plain, b].map((l) => JSON.stringify(l));
+    const verdicts = texts.map((t) => screenRecordLine(t, OTHER_TOK));
+    expect(verdicts.filter((v) => v.ok)).toHaveLength(3);
+    const out = verdicts.map(stored);
+    expect(out).toEqual([JSON.stringify(without(a, "playbackUrl")), JSON.stringify(plain), JSON.stringify(without(b, "playbackUrl"))]);
+    // Re-ingesting what was stored (a second call) changes nothing.
+    expect(out.map((t) => stored(screenRecordLine(t, OTHER_TOK)))).toEqual(out);
+    expect(out.filter((t) => t.includes("playbackUrl"))).toHaveLength(0);
+  });
+});

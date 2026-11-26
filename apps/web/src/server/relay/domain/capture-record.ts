@@ -102,6 +102,20 @@ export function hasDuplicateKey(text: string): boolean {
   return false;
 }
 
+/**
+ * Owner ruling 2026-11-26: a playback URL is never logged or stored. The allow-list admits `playbackUrl` (the phone's
+ * scrub list classes it as a public URL), so the screen reads it as ok and the line is KEPT — only these keys are
+ * dropped from what is stored, and from the verdict's `line`. The record's lines are flat (every value a string or a
+ * scalar), so a top-level key is the only place one can be; a nested one is refused whole by the allow-list. The host
+ * alone is NOT kept in its place: `playbackHost` is not a key of capture's allow-list, and adding one is a contract
+ * bump. The verdict is decided BEFORE the strip, so no count (kept, dropped, invalid) moves because of it.
+ */
+export const RECORD_NEVER_STORED_KEYS: readonly string[] = ["playbackUrl"];
+function withoutNeverStored<T extends object>(line: T): T {
+  if (!RECORD_NEVER_STORED_KEYS.some((k) => Object.hasOwn(line, k))) return line;
+  return Object.fromEntries(Object.entries(line).filter(([k]) => !RECORD_NEVER_STORED_KEYS.includes(k))) as T;
+}
+
 export function screenRecordLine(text: string | null, bearer: string): ScreenedLine {
   if (text === null) return { ok: false, why: "shape" };
   let raw: unknown;
@@ -121,7 +135,7 @@ export function screenRecordLine(text: string | null, bearer: string): ScreenedL
     const rules = secretRulesOf(value, bearer);
     if (rules.length > 0) return { ok: false, why: "secret", rule: rules[0]!, line: parsed.data };
   }
-  return { ok: true, line: parsed.data, text: JSON.stringify(raw) };
+  return { ok: true, line: withoutNeverStored(parsed.data), text: JSON.stringify(withoutNeverStored(raw as Record<string, unknown>)) };
 }
 
 /** What attribution reads of a line: its kind, its sid and a pair line's tag. */
