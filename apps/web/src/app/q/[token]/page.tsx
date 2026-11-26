@@ -17,6 +17,11 @@
 // as `?e=<code>` (D3), printed as the viewer's `quickMatch.flash.*` line. The dead screen ignores `?e=`: a crafted one
 // must not give a dead link a reason (D16).
 //
+// "Score in app" (owner 2026-11-26): the HERO's slot is `QuickMatchHeroScore`, the same form plus, on an Android phone
+// with the release flag on, a second button that asks the Score route for the match's link after the guest's tap. It takes
+// strings too (its action, the fixture id, two lines); nothing server-rendered holds a scoring link. It reads `openApp.*`
+// through `useMsg`, so it has its own `DictProvider`. A list row keeps the plain form.
+//
 // Task 7: the Share slot (the link, Copy and the share sheet on first paint; the QR behind "Show QR"). `QuickMatchShare` takes the home's PATH (`routes.quickMatch(token)`), never an absolute URL built
 // here: the island puts it on the page's own origin, so no forwarded host is trusted (B7). Its two shared children
 // (`ShareButton`, `SeaznQrImage`) read their own words through `useMsg`, so the island sits in a `DictProvider` holding
@@ -60,6 +65,7 @@ import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId, type RowMenuItem } from "@/components/quick-match/match-list";
 import { QuickMatchRefreshOnRestore } from "@/components/quick-match/refresh-on-restore";
 import { QuickMatchSaveForm } from "@/components/quick-match/save-form";
+import { QuickMatchHeroScore } from "@/components/quick-match/hero-score";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
 import { QuickMatchShare } from "@/components/quick-match/share";
 import { getCurrentUser } from "@/lib/auth";
@@ -77,6 +83,7 @@ export const dynamic = "force-dynamic";
 
 /** The words the Share island's shared children read for themselves: ShareButton's (`share.*`), the QR's (`qr.*`). */
 const SHARE_DICT_PREFIXES = ["share.", "qr."] as const;
+const HERO_DICT_PREFIXES = ["openApp."] as const;
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await resolveLocale();
@@ -127,16 +134,24 @@ export default async function QuickMatchHomePage({
   };
   const slots: QuickMatchSlots = {
     // Offered by the view on a live or ready match (C11, C18), the hero's and each such row's.
-    score: (fixture, place) => (
-      <QuickMatchScoreForm
-        action={routes.quickMatchScore(token, fixture.id)}
-        place={place}
-        label={copy.t(
-          place === "row" ? "quickMatch.home.scoreShort" : fixture.live ? "quickMatch.home.continue" : "quickMatch.home.score",
-        )}
-        describedBy={place === "hero" ? undefined : matchSidesId(fixture.id)}
-      />
-    ),
+    score: (fixture, place) =>
+      place === "hero" ? (
+        <DictProvider dict={pickDictPrefixes(ui, HERO_DICT_PREFIXES)} locale={locale}>
+          <QuickMatchHeroScore
+            action={routes.quickMatchScore(token, fixture.id)}
+            fixtureId={fixture.id}
+            label={copy.t(fixture.live ? "quickMatch.home.continue" : "quickMatch.home.score")}
+            failed={copy.t("quickMatch.flash.generic")}
+          />
+        </DictProvider>
+      ) : (
+        <QuickMatchScoreForm
+          action={routes.quickMatchScore(token, fixture.id)}
+          place={place}
+          label={copy.t("quickMatch.home.scoreShort")}
+          describedBy={matchSidesId(fixture.id)}
+        />
+      ),
     // One ⋯ menu per row (plan 4 Task 4): Score and Not played on a match still to play, Edit result on a settled one the pad
     // will still reopen (A-M6: the same Score route), Put back on a Not played one until the league finishes.
     rowMenu: (row) => {

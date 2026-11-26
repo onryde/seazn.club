@@ -31,6 +31,10 @@ export const QUICK_MATCH_NON_BLANK_PATTERN = ".*\\S.*";
 /** The account page's Quick matches section id (plan 3 Task 6): the saved home's "In your account" link lands on
  *  `/me#<this>` (controller ruling on T6), and the /me list carries it. */
 export const QUICK_MATCH_ACCOUNT_SECTION_ID = "quick-matches";
+/** The request header, value "1", the home's "Score in app" fetch puts on the Score post (owner 2026-11-26) to be answered
+ *  as JSON instead of the form's 303. A form cannot set it, and another origin cannot send it without a preflight that the
+ *  route never grants. The route and the home's island both read this name. */
+export const QUICK_MATCH_APP_HEADER = "x-seazn-score-in-app";
 /** The email input's `pattern`: zod 4's own `.email()` regex (what `CreateQuickMatch` checks), respelled to compile under the
  *  `v` flag HTML patterns use (zod's bare `-` in a class is a syntax error there), and anchored by the browser. The
  *  browser's own `type="email"` check passes `ravi@gmail`; this stops it, and the other addresses the schema refuses, before

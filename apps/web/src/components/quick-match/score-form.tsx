@@ -24,15 +24,25 @@ export interface QuickMatchScoreFormProps {
   place: "hero" | "row";
   /** A row's button names its match through the row's sides (`matchSidesId`): many rows say "Score". */
   describedBy?: string;
+  /** "outline" steps the same button back while "Open in app" is the main action (`QuickMatchHeroScore`). */
+  tone?: "lime" | "outline";
 }
 
 const FOCUS = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream";
 const BUTTON = {
-  hero: "min-h-12 w-full rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-base font-bold text-night",
-  row: "min-h-11 rounded-lg bg-[color:var(--mk-lime)] px-4 py-2 text-sm font-bold text-night",
+  hero: "min-h-12 w-full rounded-xl px-5 py-2.5 text-base font-bold",
+  row: "min-h-11 rounded-lg px-4 py-2 text-sm font-bold",
 } as const;
+const TONE = {
+  lime: "bg-[color:var(--mk-lime)] text-night",
+  outline: "border border-[#4a3885] text-cream transition-colors hover:border-[#b7aede] motion-reduce:transition-none",
+} as const;
+const buttonClass = (place: keyof typeof BUTTON, tone: keyof typeof TONE) =>
+  `app-display inline-flex max-w-full items-center justify-center text-center leading-tight [overflow-wrap:anywhere] aria-disabled:opacity-70 ${BUTTON[place]} ${TONE[tone]} ${FOCUS}`;
+/** The hero's full-width button in one tone: Score, and "Score in app" under it. */
+export const quickMatchHeroButton = (tone: keyof typeof TONE) => buttonClass("hero", tone);
 
-export function QuickMatchScoreForm({ action, label, place, describedBy }: QuickMatchScoreFormProps) {
+export function QuickMatchScoreForm({ action, label, place, describedBy, tone = "lime" }: QuickMatchScoreFormProps) {
   const locked = useRef(false);
   const [busy, setBusy] = useState(false);
 
@@ -63,7 +73,7 @@ export function QuickMatchScoreForm({ action, label, place, describedBy }: Quick
         data-testid="qm-score"
         aria-disabled={busy || undefined}
         aria-describedby={describedBy}
-        className={`app-display inline-flex max-w-full items-center justify-center text-center leading-tight [overflow-wrap:anywhere] aria-disabled:opacity-70 ${BUTTON[place]} ${FOCUS}`}
+        className={buttonClass(place, tone)}
       >
         {label}
       </button>

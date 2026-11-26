@@ -122,4 +122,20 @@ describe("QuickMatchScoreForm", () => {
     }
     expect(checked).toBe(2);
   });
+
+  // "Score in app" (owner 2026-11-26): once the app link is on screen, the hero's browser Score steps back to an outline.
+  // It is the same form posting the same way.
+  it("tone=outline is the same form and button without the lime fill; the default and tone=lime are lime", () => {
+    const outline = mount({ tone: "outline", label: "Score in browser" });
+    const button = buttonOf(outline);
+    expect(classOf(button)).not.toContain("bg-[color:var(--mk-lime)]");
+    expect(classOf(button)).toEqual(expect.arrayContaining(["min-h-12", "w-full", "border", "text-cream"]));
+    expect(classOf(button)).not.toContain("text-night");
+    expect(propsOf(button)["data-testid"]).toBe("qm-score");
+    expect(propsOf(formOf(outline)).action).toBe(ACTION);
+    expect(classOf(formOf(outline))).toContain("ph-no-capture");
+    expect(submit(outline).cancelled).toBe(false);
+    expect(submit(outline).cancelled, "and it locks the same way").toBe(true);
+    expect(classOf(buttonOf(mount({ tone: "lime" })))).toContain("bg-[color:var(--mk-lime)]");
+  });
 });

@@ -9285,6 +9285,8 @@
   "openApp.button": "Ouvrir dans l'application",
   "openApp.scoreInBrowser": "Saisir le score dans le navigateur",
   "openApp.orScan": "ou scannez avec un autre téléphone",
+  "openApp.scoreInApp": "Saisir le score dans l'application",
+  "openApp.tapAgain": "Encore un appui pour ouvrir l'application.",
   "openApp.stream.thenGoLive": "Ensuite, dans l'application, maintenez pour passer en direct.",
   "openApp.stream.needDestination": "Choisissez d'abord une destination ici.",
   "openApp.stream.needCredit": "Il vous faut d'abord un crédit Seazn.",

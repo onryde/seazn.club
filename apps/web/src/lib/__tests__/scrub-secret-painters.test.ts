@@ -497,6 +497,10 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   // The home's Score control: its form's action is `/q/<home token>/score/<fixture>` (quick match plan 2 Task 6). The page
   // builds it and hands it over as a prop, painting nothing itself, so the scan finds the painter here, not on the page.
   "components/quick-match/score-form.tsx": { verdict: true },
+  // "Score in app" (owner 2026-11-26): the hero's island takes the same action from the page and hands it to the Score
+  // form; it may hand it nowhere else. The app link it paints, `/app/score#dl_…`, is outside this scan's vocabulary (no
+  // route builds it): components/quick-match/__tests__/hero-score.test.tsx holds it to the one ph-no-capture block.
+  "components/quick-match/hero-score.tsx": { verdict: true, handoff: "components/quick-match/score-form.tsx" },
   // The recent strip: each row links to its home, `/q/<home token>` (quick match plan 2 Task 9).
   "components/quick-match/recent-strip.tsx": { verdict: true },
   // The setup page's Continue card (owner 2026-11-12): its one link is the newest unfinished match's home, `/q/<home token>`.
@@ -532,6 +536,7 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict:
       "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action, the row menu's Score, Edit result, Not played and Put back actions, the cut prompt's Pick, Toss and Back, the Refresh link's href) and paints them nowhere itself",
     handoff: [
+      "components/quick-match/hero-score.tsx",
       "components/quick-match/score-form.tsx",
       "components/quick-match/share.tsx",
       "components/quick-match/add-match.tsx",
@@ -568,6 +573,7 @@ const QUICK_MATCH_PAINTERS = [
   "app/score/[token]/page.tsx",
   "components/v2/quick-match-back-link.tsx",
   "components/quick-match/score-form.tsx",
+  "components/quick-match/hero-score.tsx",
   "components/quick-match/recent-strip.tsx",
   // Owner 2026-11-12: the setup page's Continue card, a link to the newest unfinished match's home.
   "components/quick-match/continue-card.tsx",
@@ -668,10 +674,19 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   });
 
   it("the home's Score form (Task 6): the page hands its action to QuickMatchScoreForm, whose host <form> carries the class", () => {
-    // The hop the scan follows: the home page builds `routes.quickMatchScore(token, id)` straight into the prop.
+    // The hops the scan follows: the home page builds `routes.quickMatchScore(token, id)` straight into the prop, a row's
+    // to the form and the hero's to its island, which hands it on to the same form.
     expect(known.props).toEqual(
-      expect.arrayContaining([{ component: "QuickMatchScoreForm", prop: "action", from: "app/q/[token]/page.tsx" }]),
+      expect.arrayContaining([
+        { component: "QuickMatchScoreForm", prop: "action", from: "app/q/[token]/page.tsx" },
+        { component: "QuickMatchHeroScore", prop: "action", from: "app/q/[token]/page.tsx" },
+        { component: "QuickMatchScoreForm", prop: "action", from: "components/quick-match/hero-score.tsx" },
+      ]),
     );
+    const hero = painters.get("components/quick-match/hero-score.tsx") ?? [];
+    expect(hero.map((site) => [site.tag, site.how, site.component])).toEqual([["QuickMatchScoreForm", "attribute action", true]]);
+    const heroOnPage = (painters.get("app/q/[token]/page.tsx") ?? []).filter((site) => site.tag === "QuickMatchHeroScore");
+    expect(heroOnPage.map((site) => [site.how, site.component])).toEqual([["attribute action", true]]);
     const form = painters.get("components/quick-match/score-form.tsx") ?? [];
     expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
     // ... and the page's own site, now that an inline credential URL is one: a component, so it is checked in that file.

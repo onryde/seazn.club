@@ -8,8 +8,9 @@
 // element: PostHog autocapture ignores a click inside it, and its session replay records nothing of it. The anchor is
 // a plain `<a>` with the link already built — no `next/link` (a client-side route change never reaches Android), no
 // `target` (Chrome hands a same-tab navigation from the person's own tap to the app), no fetch-then-redirect — and
-// `rel="noreferrer"`.
-import { useSyncExternalStore, type ReactNode } from "react";
+// `rel="noreferrer"`. A host that has to fetch the link first (the quick match home, spec §5.6) renders the anchor when
+// the answer is back and waits for the person's own second tap; nothing navigates for them.
+import { useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { isAndroidUa } from "@/lib/android-ua";
 import { openInAppEnabled } from "@/lib/open-in-app";
@@ -21,9 +22,16 @@ const notOnServer = () => false;
 
 const FOCUS_RING = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--mk-cream)]";
 
-export function OpenInAppRow({ href, className, children }: { href: string | null; className?: string; children?: ReactNode }) {
+/** The release flag on, in an Android browser. False on the server and the first client render. The `md` half of the gate
+ *  is the block's own `md:hidden`; a host that draws a control of its own asks `useMdUp` too. */
+export function useOpenInAppGate(): boolean {
   const android = useSyncExternalStore(subscribeNever, readAndroid, notOnServer);
-  if (!openInAppEnabled() || !android || href === null) return null;
+  return openInAppEnabled() && android;
+}
+
+export function OpenInAppRow({ href, className, children }: { href: string | null; className?: string; children?: ReactNode }) {
+  const offered = useOpenInAppGate();
+  if (!offered || href === null) return null;
   return (
     <OpenInAppBlock href={href} className={className}>
       {children}
@@ -31,9 +39,25 @@ export function OpenInAppRow({ href, className, children }: { href: string | nul
   );
 }
 
-/** The block's markup, without the who-sees-it question — exported so a node test can read its classes and attributes.
- *  Its one caller is `OpenInAppRow`. */
-export function OpenInAppBlock({ href, className, children }: { href: string; className?: string; children?: ReactNode }) {
+/** The block's markup, without the who-sees-it question: a caller asks `useOpenInAppGate` first, as `OpenInAppRow` does
+ *  (its other caller is the quick match home's `QuickMatchHeroScore`). */
+export function OpenInAppBlock({
+  href,
+  className,
+  children,
+  orScan = true,
+  describedBy,
+  anchorRef,
+}: {
+  href: string;
+  className?: string;
+  children?: ReactNode;
+  /** The "or scan with another phone" line: off where there is no code beside the block. */
+  orScan?: boolean;
+  /** The id of a line inside the block that says something about the anchor. */
+  describedBy?: string;
+  anchorRef?: Ref<HTMLAnchorElement>;
+}) {
   const msg = useMsg();
   return (
     <div data-testid="open-in-app-block" className={`ph-no-capture md:hidden min-w-0 space-y-2${className ? ` ${className}` : ""}`}>
@@ -45,9 +69,11 @@ export function OpenInAppBlock({ href, className, children }: { href: string; cl
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/seazn-logo-night-tight.png" alt="Seazn Club" width={78} height={18} className="mx-auto h-[18px] w-auto" />
           <a
+            ref={anchorRef}
             data-testid="open-in-app"
             href={href}
             rel="noreferrer"
+            aria-describedby={describedBy}
             // `!`: `.mk-display` is unlayered and sets its own tracking, which would otherwise win.
             className={`mk-display flex min-h-11 w-full items-center justify-center rounded-lg bg-[var(--mk-lime)] px-3 text-center text-[15px] font-bold tracking-[0.06em]! text-[var(--mk-night)] ${FOCUS_RING}`}
           >
@@ -56,7 +82,7 @@ export function OpenInAppBlock({ href, className, children }: { href: string; cl
           {children}
         </div>
       </div>
-      <p className="text-center text-xs text-slate-600">{msg("openApp.orScan")}</p>
+      {orScan ? <p className="text-center text-xs text-slate-600">{msg("openApp.orScan")}</p> : null}
     </div>
   );
 }
@@ -79,15 +105,16 @@ export function ScoreInBrowserLink({ href }: { href: string }) {
   );
 }
 
-type HintKey = StreamHintKey | "openApp.stream.checkFirst";
+type HintKey = StreamHintKey | "openApp.stream.checkFirst" | "openApp.tapAgain";
 
 /** The two lines that name something missing are amber; the rest are the box's own soft violet. */
 const MISSING: ReadonlySet<HintKey> = new Set<HintKey>(["openApp.stream.needDestination", "openApp.stream.needCredit"]);
 
-export function OpenInAppHint({ hint }: { hint: HintKey }) {
+export function OpenInAppHint({ hint, id }: { hint: HintKey; id?: string }) {
   const msg = useMsg();
   return (
     <p
+      id={id}
       data-testid="open-in-app-hint"
       data-hint={hint}
       className={`text-center text-[11.5px] leading-snug ${MISSING.has(hint) ? "text-[#ffc66b]" : "text-[#c9bfee]"}`}

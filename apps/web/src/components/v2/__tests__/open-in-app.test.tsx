@@ -88,6 +88,29 @@ describe("the block's markup", () => {
   });
 });
 
+describe("the block's quick match shape (spec §5.6: the phone that scores, with nothing beside it to scan)", () => {
+  const strip = (html: string) => html.replace(/^<link [^>]*\/>/, "");
+
+  it("orScan={false} leaves the or-scan line out and keeps the one ph-no-capture root; the default keeps it", () => {
+    const without = strip(renderToStaticMarkup(<OpenInAppBlock href={HREF} orScan={false} />));
+    expect(without).not.toContain(EN["openApp.orScan"]);
+    expect(without).toContain(`href="${HREF}"`);
+    expect(without.match(/^<div\b[^>]*class="([^"]*)"/)?.[1]?.split(/\s+/)).toContain("ph-no-capture");
+    expect(strip(renderToStaticMarkup(<OpenInAppBlock href={HREF} />))).toContain(EN["openApp.orScan"]);
+  });
+
+  it("describedBy ties a line to the anchor; without it the anchor says nothing extra", () => {
+    const tied = renderToStaticMarkup(
+      <OpenInAppBlock href={HREF} describedBy="hint-1">
+        <OpenInAppHint hint="openApp.tapAgain" id="hint-1" />
+      </OpenInAppBlock>,
+    );
+    expect(tagOf(tied, "open-in-app")).toContain('aria-describedby="hint-1"');
+    expect(tagOf(tied, "open-in-app-hint")).toContain('id="hint-1"');
+    expect(tagOf(renderToStaticMarkup(<OpenInAppBlock href={HREF} />), "open-in-app")).not.toContain("aria-describedby");
+  });
+});
+
 describe("OpenInAppHint", () => {
   it("names itself and paints only the two missing-thing lines amber — counted", () => {
     const keys = {
@@ -95,6 +118,7 @@ describe("OpenInAppHint", () => {
       "openApp.stream.needDestination": true,
       "openApp.stream.needCredit": true,
       "openApp.stream.checkFirst": false,
+      "openApp.tapAgain": false,
     } as const;
     let checked = 0;
     for (const [key, amber] of Object.entries(keys) as [keyof typeof keys, boolean][]) {
@@ -105,7 +129,7 @@ describe("OpenInAppHint", () => {
       expect(html, key).toContain(`>${EN[key]!.replace(/'/g, "&#x27;")}</p>`);
       checked += 1;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 });
 
@@ -118,6 +142,8 @@ describe("the copy", () => {
     "openApp.stream.needDestination": "Pick a destination here first.",
     "openApp.stream.needCredit": "You need a Seazn credit first.",
     "openApp.stream.checkFirst": "Check a destination is picked and you have a credit.",
+    "openApp.scoreInApp": "Score in app",
+    "openApp.tapAgain": "One more tap to open the app.",
   };
 
   it("English is the approved wording", () => {
@@ -134,6 +160,6 @@ describe("the copy", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(21);
+    expect(checked).toBe(27);
   });
 });

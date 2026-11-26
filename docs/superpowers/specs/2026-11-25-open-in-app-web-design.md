@@ -189,9 +189,11 @@ live, with no new server call; a surface that does not hold that state (check th
 "Check a destination is picked and you have a credit." The end-to-end walk after the spike covers this on one
 phone.
 
-No button on printed scorer sheets (paper) or the quick-match score redirect (nothing is shown).
+No button on printed scorer sheets (paper). The quick-match score redirect shows nothing, so it gets no button; the
+quick match home got one later, by its own flow (§5.6, owner 2026-11-26).
 
-- A button exists only where the page already holds the code. No new server call, no minting on tap.
+- A button exists only where the page already holds the code. No new server call, no minting on tap. §5.6 is the one
+  exception.
 - Scoring: the phone spec calls **Score in browser** existing. It does not exist: the panel has the QR, **Copy
   link** and the URL as text. It is a **new** link **(web call)**: shown with **Open in app** under the same
   Android and below-`md` rule, `href` the same `/score/{token}` the panel already builds, opening in a new tab so
@@ -215,6 +217,39 @@ The anchor's `href` holds a live credential on a page that does run analytics.
   covers it too.
 - Proof is the real outgoing PostHog event and replay payload after a tap on each button, not a unit test of the
   regex alone.
+
+### 5.6 Quick match home: "Score in app" (owner, 2026-11-26)
+
+This replaces the exclusion in §5.4 for the quick match. The owner asked for the button on `/q/<token>` and picked,
+from mockups, **two taps inside the hero card**. The page holds no device link until somebody scores, and nothing may
+put one in its HTML, so this is the one place where a tap fetches the code.
+
+- **Where:** the hero only (the next match). List rows keep the plain Score. Same gate as the other buttons: release
+  flag, Android user agent read after mount, below `md`. With no script there is no second button.
+- **State 1:** an outline **Score in app** under the lime Score.
+- **Tap one** asks the Score route itself, `POST /q/<token>/score/<fixtureId>`, by a same-origin `fetch` carrying
+  `x-seazn-score-in-app: 1`. Same mint (`ensureGuestDeviceLink`), limits, refusals and activity touch as the form, so
+  the app and the browser get the same link. The answer is 200 JSON with `cache-control: no-store`: `{secret}`, or
+  `{location}` holding the exact relative `Location` the form would have been sent to, which the page then opens (the
+  home with its flash). A post without the header is the form's, answered 303 as before.
+- **State 2:** the approved block takes the button's place, without the or-scan line (there is no code beside it),
+  with the line "One more tap to open the app." The anchor takes focus. Score becomes an outline **Score in browser**
+  and posts as before.
+- **Tap two** is the person's own tap on the plain anchor. Nothing navigates to the link by itself, so "no
+  fetch-then-redirect" (§5.4) still holds.
+- **Why a JSON answer and not a 303 to `/q/<token>#<secret>`:** that redirect would write the secret into the address
+  bar and the browser's history at tap one, where the page URL that analytics reads includes the fragment. A response
+  body reaches neither, replay records no bodies, and no request path or query carries the secret. A cookie hand-off
+  was rejected: the secret would then ride every request to the site.
+- **Cross-site:** the proxy's Origin check covers `/api/**` only. A form cannot set the header. A cross-origin `fetch`
+  with it needs a preflight, which the route does not grant (no `OPTIONS` export, no `Access-Control-*`). A request
+  whose `Sec-Fetch-Site` says it is not same-origin gets a 403 before anything is read or minted. The home token is
+  itself the credential.
+- **The link's lifetime on the page:** held in memory only and tied to the fixture it was asked for: if the hero moves
+  on, it is not shown under the next match. It is **not** kept across a reload, and a page restored from the
+  back/forward cache starts again at state 1 (asking again reopens the same link).
+- **Failures:** a network error, a non-200, a redirect (never followed) or an answer of the wrong shape leaves state 1
+  with the home's generic failure line. A request still out after 15 seconds is a failure.
 
 ## 6. Constraints
 
