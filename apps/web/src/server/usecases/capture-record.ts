@@ -16,6 +16,7 @@ import type { CaptureRecordOk } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { CAPTURE_RECORD_RETENTION_DAYS } from "@/server/relay/config";
 import { keptLines, screenRecordLine, tokenTag } from "@/server/relay/domain/capture-record";
+import { scrubPlaybackValues } from "@/server/relay/record-playback-scrub";
 import { readRecordBody } from "@/server/relay/record-body";
 import { resolveAnyStreamCode, SLOT } from "./stream-codes";
 
@@ -69,7 +70,10 @@ export async function postCaptureRecord(
   // keptLines keeps only an `ok` verdict; the filter restates it in the safe direction, so no reading of `keep` can
   // ever store a bad line. What is stored is the verdict's `text` — the object the screen judged, re-serialised — never
   // the bytes sent (review fix 1, PR #943: a spelling the screen never saw, such as a key named twice, cannot be kept).
-  const keptPairs = screened.flatMap((s, i) => (keep[i] && s.ok ? [{ text: s.text, line: s.line }] : []));
+  // Owner ruling 2026-11-26: a playback address is never stored. The screen already dropped the `playbackUrl` key; the value
+  // rule drops a Cloudflare playback address from a URL field and masks it in free text. It runs on a line already kept, so
+  // no count moves.
+  const keptPairs = screened.flatMap((s, i) => (keep[i] && s.ok ? [{ text: scrubPlaybackValues(s.text), line: s.line }] : []));
   const keptTexts = keptPairs.map((p) => p.text);
   const linked = sidsOf(keptPairs.map((p) => p.line));
   // A1 kept a uuid-sid line only when its session is the code's, so every link is one A1 read above.

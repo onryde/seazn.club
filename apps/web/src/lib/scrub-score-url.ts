@@ -200,9 +200,9 @@ const ENCODED_EMBED_QUERY_PARAM = /((?:^|%(?:25)*26)(token|expires)%(?:25)*3[Dd]
 /** A Cloudflare Stream customer host (`customer-<code>.cloudflarestream.com`, an optional port) and the first segment of its
  *  path: the playback token (C1), or an unsigned input's uid. The segment runs to the next `/`, `?`, `#`, quote, angle bracket
  *  or space; a JWT's dots are inside it. The host must end there (`….cloudflarestream.com.other.example/` is not it). */
-const STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?::\d+)?\/)[^/?#\s"'<>]+/g;
+export const STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?::\d+)?\/)[^/?#\s"'<>]+/g;
 /** The same URL-ENCODED inside another URL (a `next=`, a referrer carried as a parameter), at any depth, either hex case. */
-const ENCODED_STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+export const ENCODED_STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */

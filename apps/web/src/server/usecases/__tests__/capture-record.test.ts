@@ -185,6 +185,47 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     for (const entry of logged) expect(entry.includes("m3u8") || entry.includes("playbackUrl")).toBe(false);
   });
 
+  it("owner ruling 2026-11-26 (review I1): a Cloudflare playback address under `url` / `overlayUrl` is dropped and one in `message` is masked — the credential is the first PATH segment — through the real ingest, with the counts unchanged and a normal public url left alone", async () => {
+    const r = await captureRig({ credits: 1 });
+    const S = await r.start(phoneId("a"));
+    const HOST = "customer-k7q2.cloudflarestream.com";
+    const SIGNED = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0.eyJzdWIiOiJ1aWQxMjMiLCJleHAiOjE3OTk5OTk5OTl9.c2lnbmF0dXJlX2J5dGVzX2hlcmU";
+    const UNSIGNED = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+    const addr = (seg: string) => `https://${HOST}/${seg}/manifest/video.m3u8`;
+    const sent = [
+      pairLine(r.tok),
+      { at: AT, kind: "armed", sid: S, url: addr(SIGNED), ms: 1 },
+      { at: AT, kind: "armed", sid: S, overlayUrl: addr(UNSIGNED), ms: 2 },
+      { at: AT, kind: "armed", sid: S, message: `stalled on ${addr(UNSIGNED)} after 12s` },
+      { at: AT, kind: "armed", sid: S, url: "https://example.test/a/b", ms: 3 },
+      unpairedLine(),
+    ];
+    const expected = [
+      pairLine(r.tok),
+      { at: AT, kind: "armed", sid: S, ms: 1 },
+      { at: AT, kind: "armed", sid: S, ms: 2 },
+      { at: AT, kind: "armed", sid: S, message: `stalled on https://${HOST}/***/manifest/video.m3u8 after 12s` },
+      { at: AT, kind: "armed", sid: S, url: "https://example.test/a/b", ms: 3 },
+      unpairedLine(),
+    ];
+    const first = await postCaptureRecord(r.code, r.tok, post(ndjson(sent)), r.now());
+    expect(first).toMatchObject({ kept: 6, dropped: 0 });
+    r.tick(60_000);
+    const second = await postCaptureRecord(r.code, r.tok, post(ndjson(sent)), r.now());
+    expect(second).toMatchObject({ kept: 6, dropped: 0 });
+    const rows = await records(r.fixtureId);
+    expect(rows).toHaveLength(2);
+    let checked = 0;
+    for (const row of rows) {
+      expect(row).toMatchObject({ received_lines: 6, kept_lines: 6, dropped_lines: 0, invalid_lines: 0 });
+      expect(row.lines.split("\n")).toEqual(expected.map((l) => JSON.stringify(l)));
+      expect(row.lines.includes(SIGNED) || row.lines.includes(UNSIGNED), "no credential segment stored").toBe(false);
+      checked += row.kept_lines;
+    }
+    expect(checked).toBe(12);
+    for (const entry of logged) expect(entry.includes(SIGNED) || entry.includes(UNSIGNED)).toBe(false);
+  });
+
   it("CROSS-CODE across two orgs: club X's lines (its pair, its device lines, its session) sent under club Y's tok are DROPPED — never stored, never logged — and Y's are kept (§6's worked example)", async () => {
     const x = await captureRig({ credits: 1 });
     const y = await captureRig({ credits: 1 });
