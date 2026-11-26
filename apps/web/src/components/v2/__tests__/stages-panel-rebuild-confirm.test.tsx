@@ -126,7 +126,7 @@ describe("review I2: a windowed stage's Rebuild confirm counts EVERY fixture, fo
 
   it("the windowed desk's confirm says what the whole list's says", async () => {
     const { rows, NOW } = league();
-    const w = windowRunSheet(rows, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(rows, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     expect(w.folded.length, "premise: rounds fold").toBeGreaterThan(10);
     expect(w.shipped.length, "premise: the window ships a fraction").toBeLessThan(rows.length / 4);
     const whole = await confirmBody({ fixtures: rows });

@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { newSession, check, signIn, tag, v1, v1data, setPlan, upcomingUtcDay } from "../harness.ts";
 
 /**
  * T14 — the auto-schedule solver, in a production-shaped run.
@@ -96,7 +96,8 @@ export async function autoScheduleSuite(): Promise<void> {
   // forced rather than merely likely.
   check("auto-schedule: a 4-entrant round robin generated 6 fixtures", generated.length === 6);
 
-  const START = "2026-09-21T09:00:00.000Z";
+  // A Monday ahead: the auto and polish passes below propose nothing before now.
+  const START = new Date(upcomingUtcDay(1) + 9 * 60 * 60_000).toISOString();
   const SLOT_MIN = 30;
   const slotAt = (n: number) =>
     new Date(Date.parse(START) + n * SLOT_MIN * 60_000).toISOString();

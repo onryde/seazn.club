@@ -4,11 +4,14 @@ import { HttpError } from "@/lib/errors";
 import { playedFixtureIds } from "../fixture-results-sql";
 import { rateLimit } from "@/lib/rate-limit";
 import {
+  boardMetrics,
   dayKeyInTz,
+  validateAssignments,
   TIER_COUNT,
   validateInstructionRules,
   type Assignment,
   type BuildResult,
+  type Conflict,
   type OrderDependency,
   type SchedulableFixture,
   type SlotConfig,
@@ -57,9 +60,15 @@ import { mapConflicts } from "./conflicts";
 import {
   autoSolverWallMs,
   autoScheduleCooldown,
+  autoStartFloor,
   boundSolverWindow,
+  daySpreadThatPlacesAll,
+  floorAutoStart,
   withDefaultDaySpread,
 } from "./solver-tuning";
+import { roundOrderRefusal, sparingHeldRows } from "./held";
+import { applyRefusals, type ApplyGateInput } from "./apply-gate";
+import { sameSlot, settleProposal, storedSlotConflicts } from "./final-board";
 import { type ReflowResult, reflowExisting } from "./reflow";
 
 // ---------------------------------------------------------------------------
@@ -112,6 +121,10 @@ export interface AutoScheduleOut {
 interface AutoSchedulePlan {
   schedulable: SchedulableFixture[];
   config: SlotConfig & VerifyConfig & { courts: string[] };
+  /** `config` without the default day cap: the same object when the pass added none. */
+  uncappedConfig: SlotConfig & VerifyConfig & { courts: string[] };
+  /** The write gate's own inputs, with the STORED config (no floored window, no default cap). */
+  gate: Omit<ApplyGateInput, "rows">;
   board: Assignment[];
   /** D2 capacity guard inputs — carried out of the transaction alongside
    *  everything else `capacityInputForFixtures` needs, so phase 2 does not
@@ -158,6 +171,9 @@ interface AutoSchedulePlan {
   placedNow: Assignment[];
   pinnedNow: Assignment[];
   frozen: string[];
+  /** Cards that have to stay and start before the start floor: not among `schedulable`, part of
+   *  `board`, and put back on the proposal unchanged. */
+  held: Assignment[];
   total: number;
 }
 
@@ -357,7 +373,40 @@ export async function autoSchedule(
       }
       return ids;
     };
-    const schedulable: SchedulableFixture[] = movable.map((f) => ({
+    const now = Date.now();
+    const storedConfig = toVerifyConfig(
+      settingsForEngine,
+      all,
+      roundToMinute(now),
+      siblings.ruleFixtures,
+      courtCalendars,
+      strandedCourtIds,
+    );
+    // A fresh BUILD never starts before the start time or in the past, and POLISH ("Improve times")
+    // never moves a card there (`floorAutoStart`). Applied here, ahead of every reader, so the
+    // capacity guard counts only the room actually left. REFLOW keeps the stored window.
+    const startFloor = body.mode === "reflow" ? undefined : autoStartFloor(storedConfig, now);
+    const declaredConfig = body.mode === "reflow" ? storedConfig : floorAutoStart(storedConfig, now);
+
+    // HELD: a card that has to stay where it is and already starts before the floor. That is a pin,
+    // in BUILD or POLISH, and in POLISH every other placed card too (it never moves one into the
+    // past, and cannot move one that is there). `ignore_locks` empties `pinnedIds`, so BUILD may then
+    // move a past pin, while POLISH still holds it: it is a past card like any other.
+    //
+    // A held card must not be one of the engine's fixtures, not even as a `locked` one: nothing before
+    // the floor is on its lattice, so its greedy board window-checks the card and drops it, counts it
+    // against the room left, and calls two held cards on one court contradictory pins. It goes on the
+    // obstacle board instead, with the round fields `toAssignment` stamps.
+    const isHeld = (f: (typeof movable)[number]): boolean =>
+      startFloor !== undefined &&
+      f.scheduled_at !== null &&
+      f.court_id !== null &&
+      ms(f.scheduled_at) < startFloor &&
+      (body.mode === "polish" || pinnedIds.has(f.id));
+    const held = movable.filter(isHeld).map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
+    const free = movable.filter((f) => !isHeld(f));
+
+    const schedulable: SchedulableFixture[] = free.map((f) => ({
       id: f.id,
       // C1 (2026-08-12 round-order design). `roundNo` used to be stamped
       // unconditionally — harmless while it was only a soft placement-order
@@ -398,25 +447,17 @@ export async function autoSchedule(
     // placer's day tally and the referee below both count only the `existing`
     // rows `ruleFixtures` names, so without this the auto pass proposes a board
     // that breaches a competition-scoped cap and then reports it clean.
-    const board = [...obstacles, ...siblings.assignments];
+    const board = [...obstacles, ...siblings.assignments, ...held];
 
     // Where the movable cards sit RIGHT NOW. REFLOW proposes from this rather
     // than from nothing, so it is split by whether this run may move the card.
-    const placedNow = movable
+    const placedNow = free
       .filter((f) => !pinnedIds.has(f.id) && f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
-    const pinnedNow = movable
+    const pinnedNow = free
       .filter((f) => pinnedIds.has(f.id))
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
 
-    const declaredConfig = toVerifyConfig(
-      settingsForEngine,
-      all,
-      roundToMinute(Date.now()),
-      siblings.ruleFixtures,
-      courtCalendars,
-      strandedCourtIds,
-    );
     const windowedConfig = boundSolverWindow(
       declaredConfig,
       schedulable,
@@ -444,12 +485,27 @@ export async function autoSchedule(
     const hasExplicitRange = declaredConfig.window !== undefined && Number.isFinite(declaredConfig.window.to);
     const config =
       body.mode === "build" && hasExplicitRange
-        ? withDefaultDaySpread(windowedConfig, stage.division_id, schedulable.length)
+        ? withDefaultDaySpread(
+            windowedConfig,
+            stage.division_id,
+            schedulable.length,
+            // Every card of this division already on the board: the engine's day tally counts them all.
+            board.filter((a) => a.divisionId === stage.division_id).map((a) => a.startAt),
+          )
         : windowedConfig;
 
     return {
       schedulable,
       config,
+      uncappedConfig: windowedConfig,
+      gate: {
+        fixtures: all,
+        matchMinutes: settings.config.matchMinutes,
+        people,
+        roundRobin,
+        siblingBoard: siblings.assignments,
+        config: storedConfig,
+      },
       // D2 capacity guard reads THIS, not `config` or even `windowedConfig`:
       // both carry SOLVER-CONVENIENCE machinery the organiser never
       // configured. `withDefaultDaySpread`'s injected max_fixtures_per_day
@@ -490,7 +546,8 @@ export async function autoSchedule(
       // comment on `pinnedIds` above. POLISH's freeze set and the anchor the
       // solver sees must never be able to name a different set of fixtures.
       frozen: [...pinnedIds],
-      total: schedulable.length,
+      held,
+      total: movable.length,
     };
   });
 
@@ -506,7 +563,9 @@ export async function autoSchedule(
   // mechanism POLISH uses (R20) to keep that property without one — see
   // `reflowExisting`'s own doc comment for the full rationale, the accepted
   // trade-off, and the reconciliation this makes necessary.
-  const { schedulable, config, board, dependencies, total } = plan;
+  const { schedulable, board, dependencies, held, total } = plan;
+  // Every card is held, so there is nothing to place and nothing to refuse: no guard, no solver.
+  if (schedulable.length === 0 && held.length > 0) return heldBoardUnchanged(plan, body.mode);
   // P9 pass 2b: an empty candidate court set makes the solve unwinnable
   // before it starts — checked FIRST, ahead of capacity, because "no court
   // matches your tags" is a more specific, more actionable refusal than the
@@ -577,6 +636,12 @@ export async function autoSchedule(
     scope: "stage",
     divisionId: plan.divisionId,
     stageId,
+  });
+  // The default day cap is kept only where it costs this run nothing (outside the transaction).
+  const config = await daySpreadThatPlacesAll(plan.config, plan.uncappedConfig, {
+    fixtures: schedulable,
+    existing: board,
+    dependencies,
   });
   /**
    * The organiser's board as it stands — every movable card that currently has a
@@ -660,7 +725,12 @@ export async function autoSchedule(
         existing: board,
         dependencies,
         wallMs: autoSolverWallMs(),
-        solve: placementSolver,
+        // A held card is a fixed row on the wire, and two that collide would make the solver's model
+        // infeasible: `sparingHeldRows` keeps the request solvable. `config.startAt` is the floor.
+        solve:
+          held.length > 0
+            ? sparingHeldRows(placementSolver, new Set(held.map((a) => a.fixtureId)), config.startAt)
+            : placementSolver,
         log: schedulerLog,
         ...(body.mode === "polish"
           ? {
@@ -686,15 +756,60 @@ export async function autoSchedule(
   const seeded: number | undefined =
     "seeded" in out && typeof out.seeded === "number" ? out.seeded : undefined;
 
+  // The engine bounds a placement by a later round in `existing` only for Swiss (the end barrier). A
+  // league's or a group's round order against a HELD card is unknown to it, so it is applied here:
+  // such a card is left off the proposal rather than offered where the apply gate would refuse it.
+  // A pin at or after the floor stays: where it sits is the organiser's own choice.
+  const behind = new Map<string, Conflict>();
+  for (const a of out.assignments) {
+    if (plan.frozen.includes(a.fixtureId)) continue;
+    const refusal = roundOrderRefusal(a, held, config.tz);
+    if (refusal !== undefined) behind.set(a.fixtureId, refusal);
+  }
+  // A card left off keeps its stored slot through apply, which the engine's board knows nothing of: the
+  // proposal is settled against those slots by the write gate's own verdict.
+  const stored = new Map(currentBoard.map((a) => [a.fixtureId, a]));
+  const { fresh, kept, refused } = settleProposal({
+    proposed: out.assignments.filter((a) => !behind.has(a.fixtureId)),
+    held,
+    stored,
+    standing: new Map([...plan.board, ...currentBoard].map((a) => [a.fixtureId, a])),
+    config: plan.gate.config,
+    keepStored: body.mode === "polish",
+    refuses: (rows) =>
+      applyRefusals({
+        ...plan.gate,
+        rows: rows.map((a) => ({ fixture_id: a.fixtureId, scheduled_at: iso(a.startAt), court_id: a.court })),
+      }),
+  });
+  const listed = [...fresh, ...kept, ...held];
+  const listedIds = new Set(listed.map((a) => a.fixtureId));
+  const unchangedIds = new Set([...kept, ...held].map((a) => a.fixtureId));
+  /** The engine's board is not the one proposed: its proof and its rows are about cards that moved back. */
+  const altered = behind.size > 0 || refused.size > 0;
+  const others = board.filter((a) => !unchangedIds.has(a.fixtureId));
+  const found: Conflict[] = altered
+    ? [
+        // Why each card that got no row has none, then what is true of the rows that did.
+        ...new Map([...refused, ...behind]).values(),
+        ...out.conflicts.filter((c) => !listedIds.has(c.fixtureId) && !behind.has(c.fixtureId) && !refused.has(c.fixtureId)),
+        ...validateAssignments(fresh, config, [...others, ...kept, ...held], dependencies),
+      ].filter((c) => !unchangedIds.has(c.fixtureId))
+    : out.conflicts.filter((c) => !unchangedIds.has(c.fixtureId));
+
+  // Counts are of what apply will do. It writes only the listed rows, so no card loses a time; and a
+  // move is a listed row that is not where the card is now (the engine's definition, over this board).
+  const changed = fresh.filter((a) => !sameSlot(a, stored.get(a.fixtureId)));
+  const recount =
+    (body.mode === "polish" && currentBoard.length > 0) || (body.mode === "reflow" && altered);
+  const moved = recount ? changed.length : out.moved;
+  const reseeded =
+    seeded !== undefined && altered ? changed.filter((a) => !stored.has(a.fixtureId)).length : seeded;
+  const metrics = boardMetrics(listed, config.courts, total);
+
   // ---- Phase 3: map. Pure (courtNames was resolved in phase 1).
   return {
-    assignments: out.assignments.map((a) => ({
-      fixture_id: a.fixtureId,
-      scheduled_at: iso(a.startAt),
-      ends_at: iso(a.endAt),
-      court_id: a.court,
-      court_name: plan.courtNames.get(a.court) ?? null,
-    })),
+    assignments: listed.map((a) => toProposal(a, plan.courtNames)),
     // No baseline: the auto pass PROPOSES a board rather than editing one, so
     // every conflict in it is this proposal's own doing (#399).
     //
@@ -718,19 +833,26 @@ export async function autoSchedule(
     // subset, and only to raise a pair's bound), so the two lists concatenate
     // without double-reporting.
     conflicts: mapConflicts(
-      [...out.conflicts, ...validateInstructionRules(out.assignments, config, board)],
+      // `board` holds the held cards, so a typed rule counts them. The cards listed where they already
+      // are are judged apart, by the stored config: the floor is no window to them.
+      [
+        ...found,
+        ...validateInstructionRules(fresh, config, [...board, ...kept]),
+        ...storedSlotConflicts([...held, ...kept], plan.gate.config, [...others, ...fresh], dependencies),
+      ],
       plan.courtNames,
     ),
     metrics: {
-      makespan_minutes: out.metrics.makespanMinutes,
-      worst_idle_gap_minutes: out.metrics.worstIdleGapMinutes,
-      court_imbalance_minutes: out.metrics.courtImbalanceMinutes,
-      placed: out.metrics.placed,
+      makespan_minutes: metrics.makespanMinutes,
+      worst_idle_gap_minutes: metrics.worstIdleGapMinutes,
+      court_imbalance_minutes: metrics.courtImbalanceMinutes,
+      placed: metrics.placed,
       total,
     },
     solver: {
       engine: out.engine,
-      status: out.status,
+      // A proved ladder is a claim about the engine's board, not one with cards taken back off it.
+      status: altered && out.status === "already_optimal" ? "ok" : out.status,
       // Forwarded, never synthesised, and only ever present alongside
       // `status: "not_searched"` — see `ScheduleSolverInfo.not_searched_reason`.
       // `BuildResult` sets it on all six of `not_searched`'s exits; REFLOW's
@@ -749,15 +871,14 @@ export async function autoSchedule(
       tiers_total: TIERS_TOTAL,
       budget_expired: out.budgetExpired,
       elapsed_ms: out.elapsedMs,
-      moved: out.moved,
-      // Relocations and losses are separate counts since R21. Forwarded on every
-      // mode: it is 0 wherever the run had no baseline to lose from, and that 0
-      // is a fact rather than a placeholder.
-      lost: out.lost,
+      moved,
+      // Relocations and losses are separate counts since R21. Always 0 here: `applySchedule` writes
+      // the listed rows and takes no card's time away.
+      lost: 0,
       // REFLOW only — the one path that can tell a first-time placement from a
       // relocation. BUILD and POLISH re-place everything by definition, so the
       // distinction does not arise and the field stays off the payload.
-      ...(seeded !== undefined ? { seeded } : {}),
+      ...(reseeded !== undefined ? { seeded: reseeded } : {}),
       // Forwarded, never synthesised: absence on an `infeasible` result is
       // the engine SAYING the proof is about the board rather than the pins.
       ...(out.contradictoryPins !== undefined
@@ -767,6 +888,57 @@ export async function autoSchedule(
       // exactly the count of this stage's own fixtures held fixed by a lock
       // this run, on every mode, always present so a client never needs a
       // null check to render "N fixtures are locked and will be kept".
+      locked_kept: plan.frozen.length,
+    },
+  };
+}
+
+function toProposal(a: Assignment, courtNames: ReadonlyMap<string, string>): AutoScheduleOut["assignments"][number] {
+  return {
+    fixture_id: a.fixtureId,
+    scheduled_at: iso(a.startAt),
+    ends_at: iso(a.endAt),
+    court_id: a.court,
+    court_name: courtNames.get(a.court) ?? null,
+  };
+}
+
+/**
+ * The answer when every card is held: the board as it stands. The solver was not asked, and the block
+ * says only that: no optimiser (`greedy`, no tier, no time), nothing moved, nothing lost. Not
+ * `already_optimal`, which claims a proved ladder, nor `not_searched`, whose copy tells the organiser
+ * the optimiser failed on their board.
+ */
+function heldBoardUnchanged(plan: AutoSchedulePlan, mode: AutoScheduleRequest["mode"]): AutoScheduleOut {
+  const metrics = boardMetrics(plan.held, plan.config.courts, plan.total);
+  return {
+    assignments: plan.held.map((a) => toProposal(a, plan.courtNames)),
+    conflicts: mapConflicts(
+      storedSlotConflicts(
+        plan.held,
+        plan.gate.config,
+        plan.board.filter((a) => !plan.held.includes(a)),
+        plan.dependencies,
+      ),
+      plan.courtNames,
+    ),
+    metrics: {
+      makespan_minutes: metrics.makespanMinutes,
+      worst_idle_gap_minutes: metrics.worstIdleGapMinutes,
+      court_imbalance_minutes: metrics.courtImbalanceMinutes,
+      placed: plan.held.length,
+      total: plan.total,
+    },
+    solver: {
+      engine: "greedy",
+      status: "ok",
+      mode,
+      tiers_completed: 0,
+      tiers_total: TIERS_TOTAL,
+      budget_expired: false,
+      elapsed_ms: 0,
+      moved: 0,
+      lost: 0,
       locked_kept: plan.frozen.length,
     },
   };

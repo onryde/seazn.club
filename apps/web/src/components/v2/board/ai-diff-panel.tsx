@@ -27,7 +27,7 @@ import {
 import { AiQuoteMismatchNote } from "./ai-quote-card";
 import { Marker } from "./ai-marker";
 import { CONFLICT_LABEL } from "./types";
-import { formatConflictDetail } from "./conflict-detail-format";
+import { formatConflictDetail, roundOrderDetailText } from "./conflict-detail-format";
 
 export function AiDiffPanel({
   plan,
@@ -193,7 +193,8 @@ export function AiDiffPanel({
                       <span title={l.matchup} className="min-w-0 truncate text-slate-600">{l.matchup}</span>
                     </p>
                     <p className="text-[11px] font-medium text-red-600">
-                      {conflictLabel(c.reason)}
+                      {roundOrderDetailText(c.details, { msg, entrantNames, fixtureTitles })?.label ??
+                        conflictLabel(c.reason)}
                     </p>
                     {c.details && (
                       <p className="mt-0.5 text-[10px] text-slate-500">

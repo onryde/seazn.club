@@ -8,6 +8,7 @@ import {
   activeOrgIdFromRequest,
   seedVenueWithCourts,
   archiveCourtBySql,
+  upcomingUtcDay,
 } from "./helpers";
 
 // P9's own acceptance criteria (portfolio pass 5), beyond converting the
@@ -146,7 +147,7 @@ test("a division that requires a court tag is auto-scheduled only onto courts ca
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: new Date(upcomingUtcDay(1) + 9 * 3_600_000).toISOString(), // ahead: Auto-schedule, below
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [tagged.id, untagged.id],
@@ -449,7 +450,7 @@ test("a tag scoped to one round role constrains that round only: the final needs
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: new Date(upcomingUtcDay(1) + 9 * 3_600_000).toISOString(), // ahead: Auto-schedule, below
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [tagged.id, untagged.id, spare.id],
@@ -613,7 +614,8 @@ test("a fixture placed outside its court's declared hours shows a real localized
   page,
   request,
 }) => {
-  const weekday = new Date(Date.UTC(2026, 10, 4)).getUTCDay();
+  const day = upcomingUtcDay(3); // ahead: Auto-schedule proposes nothing before now
+  const weekday = new Date(day).getUTCDay();
   const court = await seedCourtWithHours(request, `E2E Court Hours Venue ${TAG}`, [
     { weekday, open_min: 15 * 60, close_min: 20 * 60 },
   ]);
@@ -646,7 +648,7 @@ test("a fixture placed outside its court's declared hours shows a real localized
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 10, 4, 15, 0)).toISOString(),
+        startAt: new Date(day + 15 * 3_600_000).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [court.id],
@@ -685,7 +687,7 @@ test("a fixture placed outside its court's declared hours shows a real localized
   // path, not through the solver.
   const moved = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}`, "PATCH", {
     court_id: court.id,
-    scheduled_at: new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString(),
+    scheduled_at: new Date(day + 9 * 3_600_000).toISOString(),
   });
   expect(moved.status, "a non-blocking conflict must never refuse the write").toBe(200);
 
@@ -737,7 +739,8 @@ test("a start-window breach shows a real localized label on the board, not the r
   const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
   expect(fixtureIds.length).toBe(1);
 
-  const notAfter = new Date(Date.UTC(2026, 10, 4, 12, 0)).toISOString();
+  const day = upcomingUtcDay(3); // ahead: Auto-schedule proposes nothing before now
+  const notAfter = new Date(day + 12 * 3_600_000).toISOString();
   const settings = await apiJson(
     request,
     `/api/v1/divisions/${divisionId}/schedule-settings`,
@@ -745,7 +748,7 @@ test("a start-window breach shows a real localized label on the board, not the r
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString(),
+        startAt: new Date(day + 9 * 3_600_000).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [court.id],
@@ -786,7 +789,7 @@ test("a start-window breach shows a real localized label on the board, not the r
   // never in isBlockingConflict), so the write is not refused either.
   const moved = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}`, "PATCH", {
     court_id: court.id,
-    scheduled_at: new Date(Date.UTC(2026, 10, 4, 14, 0)).toISOString(),
+    scheduled_at: new Date(day + 14 * 3_600_000).toISOString(),
   });
   expect(moved.status, "a non-blocking conflict must never refuse the write").toBe(200);
 
@@ -863,7 +866,7 @@ test("a court archived under a scheduled fixture is reported stranded, and publi
     {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 10, 5, 9, 0)).toISOString(),
+        startAt: new Date(upcomingUtcDay(4) + 9 * 3_600_000).toISOString(), // ahead: Auto-schedule, below
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [court.id],

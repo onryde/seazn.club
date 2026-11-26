@@ -281,8 +281,9 @@ describe("the sheet: a held online board owes its result", () => {
 
 describe("D12: a board of an online round nobody has opened owes nothing yet", () => {
   const STAGES = [{ id: "s1", kind: "league", name: "League", seq: 1 }];
-  // Two hours past its slot (matchMinutes 60, now 19:00): by the clock alone it owes a result.
-  const due = fx({ id: "f1", fixture_no: 1, status: "scheduled", scheduled_at: "2026-10-12T17:00:00.000Z" });
+  // STARTED two hours ago (matchMinutes 60, now 19:00): by the clock alone it owes a result. A board that never started
+  // owes none whatever the round says (owner ruling 2026-11-26), so only a live one can witness the `unopened` guard.
+  const due = fx({ id: "f1", fixture_no: 1, status: "in_play", scheduled_at: "2026-10-12T17:00:00.000Z" });
   const ctx = (onlinePlay?: Record<string, RunSheetOnlinePlay>) => ({ stageId: null, tz: TZ, today: "2026-10-12", nowMs: NOW_MS, matchMinutes: 60, onlinePlay });
   const unopened = { f1: online({ unopened: true, live: false, cameraPolicy: "off" }) };
   const sheet = (onlinePlay?: Record<string, RunSheetOnlinePlay>) =>

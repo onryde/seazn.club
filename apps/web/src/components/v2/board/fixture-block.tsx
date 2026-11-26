@@ -7,7 +7,7 @@
 import { divisionAccent, divisionHue, divisionShortCode, divisionTint } from "@/lib/division-hue";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { CONFLICT_LABEL, boardMovable, cardTitle, type BoardConflict, type BoardFixture } from "./types";
-import { formatBoardConflictDetail } from "./conflict-detail-format";
+import { formatBoardConflictDetail, roundOrderText } from "./conflict-detail-format";
 import { plainRoundCode, type BoardRoundCode } from "./round-codes";
 import { RoundCodeChip } from "./round-code-chip";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -204,7 +204,7 @@ export function FixtureBlock({
               title={detail || undefined}
               className={`rounded px-1 ${groupBlocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
             >
-              {conflictLabel(head.code)}
+              {roundOrderText(head.details, { msg, entrantNames, fixtureTitles })?.label ?? conflictLabel(head.code)}
             </span>
           );
         })}

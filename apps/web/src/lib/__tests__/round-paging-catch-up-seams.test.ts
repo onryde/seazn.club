@@ -55,7 +55,7 @@ describe("C2: catch-up rounds never move the frontier, on every paging surface",
   it("the organiser's run sheet (windowRunSheet): rounds 10 and 11 ship through the sequence", () => {
     let checked = 0;
     for (const [name, played] of STEPS) {
-      const { shipped } = windowRunSheet(scene(5, played), [{ id: "lg", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+      const { shipped } = windowRunSheet(scene(5, played), [{ id: "lg", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
       expect([...new Set(shipped.map((f) => f.round_no))].sort((a, b) => a - b), name).toEqual([10, 11]);
       checked += 1;
     }

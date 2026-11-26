@@ -324,23 +324,35 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — a round nobody has opened (D1
 
   // T16 fix round 1, R4: the competition ledger (getCompetitionDesk → resolveAttention) asks the same question. A
   // past-due board of an unopened online round is not a missing result; the open makes it one; over the board it
-  // always was one.
-  it("R4: the competition ledger's 'result missing' — not before the open, owed after it; over the board, owed", async () => {
+  // always was one. Only a STARTED board is ever owed (owner ruling 2026-11-26), so the boards are started below.
+  it("R4: the competition ledger's 'result missing' — never for a board that did not start; started: not before the open, owed after it; over the board, owed", async () => {
     const missing = async (r: SeedOnlineChessRoundResult) =>
       (await getCompetitionDesk(r.owner, r.competitionId)).divisions
         .get(r.divisionId)!
         .attention.find((a) => a.kind === "result_missing");
-    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: PAST });
-    expect(await missing(r), "unopened: nothing owed").toBeUndefined();
-    await sql`
+    const start = async (x: SeedOnlineChessRoundResult) => {
+      const rows = await sql<{ id: string }[]>`
+        update fixtures set status = 'in_play' where id in ${sql(x.boards.map((b) => b.fixtureId))} returning id`;
+      expect(rows.length, "every board started").toBe(x.boards.length);
+    };
+    const open = (x: SeedOnlineChessRoundResult) => sql`
       insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
-      values (${r.stageId}, ${r.orgId}, 1, ${r.ownerUserId}, now())`;
+      values (${x.stageId}, ${x.orgId}, 1, ${x.ownerUserId}, now())`;
+    const idle = await seedOnlineChessRound({ fixtures: 2, scheduledAt: PAST });
+    await open(idle);
+    expect(await missing(idle), "opened but never started: nothing owed").toBeUndefined();
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: PAST });
+    await start(r);
+    expect(await missing(r), "unopened: nothing owed").toBeUndefined();
+    await open(r);
     expect(await missing(r), "opened: both boards owe their result").toMatchObject({
       count: 2,
       fixtureIds: expect.arrayContaining(r.boards.map((b) => b.fixtureId)),
     });
     const otb = await seedOnlineChessRound({ fixtures: 1, onlinePlay: "off", scheduledAt: PAST });
-    expect(await missing(otb), "over the board: owed by the clock alone").toMatchObject({ count: 1 });
+    expect(await missing(otb), "over the board, never started: nothing owed").toBeUndefined();
+    await start(otb);
+    expect(await missing(otb), "over the board, started: owed with no open to wait for").toMatchObject({ count: 1 });
   });
 
   it("the grain is (stage, round): opening round 1 leaves round 2 unopened", async () => {

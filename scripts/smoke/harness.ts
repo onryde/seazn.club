@@ -139,6 +139,18 @@ export async function signIn(s: Session, email: string) {
   };
 }
 
+/**
+ * 00:00 UTC on the first `weekday` (0 Sunday .. 6 Saturday) at least `weeksAhead` weeks from today.
+ * For a board that Auto-schedule or Improve times runs over: neither proposes a time before now while
+ * the schedule has not ended, so a fixed date stops meaning itself the day it passes. The weekday is
+ * the caller's to name because court hours are declared per weekday.
+ */
+export function upcomingUtcDay(weekday: number, weeksAhead = 1): number {
+  const DAY_MS = 86_400_000;
+  const from = Math.floor(Date.now() / DAY_MS) * DAY_MS + weeksAhead * 7 * DAY_MS;
+  return from + ((weekday - new Date(from).getUTCDay() + 7) % 7) * DAY_MS;
+}
+
 export const tag = Date.now().toString(36);
 
 /**

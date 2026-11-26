@@ -13,7 +13,7 @@ import {
   type BoardConflictDetail,
   type BoardFixture,
 } from "./types";
-import { formatBoardConflictDetail } from "./conflict-detail-format";
+import { formatBoardConflictDetail, roundOrderText } from "./conflict-detail-format";
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 
@@ -232,9 +232,10 @@ export function ConflictsPanel({
                     c.blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"
                   }`}
                 >
-                  {conflictLabel(c.code)}
+                  {roundOrderText(c.details, { msg, entrantNames, fixtureTitles })?.label ?? conflictLabel(c.code)}
                 </span>
-                {conflictHelp(c.code, c.details)}
+                {roundOrderText(c.details, { msg, entrantNames, fixtureTitles })?.help ??
+                  conflictHelp(c.code, c.details)}
               </p>
               {f && (
                 <button

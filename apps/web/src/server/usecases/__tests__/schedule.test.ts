@@ -82,7 +82,7 @@ const DIVISION_CONFIG = {
   progressScore: false,
 };
 
-const T0 = "2026-08-01T09:00:00.000Z";
+const T0 = "2027-08-01T09:00:00.000Z";
 const MIN = 60_000;
 const at = (minutes: number) => new Date(Date.parse(T0) + minutes * MIN).toISOString();
 
@@ -156,7 +156,7 @@ describe("ApplyScheduleRequest schema (v4/03 §4)", () => {
   // a real court.
   const validAssignment = {
     fixture_id: randomUUID(),
-    scheduled_at: "2026-08-01T09:00:00.000Z",
+    scheduled_at: "2027-08-01T09:00:00.000Z",
     court_id: randomUUID(),
   };
 
@@ -1233,8 +1233,8 @@ const HOUR = 60 * MIN;
 const BLACKOUT_COURT_ID = "c0000000-0000-4000-8000-0000000000c2";
 
 const BLACKOUT_DRAFTS = [
-  { court: BLACKOUT_COURT_ID, from: "2026-08-01T12:00", to: "2026-08-01T13:00" },
-  { court: "", from: "2026-08-02T09:00", to: "2026-08-02T10:30" },
+  { court: BLACKOUT_COURT_ID, from: "2027-08-01T12:00", to: "2027-08-01T13:00" },
+  { court: "", from: "2027-08-02T09:00", to: "2027-08-02T10:30" },
 ];
 
 /** The stored rows for those drafts, produced by the editor's OWN serialiser
@@ -1363,7 +1363,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
 
   it("the placer and the solver lattice both refuse the stored window", async () => {
     const { auth, divisionId, courts } = await seedBlackoutDivision();
-    const w = globalWindow("2026-08-01T12:00", "2026-08-01T13:00", BLACKOUT_ORG_TZ);
+    const w = globalWindow("2027-08-01T12:00", "2027-08-01T13:00", BLACKOUT_ORG_TZ);
     // One court, and the day opens an hour before the window: six 30-minute
     // fixtures laid end to end MUST cross it unless something stops them.
     await putScheduleSettings(auth, divisionId, {
@@ -1439,7 +1439,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // 00:30–01:30 by accident. The editor is driven on that same UTC clock, so
     // "half an hour after LOCAL midnight" is now stated rather than inherited
     // from whatever zone the runner happens to be in.
-    const dayStart = Date.parse("2026-08-01T00:00:00.000Z");
+    const dayStart = Date.parse("2027-08-01T00:00:00.000Z");
     const w = windowAt(dayStart + 30 * MIN, dayStart + 90 * MIN, "UTC");
     const startAt = new Date(dayStart).toISOString();
 

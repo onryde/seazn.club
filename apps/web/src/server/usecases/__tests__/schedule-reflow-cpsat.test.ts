@@ -143,6 +143,17 @@ async function seedStage(
   return { divisionId: division.id, stageId: stage.id, courts };
 }
 
+/** Applies exactly what a pass proposed. */
+const applyProposal = (auth: AuthCtx, stageId: string, out: Awaited<ReturnType<typeof autoSchedule>>) =>
+  applySchedule(auth, stageId, {
+    assignments: out.assignments.map((a) => ({
+      fixture_id: a.fixture_id,
+      scheduled_at: a.scheduled_at,
+      court_id: a.court_id,
+    })),
+    source: "auto",
+  });
+
 describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
   // Test 1 (the wiring switch itself — "the placement client was called,
   // never repairSchedule") lives in the dedicated
@@ -184,9 +195,11 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // buildSchedule's output" swap this session's finding warns about,
       // ANY of them could silently move.
       const before = await sql<
-        { id: string; scheduled_at: Date; court_id: string }[]
-      >`select id, scheduled_at, court_id from fixtures where stage_id = ${stageId} order by id`;
-      const toClear = before[0]!;
+        { id: string; round_no: number; scheduled_at: Date; court_id: string }[]
+      >`select id, round_no, scheduled_at, court_id from fixtures where stage_id = ${stageId} order by id`;
+      // A card of the LAST round, by name: `before` is in id order, which is random, and which round is
+      // cleared decides whether a legal slot is offered for it at all (the round 2 case below).
+      const toClear = before.find((r) => r.round_no === 3)!;
       await sql`
         update fixtures set scheduled_at = null, court_id = null
         where id = ${toClear.id}`;
@@ -212,6 +225,48 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
       // only place cards with no slot yet, so `moved` now always equals
       // `seeded` (see the `lost`/`moved` comment in `reflowExisting`).
       expect(out.solver.moved).toBe(out.solver.seeded);
+      await expect(applyProposal(auth, stageId, out)).resolves.toMatchObject({ applied: out.assignments.length });
+    },
+    120_000,
+  );
+
+  // The reflow placer bounds a card by the rounds BEFORE it, not by a later round already on the board, so
+  // for a cleared round 2 card it offers a time after round 3 — which `applySchedule` refuses, taking the
+  // whole proposal with it. The card is left off instead, and says why.
+  it(
+    "leaves a card off, and says why, where the only slot offered would put its round out of order",
+    async () => {
+      const auth = await seedOrg();
+      const { stageId } = await seedStage(auth, 4);
+      await applyProposal(auth, stageId, await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" }));
+      const before = await sql<
+        { id: string; round_no: number; scheduled_at: Date; court_id: string }[]
+      >`select id, round_no, scheduled_at, court_id from fixtures where stage_id = ${stageId} order by id`;
+      const toClear = before.find((r) => r.round_no === 2)!;
+      await sql`
+        update fixtures set scheduled_at = null, court_id = null
+        where id = ${toClear.id}`;
+
+      const out = await autoSchedule(auth, stageId, { only_unlocked: true, mode: "reflow" });
+
+      expect(out.assignments.filter((a) => a.fixture_id === toClear.id)).toEqual([]);
+      expect(
+        out.conflicts.filter((c) => c.fixture_id === toClear.id).map((c) => c.details?.kind),
+      ).toContain("round_order_same_day");
+      let unmoved = 0;
+      for (const row of before) {
+        if (row.id === toClear.id) continue;
+        expect(out.assignments.find((a) => a.fixture_id === row.id)).toMatchObject({
+          scheduled_at: row.scheduled_at.toISOString(),
+          court_id: row.court_id,
+        });
+        unmoved++;
+      }
+      expect(unmoved).toBe(before.length - 1);
+      // The counts are of this proposal: the placement taken back is not a move.
+      expect(out.solver).toMatchObject({ moved: 0, seeded: 0, lost: 0 });
+      expect(out.metrics.placed).toBe(out.assignments.length);
+      await expect(applyProposal(auth, stageId, out)).resolves.toMatchObject({ applied: before.length - 1 });
     },
     120_000,
   );
@@ -303,10 +358,14 @@ describe.skipIf(!HAS_DB)("REFLOW on the placement service (C4)", () => {
         source: "auto",
       });
 
-      const rows = await sql<{ id: string; scheduled_at: Date; court_id: string }[]>`
-        select id, scheduled_at, court_id from fixtures
-        where stage_id = ${stageId} order by id`;
-      const [a, b, c] = rows;
+      const rows = await sql<{ id: string; round_no: number; scheduled_at: Date; court_id: string }[]>`
+        select id, round_no, scheduled_at, court_id from fixtures
+        where stage_id = ${stageId} order by round_no, id`;
+      // By round, not by id (which is random): the collision stays inside round 1, so it breaks no round
+      // order of its own, and the card cleared is a last-round one, which has a legal slot to be given.
+      const [a, b] = rows;
+      const c = rows.at(-1);
+      expect([a!.round_no, b!.round_no, c!.round_no]).toEqual([1, 1, 3]);
       // Same forced collision as test 3.
       await sql`
         update fixtures set scheduled_at = ${a!.scheduled_at}, court_id = ${a!.court_id}

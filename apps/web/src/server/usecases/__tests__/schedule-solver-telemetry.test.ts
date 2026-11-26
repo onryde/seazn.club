@@ -77,7 +77,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
  */
 const HAS_SOLVER = !!process.env.PLACEMENT_SERVICE_HOST;
 
-const T0 = "2026-08-01T09:00:00.000Z";
+const T0 = "2027-08-01T09:00:00.000Z";
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 const at = (minutes: number) =>

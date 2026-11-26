@@ -8,6 +8,7 @@ import { ROUND_PAGING_MIN_FIXTURES } from "../round-paging";
 import { FIXTURE_STATUSES } from "../fixture-status";
 import { buildRunSheet, roundDone, roundUnderWay, stageRoundSections, type RunSheetFixture } from "../run-sheet-groups";
 import { stageCounts } from "../stage-card/summaries";
+import { isResultMissing } from "../division-phase";
 
 const NOW = Date.UTC(2026, 10, 23, 12, 0);
 const DAY = 86_400_000;
@@ -43,7 +44,7 @@ function doubleLeague71(played = 71) {
   for (let r = 1; r <= 142; r++) for (let s = 1; s <= 35; s++) fixtures.push(row("lg", null, r, s, statusOf(r, played), timeOf(r, played)));
   return fixtures;
 }
-const ctx = { held: new Set<string>(), nowMs: NOW, matchMinutes: 60, tz: "UTC" };
+const ctx = { held: new Set<string>(), nowMs: NOW, tz: "UTC" };
 const roundsOf = (rows: readonly Row[]) => [...new Set(rows.map((f) => f.round_no))].sort((a, b) => a - b);
 
 describe("C: a big run sheet ships its open rounds and a tally of the rest", () => {
@@ -96,14 +97,12 @@ describe("C: a big run sheet ships its open rounds and a tally of the rest", () 
     expect(foldedTally(folded, "other").rows, "another stage's tally is its own").toBe(0);
   });
 
-  it("an organiser's attention opens a folded round: a held match, a settle owed, a result owed, a match today, a live match", () => {
+  it("an organiser's attention opens a folded round: a held match, a settle owed, a match today, a live match (the only kind that can owe a result)", () => {
     const cases: [string, (rows: Row[]) => void, Partial<typeof ctx>?][] = [
       ["needs_decision", (rows) => { rows[0]!.status = "needs_decision"; }],
       // A held id alone, on a row left as it was (to come, weeks away): only the `held` set can open this round. A played row would
       // move the frontier to round 120 and open it as the current round, which hides the clause (measured: the mutant survived).
       ["awaiting settle", () => {}, {}],
-      // Two days ago, so it is owed and NOT today: only the result-owed clause can open this round.
-      ["result owed", (rows) => { rows[0]!.scheduled_at = new Date(NOW - 2 * 86_400_000).toISOString(); }],
       ["timed today", (rows) => { rows[0]!.scheduled_at = new Date(NOW + 3 * 3_600_000).toISOString(); }],
       ["live", (rows) => { rows[0]!.status = "in_play"; }],
     ];
@@ -118,7 +117,30 @@ describe("C: a big run sheet ships its open rounds and a tally of the rest", () 
       expect(folded.some((r) => r.round === 120), name).toBe(false);
       checked += 1;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(4);
+  });
+
+  // The "Needs result" chip counts only SHIPPED rows, so every row the predicate could name must ship. And since the
+  // 2026-11-26 ruling a never-started match past its slot is not work: its round folds like any other.
+  it("every row that owes a result ships its round; a never-started row days past its slot opens nothing", () => {
+    const twoDaysAgo = new Date(NOW - 2 * DAY).toISOString();
+    let owed = 0;
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const all = doubleLeague71(71);
+      const target = all.filter((f) => f.round_no === 120)[0]!;
+      target.status = status;
+      target.scheduled_at = twoDaysAgo;
+      const { shipped } = windowRunSheet(all, [{ id: "lg", kind: "league" }], ctx);
+      if (isResultMissing({ status, startedAt: null, scheduledAt: twoDaysAgo, matchMinutes: 60 }, NOW)) {
+        expect(roundsOf(shipped), status).toContain(120);
+        owed += 1;
+      }
+      if (status === "scheduled") expect(roundsOf(shipped), "never started: folds").not.toContain(120);
+      checked += 1;
+    }
+    expect(checked).toBe(FIXTURE_STATUSES.length);
+    expect(owed, "anti-vacuity: at least one status can owe").toBeGreaterThan(0);
   });
 
   it("a void (cancelled) round folds as finished, and its void counts as done", () => {

@@ -70,7 +70,7 @@ const unscheduledChip = (html: string) => {
 describe("C: windowing a big run sheet moves no figure the organiser reads", () => {
   it("premise: the window folds rounds, ships rows, and holds unscheduled matches in a fold", () => {
     const all = league();
-    const w = windowRunSheet(all, [STAGE], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [STAGE], { held: new Set(), nowMs: NOW, tz: "UTC" });
     expect(all.length).toBe(231);
     expect(w.folded.length, "most rounds fold").toBeGreaterThan(10);
     expect(w.shipped.length).toBeLessThan(all.length / 4);
@@ -79,7 +79,7 @@ describe("C: windowing a big run sheet moves no figure the organiser reads", () 
 
   it("the counts line, every round's done words in order, and the Unscheduled chip read the same from the window as from the whole list", () => {
     const all = league();
-    const w = windowRunSheet(all, [STAGE], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [STAGE], { held: new Set(), nowMs: NOW, tz: "UTC" });
     const whole = render({ fixtures: all });
     const windowed = render({ fixtures: w.shipped, foldedRounds: w.folded });
     expect(countsLine(whole), "premise: the whole list has a counts line").not.toBeNull();

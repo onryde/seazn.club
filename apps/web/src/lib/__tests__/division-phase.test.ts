@@ -22,6 +22,7 @@ import {
   type PhaseFixture,
   type PhaseStage,
 } from "@/lib/division-phase";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 const NOW = "2026-09-05T09:42:00Z"; // Sat 10:42 Europe/London (BST)
 const TZ = "Europe/London";
@@ -109,9 +110,10 @@ describe("resolvePhase — rule order", () => {
     // rule 3 (match_day) does not match either, so this is rule 5 — and rule
     // 5 is the answer only because rules 3 and 4 were asked first and said no.
     expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("scheduled");
-    // …and the row states the outstanding work rather than swallowing it.
+    // Owner ruling 2026-11-26: a match that never STARTED owes no result, so no Needs-you row asks for one. The phase
+    // above is what still says the playoff is outstanding.
     expect(resolveAttention(input({ divisionStatus: "completed", stages, fixtures })).map((a) => a.kind))
-      .toContain("result_missing");
+      .toEqual([]);
   });
   it("2 NOT finished: every stage complete but a fixture is dated TODAY — match_day wins (J2, order)", () => {
     // Same shape one rung higher: the unplayed playoff is dated today, so the
@@ -711,21 +713,26 @@ describe("resolveAttention", () => {
       silent({ id: "nobody", hasScorer: false }),                       // no_scorer, red
       silent({ id: "quiet" }),                                          // not_recording, amber
       fx({ id: "u", status: "scheduled", scheduledAt: null }),          // unscheduled, amber
-      fx({ id: "r", status: "scheduled", scheduledAt: minutesAgo(300), matchMinutes: 90 }), // result_missing, amber
+      fx({ id: "r", status: "in_play", startedAt: minutesAgo(300), eventCount: 4, matchMinutes: 90 }), // result_missing, amber
     ];
     expect(resolveAttention(input({ fixtures })).map((a) => a.kind)).toEqual([
       "no_scorer", "not_recording", "unscheduled", "result_missing",
     ]);
   });
 
-  it("result_missing: scheduled, kickoff + matchMinutes already passed", () => {
-    const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 })];
+  /** A match STARTED, past its window, with no result: the one shape that owes one. `eventCount: 4` keeps the two
+   *  recording rows out of the way. */
+  const owed = (o: Partial<PhaseFixture> = {}): PhaseFixture =>
+    fx({ status: "in_play", eventCount: 4, scheduledAt: "2026-09-05T07:00:00Z", startedAt: null, matchMinutes: 90, ...o });
+
+  it("result_missing: started, kickoff + matchMinutes already passed", () => {
+    const fixtures = [owed({ id: "r" })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
   });
   // T16 fix round 1, R4 (D12): a board of an online round nobody has opened cannot be played — nobody is invited and
   // nobody can take a seat — so its slot passing owes NO result. The run sheet already says so; the ledger now agrees.
   it("R4: result_missing skips a board whose online round is not opened; the same board once opened is owed", () => {
-    const past = { scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 };
+    const past = { status: "in_play", eventCount: 4, scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 };
     const missing = (fixtures: PhaseFixture[]) => resolveAttention(input({ fixtures })).find((a) => a.kind === "result_missing");
     expect(missing([fx({ id: "u", ...past, awaitsRoundOpen: true })]), "the empty case: only an unopened board").toBeUndefined();
     expect(missing([fx({ id: "u", ...past, awaitsRoundOpen: false })]), "the positive pair").toEqual({
@@ -737,13 +744,13 @@ describe("resolveAttention", () => {
     ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
   });
   it("result_missing is not raised while the match window is still open", () => {
-    const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 90 })];
+    const fixtures = [owed({ id: "r", scheduledAt: "2026-09-05T09:00:00Z" })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "result_missing")).toBe(false);
   });
   it("F3: result_missing aggregates per division — one row naming both fixtures, not two rows", () => {
     const fixtures = [
-      fx({ id: "r1", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 }),
-      fx({ id: "r2", scheduledAt: "2026-09-05T06:00:00Z", matchMinutes: 90 }),
+      owed({ id: "r1", scheduledAt: "2026-09-05T07:00:00Z" }),
+      owed({ id: "r2", scheduledAt: "2026-09-05T06:00:00Z" }),
     ];
     const out = resolveAttention(input({ fixtures }));
     expect(out.filter((a) => a.kind === "result_missing")).toHaveLength(1);
@@ -925,19 +932,19 @@ describe("resolveAttention", () => {
   // result once its match window has passed.
   describe("G3/H2: no_scorer/result_missing respect the division's own status", () => {
     it("result_missing does NOT fire for a division that has never started (status 'setup'), even with the match window long passed", () => {
-      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const fixtures = [fx({ id: "r", status: "in_play", eventCount: 4, scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "setup", fixtures }));
       expect(out.some((a) => a.kind === "result_missing")).toBe(false);
     });
     // H2 fix: this used to assert `false` here — G3's gate wrongly excluded
     // a published-but-unstarted timetable, the desk's headline silence bug.
     it("H2: result_missing DOES fire for a division that is only 'scheduled' (published, not started)", () => {
-      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const fixtures = [fx({ id: "r", status: "in_play", eventCount: 4, scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "scheduled", fixtures }));
       expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
     });
     it("result_missing DOES fire once the division is 'active'", () => {
-      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const fixtures = [fx({ id: "r", status: "in_play", eventCount: 4, scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "active", fixtures }));
       expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
     });
@@ -946,7 +953,7 @@ describe("resolveAttention", () => {
     // (a reordering/allowlist mutant that special-cased "active" only would
     // survive every test above but die here).
     it("H2: result_missing DOES fire for a 'completed' division too — the gate excludes setup ONLY, not an allowlist of the other three", () => {
-      const fixtures = [fx({ id: "r", scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
+      const fixtures = [fx({ id: "r", status: "in_play", eventCount: 4, scheduledAt: "2026-09-01T07:00:00Z", matchMinutes: 90 })];
       const out = resolveAttention(input({ divisionStatus: "completed", fixtures }));
       expect(out).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
     });
@@ -1156,11 +1163,14 @@ describe("isUnscheduledFixture", () => {
   });
 });
 
+// Owner ruling 2026-11-26: "when match not started then don't show enter result, we need a result need you only if match
+// started but not entered". A result is owed ONLY by a match that is `in_play` whose KICK-OFF (the actual start, else the
+// plan) plus the division's matchMinutes has passed. The predicate takes no sport, so one sample covers every sport.
 describe("isResultMissing", () => {
   const NOW = Date.UTC(2026, 8, 5, 18, 0);
-  const base = { status: "scheduled", matchMinutes: 60 };
+  const base = { status: "in_play", startedAt: null, matchMinutes: 60 };
 
-  it("is true once kick-off + matchMinutes has passed", () => {
+  it("is true once a started match's kick-off + matchMinutes has passed", () => {
     expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T16:59:00Z" }, NOW)).toBe(true);
   });
 
@@ -1168,51 +1178,56 @@ describe("isResultMissing", () => {
     expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T17:30:00Z" }, NOW)).toBe(false);
   });
 
+  it("is strict at the boundary: exactly kick-off + matchMinutes owes nothing, one millisecond later it does", () => {
+    const f = { ...base, startedAt: "2026-09-05T17:00:00.000Z", scheduledAt: null };
+    expect(isResultMissing(f, NOW)).toBe(false);
+    expect(isResultMissing(f, NOW + 1)).toBe(true);
+  });
+
   it("reads the fixture's OWN matchMinutes, not a constant", () => {
     const at = "2026-09-05T17:00:00Z";
-    expect(isResultMissing({ status: "scheduled", scheduledAt: at, matchMinutes: 30 }, NOW)).toBe(true);
-    expect(isResultMissing({ status: "scheduled", scheduledAt: at, matchMinutes: 90 }, NOW)).toBe(false);
+    expect(isResultMissing({ ...base, scheduledAt: at, matchMinutes: 30 }, NOW)).toBe(true);
+    expect(isResultMissing({ ...base, scheduledAt: at, matchMinutes: 90 }, NOW)).toBe(false);
   });
 
-  it("is false for a LIVE match, however long ago it started", () => {
-    // The exact disagreement finding 2 names: the run sheet used to count
-    // `in_play` — which this predicate never does — as "needs result".
-    expect(isResultMissing({ status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 60 }, NOW)).toBe(false);
+  it("NOT STARTED never owes, however long past its slot - every status but in_play, swept over the whole status list", () => {
+    const longAgo = "2026-09-01T09:00:00Z";
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      if (status === "in_play") continue;
+      // With a stray start time too: the STATUS is what says the match is live, never the presence of a timestamp.
+      for (const startedAt of [null, longAgo]) {
+        expect(isResultMissing({ status, startedAt, scheduledAt: longAgo, matchMinutes: 60 }, NOW), `${status} ${startedAt}`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe((FIXTURE_STATUSES.length - 1) * 2);
+    expect(checked).toBeGreaterThan(0);
+    // The positive pair: the same row, started.
+    expect(isResultMissing({ status: "in_play", startedAt: null, scheduledAt: longAgo, matchMinutes: 60 }, NOW)).toBe(true);
   });
 
-  it("is false for an untimed fixture — an unknown kick-off cannot be overdue", () => {
+  it("measures from the ACTUAL start when there is one, in both directions", () => {
+    // Planned nine hours ago, started fifteen minutes ago: not owed (the plan alone would say owed).
+    expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T17:45:00Z" }, NOW)).toBe(false);
+    // Planned for later, started two hours ago: owed (the plan alone would say not).
+    expect(isResultMissing({ ...base, scheduledAt: "2026-09-05T19:00:00Z", startedAt: "2026-09-05T16:00:00Z" }, NOW)).toBe(true);
+    // Started with no plan at all.
+    expect(isResultMissing({ ...base, scheduledAt: null, startedAt: "2026-09-05T16:00:00Z" }, NOW)).toBe(true);
+  });
+
+  it("is false with no usable kick-off - an unknown start cannot be overdue", () => {
     expect(isResultMissing({ ...base, scheduledAt: null }, NOW)).toBe(false);
+    expect(isResultMissing({ ...base, scheduledAt: "not-a-date" }, NOW)).toBe(false);
+    expect(isResultMissing({ ...base, scheduledAt: null, startedAt: "not-a-date" }, NOW)).toBe(false);
   });
 
   it("agrees with the `result_missing` attention it was lifted out of", () => {
+    const row0 = { eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false };
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
-      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
-    ];
-    const nowIso = "2026-09-05T18:00:00Z";
-    const row = resolveAttention({
-      divisionStatus: "active", stages: [], fixtures,
-      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
-    }).find((a) => a.kind === "result_missing");
-    expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
-      fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
-    );
-  });
-
-  // Gaps wave A fix round 1 (m3, m4/A12): the HELD board. An online board held for the organiser is, to this module, a `scheduled` fixture
-  // whose slot has passed - the hold is the bridge row's, which `PhaseFixture` does not carry (the desk raises its `board_held` row from the
-  // listers, `onlineBoardAttentions`). Spec 2026-11-05 5.4 says "the results-owed count is unchanged", so such a board is counted here, exactly
-  // as the predicate says and exactly as the run sheet's "Needs result" chip does for the same board (run-sheet-filters.test.tsx pins the chip).
-  // A6 first gave `PhaseFixture` a flag that took held boards out of this attention and so lowered the count; the dedupe is the row's
-  // (`needsYouItems`), not the attention's, and there is no such flag any more.
-  it("agrees with the `result_missing` attention for a HELD board: a late online board the desk holds is counted, never skipped (spec 5.4: the count is unchanged)", () => {
-    const base = { status: "scheduled", startedAt: null, eventCount: 0, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false };
-    const fixtures: PhaseFixture[] = [
-      { ...base, id: "held-late", scheduledAt: "2026-09-05T10:00:00Z" },
-      { ...base, id: "plain-late", scheduledAt: "2026-09-05T09:00:00Z" },
-      { ...base, id: "held-in-window", scheduledAt: "2026-09-05T17:45:00Z" },
-      { ...base, id: "unopened-late", scheduledAt: "2026-09-05T08:00:00Z", awaitsRoundOpen: true },
+      { ...row0, id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null },
+      { ...row0, id: "b", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T17:45:00Z" },
+      { ...row0, id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z" },
     ];
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
@@ -1220,11 +1235,91 @@ describe("isResultMissing", () => {
       now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
     }).find((a) => a.kind === "result_missing");
     const ids = row?.kind === "result_missing" ? row.fixtureIds : [];
-    expect(ids, "the late held board is counted beside the plain late one, named; the one still in its window and the unopened one are not").toEqual(["held-late", "plain-late"]);
-    expect(row?.kind === "result_missing" ? row.count : 0).toBe(2);
+    expect(ids).toEqual(["c"]);
+    expect(ids).toEqual(fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id));
+  });
+
+  // Spec 2026-11-05 5.4 ("the results-owed count is unchanged" for a HELD board) used to pin a late, `scheduled` held board
+  // as counted. Owner ruling 2026-11-26 supersedes it for a board that never started: this module counts a held board only
+  // when it is in play (the hold is the bridge row's, which `PhaseFixture` does not carry - the desk raises its own
+  // `board_held` row from the listers, and the run sheet's chip keeps every held board, `owesResult`).
+  it("a HELD board is owed here only once it has STARTED: a late held board still `scheduled` owes nothing, a late live one is counted", () => {
+    const base = { startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false };
+    const fixtures: PhaseFixture[] = [
+      { ...base, id: "held-late-unstarted", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z" },
+      { ...base, id: "held-late-live", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z" },
+      { ...base, id: "held-in-window", status: "in_play", scheduledAt: "2026-09-05T17:45:00Z" },
+      { ...base, id: "unopened-late", status: "in_play", scheduledAt: "2026-09-05T08:00:00Z", awaitsRoundOpen: true },
+    ];
+    const nowIso = "2026-09-05T18:00:00Z";
+    const row = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
+    }).find((a) => a.kind === "result_missing");
+    const ids = row?.kind === "result_missing" ? row.fixtureIds : [];
+    expect(ids).toEqual(["held-late-live"]);
+    expect(row?.kind === "result_missing" ? row.count : 0).toBe(1);
     expect(ids, "the attention is the predicate's own answer over the open rounds' boards").toEqual(
       fixtures.filter((f) => !f.awaitsRoundOpen && isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
     );
+  });
+});
+
+describe("a match that never started never asks for a result (owner ruling 2026-11-26)", () => {
+  it("the empty case first: no fixtures raises no result_missing row", () => {
+    expect(resolveAttention(input({ fixtures: [] })).some((a) => a.kind === "result_missing")).toBe(false);
+  });
+
+  it("scheduled matches long past their slot - paired or not - raise NOTHING at all, in every division status", () => {
+    // The reported screen: "Singles · 8 fixtures missing a result" over matches never started, some not even paired.
+    const fixtures = Array.from({ length: 8 }, (_, i) =>
+      fx({ id: `s${i}`, scheduledAt: "2026-09-01T07:00:00Z", awaitsSeedDraw: false }),
+    );
+    let checked = 0;
+    for (const divisionStatus of ["setup", "scheduled", "active", "completed"] as const) {
+      expect(resolveAttention(input({ divisionStatus, fixtures })), divisionStatus).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a started match past its window raises result_missing alone; started and voided (back to scheduled) raises nothing", () => {
+    const started = fx({ id: "v", status: "in_play", eventCount: 2, startedAt: "2026-09-05T07:00:00Z" });
+    expect(resolveAttention(input({ fixtures: [started] }))).toEqual([{ kind: "result_missing", count: 1, fixtureIds: ["v"] }]);
+    const voided = { ...started, status: "scheduled", eventCount: 0, startedAt: null, scheduledAt: "2026-09-05T07:00:00Z" };
+    expect(resolveAttention(input({ fixtures: [voided] }))).toEqual([]);
+  });
+
+  // `not_recording` ("somebody is assigned and nothing is arriving yet") and `result_missing` are the same silent match
+  // at two ages: one row per fixture, handed over when the match window closes, so the desk's owed count stays the
+  // predicate's own answer (the run sheet's "Needs result" chip asks the same predicate).
+  it("not_recording hands over to result_missing when the window closes - never both on one fixture", () => {
+    const kinds = (elapsed: number) =>
+      resolveAttention(
+        input({
+          fixtures: [fx({ id: "q", status: "in_play", eventCount: 0, hasScorer: true, startedAt: new Date(Date.parse(NOW) - elapsed * 60_000).toISOString(), matchMinutes: DEFAULT_MATCH_MINUTES })],
+        }),
+      ).map((a) => a.kind);
+    const table: [number, string[]][] = [
+      [NOT_RECORDING_GRACE_MINUTES - 1, []],
+      [NOT_RECORDING_GRACE_MINUTES, ["not_recording"]],
+      [DEFAULT_MATCH_MINUTES, ["not_recording"]],
+      [DEFAULT_MATCH_MINUTES + 1, ["result_missing"]],
+      [DEFAULT_MATCH_MINUTES + 600, ["result_missing"]],
+    ];
+    // The table only witnesses the hand-over while the grace sits inside the window.
+    expect(NOT_RECORDING_GRACE_MINUTES).toBeLessThan(DEFAULT_MATCH_MINUTES);
+    let checked = 0;
+    for (const [elapsed, expected] of table) {
+      expect(kinds(elapsed), `elapsed ${elapsed}`).toEqual(expected);
+      checked++;
+    }
+    expect(checked).toBe(table.length);
+  });
+
+  it("no_scorer stays its own question: a started, unstaffed match past its window raises it AND result_missing", () => {
+    const f = fx({ id: "n", status: "in_play", eventCount: 0, hasScorer: false, startedAt: "2026-09-05T07:00:00Z" });
+    expect(resolveAttention(input({ fixtures: [f] })).map((a) => a.kind)).toEqual(["no_scorer", "result_missing"]);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   getFixtureScheduleSources,
   divisionPath,
   seedVenueWithCourts,
+  upcomingUtcDay,
 } from "./helpers";
 import {
   startAiFixtureServer,
@@ -25,6 +26,9 @@ import {
   FIXTURE_COMPILE_UNPARSED,
   type AiFixtureServer,
 } from "./ai-fixture-server";
+
+// A Monday ahead: the boards here are seeded by Auto-schedule, which proposes nothing before now.
+const AI_DAY = upcomingUtcDay(1);
 
 // v4 Task 17 — the full AI Schedule Architect wizard, end to end, against a
 // canned model (ai-fixture-server.ts). Scenarios:
@@ -148,14 +152,14 @@ async function seedAiDivision(
     await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
         matchMinutes: 45,
         gapMinutes: 5,
         courts: courts.map((c) => c.id),
         sessionWindows: [
           {
-            from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
-            to: new Date(Date.UTC(2026, 8, 21, 18, 0)).toISOString(),
+            from: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
+            to: new Date(AI_DAY + 18 * 3_600_000).toISOString(),
           },
         ],
       },
@@ -413,14 +417,14 @@ async function seedRungTwoDivision(
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
-      startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+      startAt: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
       matchMinutes: 20,
       gapMinutes: 0,
       courts: courts.map((c) => c.id),
       sessionWindows: [
         {
-          from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
-          to: new Date(Date.UTC(2026, 8, 21, 21, 0)).toISOString(),
+          from: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
+          to: new Date(AI_DAY + 21 * 3_600_000).toISOString(),
         },
       ],
     },
@@ -672,20 +676,20 @@ test("a move re-prices the open console before the server has even answered", as
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
-      startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+      startAt: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
       matchMinutes: 45,
       gapMinutes: 5,
       courts: courts.map((c) => c.id),
       sessionWindows: [
         {
-          from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
-          to: new Date(Date.UTC(2026, 8, 21, 18, 0)).toISOString(),
+          from: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
+          to: new Date(AI_DAY + 18 * 3_600_000).toISOString(),
         },
       ],
       blackouts: [
         {
-          from: new Date(Date.UTC(2026, 8, 21, 10, 30)).toISOString(),
-          to: new Date(Date.UTC(2026, 8, 21, 11, 30)).toISOString(),
+          from: new Date(AI_DAY + 10 * 3_600_000 + 30 * 60_000).toISOString(),
+          to: new Date(AI_DAY + 11 * 3_600_000 + 30 * 60_000).toISOString(),
         },
       ],
     },
@@ -813,14 +817,14 @@ async function seedJointCompetition(
     await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
-        startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+        startAt: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
         matchMinutes: 20,
         gapMinutes: 0,
         courts: courts.map((c) => c.id),
         sessionWindows: [
           {
-            from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
-            to: new Date(Date.UTC(2026, 8, 21, 21, 0)).toISOString(),
+            from: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
+            to: new Date(AI_DAY + 21 * 3_600_000).toISOString(),
           },
         ],
       },
@@ -1336,20 +1340,20 @@ test("blackout injected over a scheduled fixture surfaces the repair nudge", asy
   await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
     config: {
-      startAt: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
+      startAt: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
       matchMinutes: 45,
       gapMinutes: 5,
       courts: courts.map((c) => c.id),
       sessionWindows: [
         {
-          from: new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString(),
-          to: new Date(Date.UTC(2026, 8, 21, 18, 0)).toISOString(),
+          from: new Date(AI_DAY + 9 * 3_600_000).toISOString(),
+          to: new Date(AI_DAY + 18 * 3_600_000).toISOString(),
         },
       ],
       blackouts: [
         {
-          from: new Date(Date.UTC(2026, 8, 21, 8, 30)).toISOString(),
-          to: new Date(Date.UTC(2026, 8, 21, 10, 0)).toISOString(),
+          from: new Date(AI_DAY + 8 * 3_600_000 + 30 * 60_000).toISOString(),
+          to: new Date(AI_DAY + 10 * 3_600_000).toISOString(),
         },
       ],
     },

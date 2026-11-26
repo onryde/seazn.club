@@ -1,5 +1,6 @@
 import "server-only";
 import type { RateLimitConfig } from "@/lib/rate-limit";
+import { schedulerLog } from "@seazn/scheduler";
 import {
   calendarDaysCovering,
   slotFixtures,
@@ -10,7 +11,45 @@ import {
   type SlotConfig,
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
+import { greedySeed } from "../schedule-solver-rest";
 import { MS_PER_MIN } from "./helpers";
+
+/** The grid a floor taken from the clock is rounded UP to, so a proposal reads 10:05 rather than 10:03. */
+const START_FLOOR_STEP_MS = 5 * MS_PER_MIN;
+
+/**
+ * Owner ruling 2026-11-26: a full Auto-schedule proposes nothing before the later of the division's
+ * start time and now, while the schedule has not ended. The window is whole DAYS (`applyWindow`), so
+ * the solver was free to use 00:00 on the first day — before the saved start time, and on stg almost
+ * a day in the past. A schedule whose window has ENDED is returned untouched: that is an organiser
+ * laying out matches already played.
+ *
+ * Raises `startAt` (the greedy lattice) and `window.from` (the solver's universe, the day spread and
+ * the capacity guard) together, and takes the same minutes off `horizonMinutes`, which counts from
+ * `startAt`. BUILD and POLISH; REFLOW is left alone. A card that has to stay and already starts
+ * before the floor never reaches the engine as one of its fixtures (`autoSchedule` holds it).
+ */
+export function floorAutoStart<T extends SlotConfig & VerifyConfig>(config: T, now: number): T {
+  const floor = autoStartFloor(config, now);
+  if (floor === undefined) return config;
+  const { window } = config;
+  return {
+    ...config,
+    startAt: floor,
+    ...(window !== undefined
+      ? { window: { from: Math.min(window.to, Math.max(window.from, floor)), to: window.to } }
+      : {}),
+    ...(config.horizonMinutes !== undefined
+      ? { horizonMinutes: Math.max(0, config.horizonMinutes - Math.ceil((floor - config.startAt) / MS_PER_MIN)) }
+      : {}),
+  };
+}
+
+/** The instant {@link floorAutoStart} raises the start to, or `undefined` once the schedule has ended. */
+export function autoStartFloor(config: SlotConfig & VerifyConfig, now: number): number | undefined {
+  if (config.window !== undefined && config.window.to <= now) return undefined;
+  return config.startAt >= now ? config.startAt : Math.ceil(now / START_FLOOR_STEP_MS) * START_FLOOR_STEP_MS;
+}
 
 /** How much room past the work the solver is given to rearrange inside, when the
  *  competition itself sets no end date. A day, not a year — and the size is
@@ -249,6 +288,40 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
   return { ...config, window: { from, to } };
 }
 
+/** How many matches fit between `from` and `to`: inside the play hours when any are set, back to back
+ *  with the gap between them, on every court. An ESTIMATE: blackouts, court hours and other bookings
+ *  are not subtracted, which is why `daySpreadThatPlacesAll` checks the cap it produces. */
+function matchRoom(config: SlotConfig & VerifyConfig, from: number, to: number): number {
+  if (from >= to) return 0;
+  const sessions = config.sessionWindows ?? [];
+  const open = (sessions.length === 0 ? [{ from, to }] : sessions)
+    .map((s) => ({ from: Math.max(s.from, from), to: Math.min(s.to, to) }))
+    .filter((s) => s.from < s.to)
+    .sort((a, b) => a.from - b.from);
+  // Overlapping play hours are one stretch of court time, not two.
+  const stretches: { from: number; to: number }[] = [];
+  for (const s of open) {
+    const last = stretches.at(-1);
+    if (last !== undefined && s.from <= last.to) last.to = Math.max(last.to, s.to);
+    else stretches.push({ ...s });
+  }
+  const gap = config.gapMinutes * MS_PER_MIN;
+  const pitch = config.matchMinutes * MS_PER_MIN + gap;
+  const perCourt = stretches.reduce((n, s) => n + Math.floor((s.to - s.from + gap) / pitch), 0);
+  return perCourt * config.courts.length;
+}
+
+/** The smallest per-day cap under which `fixtures` still fit, or `undefined` when no cap would let
+ *  them: a day takes at most its room, and no more than the cap leaves after what is already on it. */
+function smallestDayCap(days: readonly { room: number; taken: number }[], fixtures: number): number | undefined {
+  const highest = Math.max(...days.map((d) => d.room + d.taken));
+  for (let cap = 1; cap <= highest; cap++) {
+    const fits = days.reduce((n, d) => n + Math.min(Math.max(0, cap - d.taken), d.room), 0);
+    if (fits >= fixtures) return cap;
+  }
+  return undefined;
+}
+
 /**
  * The auto pass's default `max_fixtures_per_day`, applied only when the
  * organiser set none of their own for this division — and, at its one call
@@ -276,15 +349,22 @@ export function boundSolverWindow<T extends SlotConfig & VerifyConfig>(
  * wired end to end (`build-encode.ts` groups by `dayKeyInTz` and encodes an
  * `AtMost` per day) — an organiser can already set it through the AI parser
  * or the constraints panel. This only fills the gap for a run that set
- * neither: `ceil(fixtures / availableDays)` spreads them roughly evenly
- * across the window's own dates instead of leaving every board on one day
- * (not necessarily the first) by default. An explicit whole-division rule from either surface always wins
- * untouched — this never overwrites one.
+ * neither: the SMALLEST cap that still leaves every fixture a slot
+ * (`smallestDayCap`) spreads them roughly evenly across the window's own dates
+ * instead of leaving every board on one day (not necessarily the first) by
+ * default. An even share (`ceil(fixtures / days)`) is not enough: a day that can
+ * hold fewer than its share left the rest unplaceable. An explicit
+ * whole-division rule from either surface always wins untouched — this never
+ * overwrites one.
  */
 export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
   config: T,
   divisionId: string,
   fixtureCount: number,
+  /** Starts of this division's cards that are on the board but not among the `fixtureCount`: held,
+   *  played, another stage's. The engine's day tally counts them, so a cap sized without them is too
+   *  small. */
+  taken: readonly number[] = [],
 ): T {
   const existingHard = config.constraints?.hard ?? [];
   const hasExplicitCap = existingHard.some(
@@ -292,17 +372,25 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
   );
   if (hasExplicitCap || fixtureCount <= 0 || config.window === undefined || config.tz === undefined) return config;
 
-  // Same padded-by-one-day-at-each-end shape `build-grid.ts` and `repair.ts`
-  // already rely on (`calendarDaysCovering`'s own doc comment) — undo the pad
-  // rather than reimplement day counting a third way.
-  const days = calendarDaysCovering(config.window, config.tz).length - 2;
-  if (days <= 1) return config;
+  // `calendarDaysCovering` pads a day at each end AND includes the day `to` falls on, while
+  // `applyWindow` hands over an EXCLUSIVE `to` (midnight after the last day), so its length cannot be
+  // read as a day count. What counts is the room each bucket really has: a day nobody can play on
+  // must not take a share of the fixtures.
+  const { window } = config;
+  const days = calendarDaysCovering(window, config.tz).flatMap((day) => {
+    const room = matchRoom(config, Math.max(day.from, window.from), Math.min(day.to, window.to));
+    if (room === 0) return [];
+    return [{ room, taken: taken.filter((t) => t >= day.from && t < day.to).length }];
+  });
+  if (days.length <= 1) return config;
+  const count = smallestDayCap(days, fixtureCount);
+  if (count === undefined) return config;
 
   const hard: HardConstraint[] = [
     ...existingHard,
     {
       type: "max_fixtures_per_day",
-      count: Math.max(1, Math.ceil(fixtureCount / days)),
+      count,
       scope: { kind: "division", divisionId },
     },
   ];
@@ -318,4 +406,27 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
       hard,
     },
   };
+}
+
+/**
+ * `capped` (the default day spread) only if it costs the run no placement; else `uncapped`. The room
+ * estimate behind the cap cannot see everything a day loses (blackouts, court hours, other bookings,
+ * rest, round gaps), so the cap is not trusted, it is tried: on the engine's own greedy board, which no
+ * run places fewer than (its "never worse than greedy" floor, and every fallback ships that board). A
+ * greedy board that places everything under the cap therefore settles it. Anything left off and the cap
+ * is dropped, so the run IS the run without it. No second solver call, and no solver call here: a
+ * greedy pass is local arithmetic. A cap the organiser set is in both configs and is never touched.
+ */
+export async function daySpreadThatPlacesAll<T extends SlotConfig & VerifyConfig & { courts: string[] }>(
+  capped: T,
+  uncapped: T,
+  run: {
+    fixtures: readonly SchedulableFixture[];
+    existing: readonly Assignment[];
+    dependencies: readonly OrderDependency[];
+  },
+): Promise<T> {
+  if (capped === uncapped) return uncapped;
+  const seed = await greedySeed({ ...run, config: capped, log: schedulerLog }, run.fixtures);
+  return seed.assignments.length === run.fixtures.length ? capped : uncapped;
 }

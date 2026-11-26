@@ -75,19 +75,16 @@ const UNREACHABLE: Record<string, string> = {
   "setting_up/not_recording": "not_recording needs an in_play fixture, which is match day",
   "scheduled/not_recording": "not_recording needs an in_play fixture, which is match day",
   "finished/unscheduled": "unscheduled needs a `scheduled` fixture, which is live",
-  "finished/result_missing": "result_missing needs a `scheduled` fixture, which is live",
+  // Owner ruling 2026-11-26: only a STARTED match owes a result, so this row needs an in_play fixture too — match day.
+  "finished/result_missing": "result_missing needs an in_play fixture, which is match day",
   // `needs_draw` is raised for the FIRST open stage (a later one needs
   // `noLive`, and its own generated TBD fixtures are `scheduled`, i.e. live),
   // and a first open stage owing work is exactly rule 4's `setting_up` —
   // unless rule 3 gets there first. So the draw row can only ever sit beside
   // `setting_up` or `match_day`.
   "scheduled/needs_draw": "rule 4 fires whenever the first open stage owes its draw",
-  // `result_missing` needs a fixture that carries a DATE, and any dated
-  // fixture is answered by rule 3 (today) or rule 5 (`hasScheduledFixture`)
-  // long before rule 6's `setting_up` fallback is reached. The only way to
-  // pair the two would be a stage owing work as well — and that raises a RED
-  // row, which leads instead.
-  "setting_up/result_missing": "a dated fixture is answered by rule 3 or 5, never rule 6's setting_up",
+  "setting_up/result_missing": "result_missing needs an in_play fixture, which is match day",
+  "scheduled/result_missing": "result_missing needs an in_play fixture, which is match day",
   // W2a (addendum 9): a HELD fixture — `needs_decision`, or a recorded abandon awaiting its settle — is live
   // (`isLiveFixture`), so rule 2 refuses `finished` while one exists. That is the whole point of the row.
   "finished/needs_decision": "a held fixture is live, which blocks rule 2",
@@ -139,6 +136,7 @@ const NOW = "2026-09-05T09:42:00Z"; // Sat 10:42 Europe/London
 const TZ = "Europe/London";
 const TODAY = "2026-09-05T14:00:00Z";
 const PAST = "2026-09-05T06:00:00Z"; // today, and its window has closed
+const QUIET = "2026-09-05T08:42:00Z"; // an hour ago, its window still open
 const FUTURE = "2026-09-19T09:00:00Z";
 
 const st = (o: Partial<PhaseStage> = {}): PhaseStage => ({
@@ -201,12 +199,6 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a" }), fxt({ id: "b", status: "scheduled", scheduledAt: null })],
   },
   {
-    why: "scheduled/result_missing — an overdue kick-off with the rest of the season still dated",
-    stages: [st()],
-    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: FUTURE }),
-               fxt({ id: "b", status: "scheduled", scheduledAt: "2026-09-01T06:00:00Z" })],
-  },
-  {
     why: "scheduled/registrations_waiting — a running division with late entries to approve",
     stages: [st()],
     fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: FUTURE })],
@@ -240,12 +232,12 @@ const SHAPES: Shape[] = [
   },
   {
     // The complement of the row above: a scorer IS assigned, and nothing has
-    // arrived from them. `PAST` is 3h42m before NOW, comfortably past the
-    // grace, so this shape survives a change to the constant in either
-    // direction rather than sitting on its boundary.
+    // arrived from them. `QUIET` is an hour before NOW: well past the grace and
+    // well inside the 90-minute window (past it the match is owed a result
+    // instead), so the shape sits on neither boundary.
     why: "match_day/not_recording — kicked off with a scorer assigned, still nothing recorded",
     stages: [st()],
-    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true, eventCount: 0, scheduledAt: PAST })],
+    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true, eventCount: 0, scheduledAt: QUIET })],
   },
   {
     why: "match_day/unscheduled — playing today, later rounds undated",
@@ -254,9 +246,9 @@ const SHAPES: Shape[] = [
                fxt({ id: "b", status: "scheduled", scheduledAt: null })],
   },
   {
-    why: "match_day/result_missing — this morning's match has no result and this evening's is still to come",
+    why: "match_day/result_missing — this morning's match started and still has no result",
     stages: [st()],
-    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: PAST })],
+    fixtures: [fxt({ id: "a", status: "in_play", scheduledAt: PAST })],
   },
   {
     why: "match_day/registrations_waiting — playing today with entries pending",

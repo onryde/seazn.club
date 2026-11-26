@@ -68,16 +68,22 @@ export type RunSheetKeepContext = {
   /** T16 — online chess boards (`listRunSheetOnlinePlay`, organisers only): a board HELD for the organiser owes its
    *  result even before its slot has run, so "Needs result" keeps it and counts it. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  /** Each in-play fixture's ACTUAL start (`listFixtureKickoffs`), the clock "Needs result" measures from, as the desk's
+   *  `result_missing` does. A live row with no entry falls back to its scheduled time. */
+  kickoffs?: Record<string, string>;
 };
 
-/** "Needs result": a fixture past its slot with no result (division-phase.ts), or an online board held for the
- *  organiser (T16) — never an online board whose round is not opened (D12) — one predicate for the filter and its
- *  count. */
-function owesResult(f: RunSheetFixture, ctx: Pick<RunSheetKeepContext, "nowMs" | "matchMinutes" | "onlinePlay">): boolean {
+/** "Needs result": a match that STARTED, ran past its window and has no result (`isResultMissing`, division-phase.ts;
+ *  a never-started match owes none — owner ruling 2026-11-26), or an online board held for the organiser (T16) — never
+ *  an online board whose round is not opened (D12) — one predicate for the filter and its count. */
+function owesResult(f: RunSheetFixture, ctx: Pick<RunSheetKeepContext, "nowMs" | "matchMinutes" | "onlinePlay" | "kickoffs">): boolean {
   if ((ctx.onlinePlay?.[f.id]?.held ?? null) !== null) return true;
   // D12: a board of an online round nobody has opened cannot be played yet, so its slot passing owes nothing.
   if (ctx.onlinePlay?.[f.id]?.unopened === true) return false;
-  return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes: ctx.matchMinutes }, ctx.nowMs);
+  return isResultMissing(
+    { status: f.status, startedAt: ctx.kickoffs?.[f.id] ?? null, scheduledAt: f.scheduled_at, matchMinutes: ctx.matchMinutes },
+    ctx.nowMs,
+  );
 }
 
 // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
@@ -114,7 +120,7 @@ export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: R
   if (stageId !== null && f.stage_id !== stageId) return false;
   if (filter === "all") return true;
   if (isBye(f)) return false;
-  if (filter === "needs_result") return owesResult(f, { nowMs, matchMinutes, onlinePlay: ctx.onlinePlay });
+  if (filter === "needs_result") return owesResult(f, { nowMs, matchMinutes, onlinePlay: ctx.onlinePlay, kickoffs: ctx.kickoffs });
   if (filter === "unscheduled") return isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
   // "today": a fixture with a stream up, and otherwise only a TIMED fixture landing on today's venue-zone day.
   if (ctx.streamStates?.[f.id] !== undefined) return true;
@@ -143,6 +149,7 @@ export function RunSheet({
   awaitingSettle,
   feedLabels,
   onlinePlay,
+  kickoffs,
   arbiterHrefFor,
   entrantStatuses,
   matchDayHref,
@@ -209,6 +216,8 @@ export function RunSheet({
   /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
    *  organisers), keyed by fixture id; every row gets ITS OWN entry. Absent = no chips. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  /** Fixture id → actual start for the matches in play (`RunSheetKeepContext.kickoffs`). Read only by "Needs result". */
+  kickoffs?: Record<string, string>;
   /** T16 — Match Day's panel opened on one board (`?board=`): where a row's camera / off-Seazn chip leads. */
   arbiterHrefFor?: (fixtureId: string) => string;
   /** Match Day B2 - set ONLY on a match day, for an organiser: where an unscheduled match's "Find a court" leads (the division
@@ -388,16 +397,17 @@ export function RunSheet({
   //    absence ("No fixtures match…") where there was only inaccessibility.
   //    A display filter's membership is never a write permission's business.
   //  - `open_pad` is returned only for `in_play`, which is DISJOINT from
-  //    `result_missing` (that one requires `scheduled`). The organiser's
-  //    end-of-day backlog — the thing this chip exists for — read zero,
-  //    while a match still being played was counted as owing its result.
+  //    the `result_missing` of the day (which then required `scheduled`).
+  //    Since the owner ruling of 2026-11-26 a result is owed only by a
+  //    STARTED match past its window — still never "any live match": one
+  //    inside its window owes nothing yet.
   //
   // `fixtureRowAction` is still the ONE authority for what a ROW OFFERS; it
   // is simply not the authority for what a fixture IS. Each row asks it for
   // itself (`RunSheetRow`), and this component no longer restates it at all.
   // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
   const keep = (f: RunSheetFixture): boolean =>
-    runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates, onlinePlay });
+    runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates, onlinePlay, kickoffs });
 
   // Filter counts read over EVERY block's fixtures, unfiltered — a filter's
   // own count must not shrink just because it is the one currently selected.
@@ -879,6 +889,7 @@ export function RunSheet({
           nowMs={nowMs}
           matchMinutes={matchMinutes}
           onlinePlay={onlinePlay}
+          kickoffs={kickoffs}
           filter={filter}
           onFilter={onFilter}
           className="border-b border-slate-100"
@@ -985,7 +996,7 @@ const filtersLabel = (filter: RunSheetFilter, msg: Msg): string => msg(RUN_SHEET
  *  (ruling R7a). */
 export function runSheetCounts(
   blocks: readonly RunSheetBlock[],
-  ctx: Pick<RunSheetKeepContext, "stageId" | "nowMs" | "matchMinutes" | "onlinePlay">,
+  ctx: Pick<RunSheetKeepContext, "stageId" | "nowMs" | "matchMinutes" | "onlinePlay" | "kickoffs">,
 ): { needsResult: number; unscheduled: number } {
   let needsResult = 0;
   let unscheduled = 0;
@@ -1017,6 +1028,7 @@ export function RunSheetFilterBar({
   nowMs,
   matchMinutes,
   onlinePlay,
+  kickoffs,
   filter,
   onFilter,
   className,
@@ -1027,6 +1039,7 @@ export function RunSheetFilterBar({
   nowMs: number;
   matchMinutes: number;
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  kickoffs?: Record<string, string>;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
   className?: string;
@@ -1034,7 +1047,7 @@ export function RunSheetFilterBar({
   foldedUnscheduled?: number;
 }) {
   const msg = useMsg();
-  const counted = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay });
+  const counted = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay, kickoffs });
   const needsResult = counted.needsResult;
   const unscheduled = counted.unscheduled + foldedUnscheduled;
   const filters: { value: RunSheetFilter; label: string; count?: number }[] = [

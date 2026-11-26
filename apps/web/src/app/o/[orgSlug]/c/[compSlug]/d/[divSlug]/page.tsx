@@ -43,6 +43,7 @@ import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // second copy of this exact rule).
 import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
+import { listFixtureKickoffs } from "@/server/usecases/fixture-kickoffs";
 import { BracketPanel } from "@/components/v2/bracket-panel";
 import { bracketPlacement } from "@/lib/bracket-view";
 import { listEntrants, listLichessLinkGaps, DEPARTED_STATUSES } from "@/server/usecases/entrants";
@@ -252,7 +253,7 @@ export default async function DivisionPage({
   // does not carry.
   const runSheetWindow =
     tab === "fixtures" && division.sport_key !== "boardgame"
-      ? windowRunSheet(fixtures, stages, { held: new Set(awaitingSettle), nowMs: new Date().getTime(), matchMinutes, tz: scheduleSettings.tz })
+      ? windowRunSheet(fixtures, stages, { held: new Set(awaitingSettle), nowMs: new Date().getTime(), tz: scheduleSettings.tz })
       : null;
   // Review wave 3: the panel gets court IDENTITY and display only — same trim
   // the schedule page does, and for the same reason. `listVenues` rows carry
@@ -660,6 +661,10 @@ export default async function DivisionPage({
   // page must still lead to Stop (it replaced F1's probe stack and I-2's). A viewer and every other tab read nothing.
   const streamStates =
     tab === "fixtures" && canEdit ? await openStreamStates(auth, fixtures.map((f) => f.id)) : {};
+  // The run sheet's "Needs result" clock is the match's ACTUAL start (owner ruling 2026-11-26: only a started match owes
+  // a result), the same instant the competition desk measures from. Every viewer of the Fixtures tab: the filter is a
+  // fact about the match, never a write right.
+  const kickoffs = tab === "fixtures" ? await listFixtureKickoffs(auth, fixtures) : {};
 
   // The round is opened and watched on Match Day (the Arbiter page is retired into it), so this tab hands it over wherever Match Day
   // has online boards to show. Two predicates (pre-flight C18), not one:
@@ -1233,6 +1238,7 @@ export default async function DivisionPage({
               streamStates={streamStates}
               awaitingSettle={[...awaitingSettle]}
               onlinePlay={runSheetOnlinePlay}
+              kickoffs={kickoffs}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
               divisionStatus={division.status}

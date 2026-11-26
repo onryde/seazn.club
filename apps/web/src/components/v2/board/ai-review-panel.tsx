@@ -22,7 +22,7 @@ import { DivisionChip } from "./ai-division-chip";
 import { Marker } from "./ai-marker";
 import { reviewRowCount, reviewRowPulseIds, type ReviewRow } from "./ai-review";
 import { CONFLICT_LABEL } from "./types";
-import { formatConflictDetail } from "./conflict-detail-format";
+import { formatConflictDetail, roundOrderDetailText } from "./conflict-detail-format";
 
 export function AiReviewPanel({
   rows,
@@ -173,7 +173,8 @@ export function AiReviewPanel({
                 {row.kind === "warning" ? (
                   <>
                     <p className="text-[11px] font-medium text-amber-700">
-                      {conflictLabel(row.reason)}
+                      {roundOrderDetailText(row.details, { msg, entrantNames, fixtureTitles })?.label ??
+                        conflictLabel(row.reason)}
                     </p>
                     {row.details && (
                       <p className="mt-0.5 text-[10px] text-slate-500">

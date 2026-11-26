@@ -64,6 +64,8 @@ vi.mock("@/server/usecases/competitions", () => ({
 }));
 const fixturesSpies = vi.hoisted(() => ({ listDivisionFixtures: vi.fn(async () => [] as unknown[]), listFixtureHeadlines: vi.fn(async () => ({})) }));
 vi.mock("@/server/usecases/fixtures", () => fixturesSpies);
+const kickoffSpies = vi.hoisted(() => ({ listFixtureKickoffs: vi.fn(async () => ({}) as Record<string, string>) }));
+vi.mock("@/server/usecases/fixture-kickoffs", () => kickoffSpies);
 const authSpies = vi.hoisted(() => ({ requireResourceAuth: vi.fn(async () => ({ orgId: "org-1", via: "session", userId: "user-1", role: "owner" })) }));
 vi.mock("@/server/api-v1/auth", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/server/api-v1/auth")>()), ...authSpies }));
 // The real module under the one stub: the page reads `DEPARTED_STATUSES` from it (the knockout desk's waiting list).
@@ -208,6 +210,26 @@ describe("C: the organiser's Fixtures tab of a big division ships its open round
     const props = (await panelProps())!;
     expect(props.fixtures.length).toBe(190);
     expect(props.foldedRounds).toEqual([]);
+  });
+});
+
+describe("the Fixtures tab hands the run sheet each live match's actual start (owner ruling 2026-11-26)", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([GROUP]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    kickoffSpies.listFixtureKickoffs.mockClear();
+  });
+
+  it("asks for the starts of the division's own fixtures and passes the answer to StagesPanel", async () => {
+    const all = groups512().filter((f) => f.pool_id === "pool0");
+    fixturesSpies.listDivisionFixtures.mockResolvedValue(all);
+    const answer = { [all[0]!.id]: new Date(NOW).toISOString() };
+    kickoffSpies.listFixtureKickoffs.mockResolvedValueOnce(answer);
+    const props = (await panelProps()) as unknown as { kickoffs: Record<string, string> };
+    expect(props.kickoffs).toBe(answer);
+    expect(kickoffSpies.listFixtureKickoffs.mock.calls).toEqual([[PAGE.auth, all]]);
   });
 });
 

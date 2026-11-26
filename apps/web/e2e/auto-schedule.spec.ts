@@ -6,6 +6,7 @@ import {
   createStageAndGenerate,
   divisionPath,
   seedVenueWithCourts,
+  upcomingUtcDay,
 } from "./helpers";
 
 // T15 — the three solver actions on the schedule board, driven through the
@@ -42,7 +43,8 @@ import {
 // that produced it anyway.
 
 /** A Wednesday well inside the seeded competition's window. */
-const START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+// A Monday ahead: Auto-schedule and Improve times propose nothing before now.
+const START = new Date(upcomingUtcDay(1) + 9 * 3_600_000).toISOString();
 /** 30-minute matches, no turnaround — the grid every board below sits on. */
 const SLOT_MIN = 30;
 const slotAt = (n: number) =>

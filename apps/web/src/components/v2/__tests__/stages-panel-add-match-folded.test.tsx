@@ -86,7 +86,7 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
       calls.push(url);
       return new Response(JSON.stringify({ ok: true, data: all }), { status: 200 });
     });
-    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     expect(w.shipped.length, "premise: the window ships a fraction").toBeLessThan(all.length / 4);
     const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
     await openAddMatch(island);
@@ -102,7 +102,7 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
       return new Response("{}", { status: 500 });
     });
     const all = league();
-    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
     await openAddMatch(island);
     expect(calls.length, "read once, not in a loop").toBe(1);
@@ -115,7 +115,7 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
     const { createElement } = await import("react");
     const all = league();
     vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
-    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
     await openAddMatch(island);
     const el = island.tree().find((x) => "roundRows" in propsOf(x) && typeof propsOf(x).onCancel === "function")!;
@@ -138,7 +138,7 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
       n += 1;
       return n === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ ok: true, data: all }), { status: 200 });
     });
-    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
     await openAddMatch(island);
     expect(form(island).roundRowsFailed, "premise: the first read failed").toBe(true);
@@ -159,7 +159,7 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
       n += 1;
       return n === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ ok: true, data: all }), { status: 200 });
     });
-    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, tz: "UTC" });
     const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
     await openAddMatch(island);
     expect(form(island).roundRowsFailed, "premise: the first read failed").toBe(true);

@@ -4,12 +4,13 @@
 // A folded round's rows load when its bar is opened (`load-run-sheet-round.ts`).
 //
 // Which rounds ship rows: Option A's (`planRounds`: live, next, the part-played frontier) and, for an organiser, every round that holds
-// something that wants them - a held match (`needs_decision`, or awaiting its settle), a match owing its result, a match timed today.
+// something that wants them - a live match, a held match (`needs_decision`, or awaiting its settle), a match timed today. A result
+// is owed only by a match in play (`isResultMissing`, owner ruling 2026-11-26), so the live clause ships every round that owes one.
 // So the Needs result and Today chips, and every held row, are exact over what was shipped; only Unscheduled reaches into folded rounds,
 // through the tally. Brackets, Swiss and americano stages ship whole: their cards read every round (the Swiss pairing menu, the legend).
 // Pure and client-safe.
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
-import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
+import { isUnscheduledFixture } from "@/lib/division-phase";
 import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 import { bucketCounts, fixtureBucket, pagesByRound, planRounds } from "@/lib/round-paging";
 import { countsAsMatch, isBye, playKey, roundUnderWay, sortRoundsByPlay, type MatchLineRow } from "@/lib/run-sheet-groups";
@@ -63,7 +64,6 @@ export interface RunSheetWindowContext {
   /** Fixture ids awaiting their settle (the page's `listFixturesAwaitingSettle`). */
   held: ReadonlySet<string>;
   nowMs: number;
-  matchMinutes: number;
   /** The venue zone the run sheet's "today" is read in. */
   tz: string;
 }
@@ -75,7 +75,6 @@ function wantsAttention(f: PagedRunSheetRow, ctx: RunSheetWindowContext, today: 
   if (fixtureBucket(f.status) === "live") return true;
   if (f.status === "needs_decision" || ctx.held.has(f.id)) return true;
   if (isBye(asLine(f))) return false;
-  if (isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes: ctx.matchMinutes }, ctx.nowMs)) return true;
   return f.scheduled_at !== null && dayKeyInTz(Date.parse(f.scheduled_at), ctx.tz) === today;
 }
 

@@ -15,6 +15,9 @@
 // that can be wrong without anybody noticing.
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+// Type-only: a value import of the scheduling barrel reaches gRPC (see conflict-detail-format.ts).
+import type { ConflictDetail } from "@seazn/engine/scheduling";
+import { roundOrderDetailText } from "@/components/v2/board/conflict-detail-format";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -55,7 +58,7 @@ export interface DupCandidate {
  *  id alone. Absent metadata never hides the row. */
 export interface RevealedBoard {
   division_id: string;
-  conflicts: { fixtureId: string; reason: string; detail?: string }[];
+  conflicts: { fixtureId: string; reason: string; detail?: string; details?: ConflictDetail }[];
   name?: string;
   status?: string;
 }
@@ -765,7 +768,16 @@ export function MergeOutcomeCard({
               // overlap on a completed board is a data-quality signal, not a
               // scheduling job.
               const completed = board.status === "completed";
-              const reasons = [...new Set(board.conflicts.map((c) => c.reason))];
+              // One chip per thing said. A round-order conflict travels under the feeder's reason or
+              // the generic no-slot one, so it takes its wording from its details.
+              const chips = new Map(
+                board.conflicts.map((c) => {
+                  const text =
+                    roundOrderDetailText(c.details, { msg, entrantNames: {}, fixtureTitles: {} })?.label ??
+                    msg(CONFLICT_LABEL[c.reason] ?? "persons.dupes.conflict.other");
+                  return [`${c.reason}|${text}`, { reason: c.reason, text }] as const;
+                }),
+              );
               return (
                 <li
                   key={board.division_id}
@@ -789,15 +801,13 @@ export function MergeOutcomeCard({
                     </span>
                   </div>
                   <ul className="mt-1 flex flex-wrap gap-1.5">
-                    {reasons.map((reason) => (
+                    {[...chips].map(([key, chip]) => (
                       <li
-                        key={reason}
-                        data-conflict-reason={reason}
+                        key={key}
+                        data-conflict-reason={chip.reason}
                         className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600"
                       >
-                        {CONFLICT_LABEL[reason]
-                          ? msg(CONFLICT_LABEL[reason]!)
-                          : msg("persons.dupes.conflict.other")}
+                        {chip.text}
                       </li>
                     ))}
                   </ul>

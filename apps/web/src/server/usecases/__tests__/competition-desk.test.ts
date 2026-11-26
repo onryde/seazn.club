@@ -311,7 +311,9 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       const d = desk.divisions.get(divisionId)!;
       expect(d.next).not.toBeNull();
       expect(Date.parse(d.next!.scheduled_at!)).toBe(future.getTime());
-      expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [rows[0]!.id] });
+      // The past fixture never started, so nothing asks for its result (owner ruling 2026-11-26).
+      expect(d.attention.map((a) => a.kind)).toContain("unscheduled");
+      expect(d.attention.some((a) => a.kind === "result_missing")).toBe(false);
     });
     it("with ONLY a past-dated fixture, next is null and the masthead ladder does not claim a next date", async () => {
       const { auth } = await seedOrg();
@@ -525,8 +527,9 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(fx.length, "premise: five fixtures to put in play").toBe(5);
     const [user] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified) values (${`desk-link-${randomUUID()}@test.local`}, 'Desk', true) returning id`;
-    // Five in-play fixtures, zero events, nobody assigned; minutes since kick-off chosen around the grace.
-    const minutes = [5, 30, 5, 5, 5];
+    // Five in-play fixtures, zero events, nobody assigned; minutes since kick-off chosen around the grace. The late one stays
+    // inside the 30-minute match window: past it the quiet match is owed a result instead (owner ruling 2026-11-26).
+    const minutes = [5, 22, 5, 5, 5];
     for (const [i, f] of fx.entries()) {
       await sql`update fixtures set status = 'in_play', scheduled_at = now() - make_interval(mins => ${minutes[i]!}) where id = ${f.id}`;
     }
@@ -553,7 +556,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       [...(d.attention.find((a) => a.kind === kind) as { fixtureIds?: string[] } | undefined)?.fixtureIds ?? []].sort();
     // no_scorer: every in-play fixture without an active link (no official anywhere here).
     expect(ids("no_scorer")).toEqual(fx.map((f) => f.id).filter((id) => !linked.has(id)).sort());
-    // not_recording: the linked fixtures quiet for at least the grace — the 30-minute one, not the 5-minute one.
+    // not_recording: the linked fixtures quiet for at least the grace — the 22-minute one, not the 5-minute one.
     expect(ids("not_recording")).toEqual(
       fx.filter((f, i) => linked.has(f.id) && minutes[i]! >= NOT_RECORDING_GRACE_MINUTES).map((f) => f.id).sort(),
     );
@@ -589,7 +592,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
   // fixture scheduled 45 minutes ago clears a 30-minute match (result
   // overdue) but not a 60-minute one, so this witnesses the regression: it
   // passes with 30 and fails with 60.
-  it("no schedule_settings row: a fixture 45 minutes past kickoff is result_missing under the schema's 30-minute default, not a 60-minute one", async () => {
+  it("no schedule_settings row: a started fixture 45 minutes past kickoff is result_missing under the schema's 30-minute default, not a 60-minute one", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -602,7 +605,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await generateStageFixtures(auth, stage!.id);
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
-    await sql`update fixtures set status = 'scheduled', scheduled_at = now() - interval '45 minutes' where id = ${f!.id}`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '45 minutes' where id = ${f!.id}`;
     const [settingsRow] = await sql<{ division_id: string }[]>`select division_id from schedule_settings where division_id = ${divisionId}`;
     expect(settingsRow).toBeUndefined();
     const desk = await getCompetitionDesk(auth, competitionId);
@@ -671,10 +674,10 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
   // the ordinary Publish action sets (schedule/publish.ts's `publishSchedule`). Live:
   // six fixtures dated YESTERDAY on a published, never-started division
   // produced NO "Needs you" section at all. Proven end to end through the
-  // real usecase (not just division-phase.test.ts's pure resolver coverage):
-  // a division that has been PUBLISHED (status 'scheduled') but never
-  // started still raises `result_missing` for an overdue fixture.
-  it("H2: a published-but-unstarted division (status 'scheduled') still raises result_missing for an overdue fixture", async () => {
+  // real usecase (not just division-phase.test.ts's pure resolver coverage).
+  // Owner ruling 2026-11-26 reverses the expectation: a match that never
+  // started asks for no result, however far past its slot.
+  it("a published-but-unstarted division (status 'scheduled') asks for no result over a past slot", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -688,7 +691,8 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update fixtures set scheduled_at = now() - interval '1 day' where id = ${f!.id}`;
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
-    expect(d.attention).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: [f!.id] });
+    // The desk did read the division (its untimed matches are a row), and the past one raises nothing of its own.
+    expect(d.attention.map((a) => a.kind)).toEqual(["unscheduled"]);
   });
 
   // ---------------------------------------------------------------------
@@ -1537,24 +1541,35 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(viewBefore.needs_you, "Match Day has no list the day before").toEqual([]);
       expect(viewBefore.results_owed).toBe(0);
 
-      // The day of, an hour after the match's window closed: its result is owed, and the whole list is Match Day's.
+      // The day of, the match started and an hour past its window: its result is owed, and the whole list is Match Day's.
+      await sql`update fixtures set status = 'in_play' where id = ${between(day.comp, p1, p2).id}`;
       const on = new Date("2026-11-07T12:00:00.000Z");
       const o = await itemsAt(on);
-      expect(o.items.map((i) => i.kind).sort(), "premise: the desk has two rows").toEqual(["result_missing", "unscheduled"]);
+      expect(o.items.map((i) => i.kind).sort(), "premise: the desk has the owed row and the unscheduled one").toEqual(
+        expect.arrayContaining(["result_missing", "unscheduled"]),
+      );
       expect(o.desk.fixtures_today).toBe(1);
       expect(needsYouAt("competition", o.desk.fixtures_today, o.items), "the competition page lists nothing").toEqual([]);
       const viewOn = await getMatchDay(day.auth, day.comp.id, on);
-      expect(viewOn.needs_you.map((i) => i.kind).sort()).toEqual(["result_missing", "unscheduled"]);
+      expect(viewOn.needs_you.map((i) => i.kind).sort()).toEqual(o.items.map((i) => i.kind).sort());
       expect(viewOn.results_owed).toBe(1);
 
-      // The next day has no match: Saturday's result is still owed, and it is back on the competition page — Match Day carries
-      // neither the row nor its count (the owed count is part of the list, not a fact of its own).
-      const after = new Date("2026-11-08T12:00:00.000Z");
-      const a = await itemsAt(after);
+      // The next day, still unresulted: only a started match owes a result (owner ruling 2026-11-26), and a match in play
+      // is a match today whatever its planned day — so an owed result keeps the list on Match Day.
+      const nextDay = new Date("2026-11-08T12:00:00.000Z");
+      const s = await itemsAt(nextDay);
+      expect(s.desk.fixtures_today).toBe(1);
+      expect(needsYouAt("competition", s.desk.fixtures_today, s.items)).toEqual([]);
+      expect((await getMatchDay(day.auth, day.comp.id, nextDay)).results_owed).toBe(1);
+
+      // The result goes in: no match today, nothing owed, and the list is back on the competition page.
+      await sql`update fixtures set status = 'decided' where id = ${between(day.comp, p1, p2).id}`;
+      const a = await itemsAt(nextDay);
       expect(a.desk.fixtures_today).toBe(0);
-      expect(a.items.map((i) => i.kind).sort(), "premise: the owed result is still owed").toEqual(["result_missing", "unscheduled"]);
+      expect(a.items.map((i) => i.kind), "premise: the desk still has a row to place").toContain("unscheduled");
+      expect(a.items.map((i) => i.kind)).not.toContain("result_missing");
       expect(needsYouAt("competition", a.desk.fixtures_today, a.items)).toEqual(a.items);
-      const viewAfter = await getMatchDay(day.auth, day.comp.id, after);
+      const viewAfter = await getMatchDay(day.auth, day.comp.id, nextDay);
       expect(viewAfter.needs_you).toEqual([]);
       expect(viewAfter.results_owed).toBe(0);
     });
