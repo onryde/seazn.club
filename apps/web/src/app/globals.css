@@ -361,7 +361,7 @@ body {
   .competition-prose .help-callout[data-kind="example"] {
     @apply border-zinc-300 bg-zinc-50;
   }
-  /* Help headings are link targets ("On this page", `/help/a/b#section`): land them below the sticky
+  /* Help headings are link targets (`/help/a/b#section`): land them below the sticky
      site nav (about 60px) with room to spare, not under it. */
   .help-prose h2,
   .help-prose h3 {

@@ -1,6 +1,6 @@
 // What both help specs (1280 here, the seven widths in e2e/mobile/help.spec.ts) check about the reading style on an
 // article: which parts are drawn in the serif, which stay as they were, and that nothing runs past the reading column.
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { SERIF, style } from "./reading-font";
@@ -35,8 +35,6 @@ export const SANS: { path: string; selectors: string[] }[] = [
       ".reading-prose .help-callout p",
       ".reading-prose .help-callout > p:first-child > strong",
       ".reading-prose figcaption",
-      '[data-testid="help-toc"] a',
-      'nav[aria-label="Help sections"] a',
       'input[type="search"]',
       'main article footer nav[aria-label="Previous and next"] a span',
     ],
@@ -95,4 +93,62 @@ export async function readingOverflow(page: Page): Promise<{ checked: number; ov
     }
     return { checked, over };
   });
+}
+
+/** The column a blog post and a help page share: 680px, centred, inside the page's 16px gutters. Typed from the layout. */
+export const COLUMN_PX = 680;
+export const columnWidth = (viewport: number) => Math.min(COLUMN_PX, viewport - 32);
+
+/** What the frame's two side menus drew, at any width: the lists, their phone toggles and their words. */
+export async function expectNoSideMenus(page: Page): Promise<void> {
+  await expect(page.locator('nav[aria-label="Help sections"], nav[aria-label="On this page"], [data-testid="help-sections"], [data-testid="help-toc"], main aside')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^(Help sections|On this page)/ })).toHaveCount(0);
+  await expect(page.getByText("On this page", { exact: true })).toHaveCount(0);
+}
+
+/** Each of `parts` is exactly the shared column: its width, centred in the window. Returns how many were measured. */
+export async function expectOneColumn(page: Page, parts: string[]): Promise<number> {
+  const viewport = await page.evaluate(() => document.documentElement.clientWidth);
+  const width = columnWidth(viewport);
+  let checked = 0;
+  for (const selector of parts) {
+    await expect(page.locator(selector), `anti-vacuity: one ${selector}`).toHaveCount(1);
+    const box = (await page.locator(selector).boundingBox())!;
+    expect(Math.abs(box.width - width), `${selector}: ${box.width}px wide, the column is ${width}px at ${viewport}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.x - (viewport - width) / 2), `${selector}: left edge ${box.x}px, centred is ${(viewport - width) / 2}px`).toBeLessThanOrEqual(1);
+    checked++;
+  }
+  return checked;
+}
+
+/** An article's parts that must each be the column. */
+export const ARTICLE_PARTS = ['[role="search"]', "main article header", ".reading-prose", "main article footer"];
+
+/** Every link in an article that lands on ANOTHER article's heading (`/help/a/b#section`), read from the Markdown. */
+export function helpAnchorLinks(): { from: string; to: string }[] {
+  const root = join(process.cwd(), "content", "help");
+  return helpArticlePaths().flatMap((from) =>
+    [...readFileSync(join(root, `${from.slice("/help/".length)}.md`), "utf8").matchAll(/\]\((\/help\/[a-z0-9/-]+#[a-z0-9-]+)\)/g)].map((m) => ({ from, to: m[1]! })),
+  );
+}
+
+/**
+ * Open each anchor link from its own article, as a reader does, and check the heading is on screen below the sticky site
+ * nav. One link per source and target. Returns how many were followed.
+ */
+export async function followAnchorLinks(page: Page, links: { from: string; to: string }[], visit: (path: string) => Promise<void>): Promise<number> {
+  let followed = 0;
+  for (const { from, to } of [...new Map(links.map((l) => [`${l.from} ${l.to}`, l])).values()]) {
+    await visit(from);
+    await page.locator(`.help-prose a[href="${to}"]`).first().click();
+    await expect(page, `${from} -> ${to}`).toHaveURL((u) => `${u.pathname}${u.hash}` === to);
+    const heading = page.locator(`.help-prose [id="${to.split("#")[1]}"]`);
+    await expect(heading, `${from} -> ${to}: on screen`).toBeInViewport();
+    // Polled: a soft navigation scrolls after the new page is drawn.
+    await expect
+      .poll(async () => (await heading.evaluate((h) => h.getBoundingClientRect().top)) - (await page.locator("[data-mk-nav]").evaluate((n) => n.getBoundingClientRect().bottom)), { message: `${from} -> ${to}: below the sticky nav` })
+      .toBeGreaterThanOrEqual(0);
+    followed++;
+  }
+  return followed;
 }

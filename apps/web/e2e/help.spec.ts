@@ -1,19 +1,18 @@
-// The redesigned help template (Help audit Task 6, layout A) at 1280, in a browser: what the unit suite
-// (src/app/help/__tests__/help-template.test.tsx, no DOM) cannot see — the three columns, the "On this page"
-// rail that stays in view and marks the section being read, a click landing its heading in view below the
-// sticky site nav, search loading its index only when asked and working from the keyboard, no sideways
-// scroll, and axe. The seven narrower widths are e2e/mobile/help.spec.ts.
+// The help template at 1280, in a browser: what the unit suite (src/app/help/__tests__, no DOM) cannot see — the one
+// centred 680px column an article shares with a blog post, with no side menus, the ways on from an article, links to
+// another article's heading landing it in view below the sticky site nav, search loading its index only when asked and
+// working from the keyboard, no sideways scroll, and axe. The seven narrower widths are e2e/mobile/help.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { helpPageWithPosts, helpPageWithoutPosts } from "./blog-help-pages";
 import { SERIF, drawnWith, notTheSerif, serifFiles, style, watchFonts } from "./reading-font";
-import { CODE_AND_H3, QUOTE_AND_CALLOUT, SANS, TABLE, bodyPx, expectBodyType, helpArticlePaths, readingOverflow } from "./help-reading";
+import { ARTICLE_PARTS, CODE_AND_H3, QUOTE_AND_CALLOUT, SANS, TABLE, bodyPx, expectBodyType, expectNoSideMenus, expectOneColumn, followAnchorLinks, helpAnchorLinks, helpArticlePaths, readingOverflow } from "./help-reading";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-/** A long article with six level-2 headings (content/help/registration/card-payments.md). */
+/** A long article (content/help/registration/card-payments.md). */
 const LONG = "/help/registration/card-payments";
 /** A heading of content/help/billing/hand-over-a-bill.md: in the search index, never on the help home's own page. */
 const INDEX_ONLY = "What happens to your invoices when the bill changes hands";
@@ -44,32 +43,55 @@ async function visit(page: Page, path: string) {
   await dismissCookieBanner(page);
 }
 
-const toc = (page: Page) => page.getByRole("navigation", { name: "On this page" });
-
-test("1280: three columns — section list, reading column, On this page rail — with the current page marked", async ({ page }) => {
-  await visit(page, LONG);
-  const sections = page.getByRole("navigation", { name: "Help sections" });
-  await expect(sections).toBeVisible();
-  await expect(sections.locator('a[aria-current="page"]')).toHaveCount(1);
-  await expect(sections.locator('a[aria-current="page"]')).toHaveAttribute("href", LONG);
-  await expect(toc(page)).toBeVisible();
-  // Both folds' toggles are for narrower widths only: in the page (the positive pair), but not shown. Located by
-  // CSS, not role: a hidden element is not in the accessibility tree, so a role locator never finds it. Their
-  // accessible names are proven where they show (e2e/mobile/help.spec.ts).
-  for (const id of ["help-toc", "help-sections"]) {
-    const toggle = page.getByTestId(id).locator("button");
-    await expect(toggle, `${id} toggle exists`).toBeAttached();
-    await expect(toggle, `${id} toggle hidden at 1280`).toBeHidden();
+test("1280: one centred 680px column — search, title, body, previous and next — and no side menu anywhere", async ({ page }) => {
+  let checked = 0;
+  for (const path of [LONG, "/help/scheduling/match-day-stream", "/help/scoring/basics"]) {
+    await visit(page, path);
+    expect(await expectOneColumn(page, ARTICLE_PARTS), path).toBe(4);
+    await expectNoSideMenus(page);
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Search help" })).toBeVisible();
+    checked++;
   }
-
-  const left = (await sections.boundingBox())!;
-  const h1 = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
-  const rail = (await toc(page).boundingBox())!;
-  expect(left.x + left.width, "section list left of the article").toBeLessThanOrEqual(h1.x);
-  expect(h1.x + h1.width, "article left of the rail").toBeLessThanOrEqual(rail.x);
+  // The format gallery and a format page share the frame.
+  for (const path of ["/help/formats", "/help/formats/knockout"]) {
+    await visit(page, path);
+    expect(await expectOneColumn(page, ['[role="search"]', "main"]), path).toBe(2);
+    await expectNoSideMenus(page);
+    checked++;
+  }
+  expect(checked, "anti-vacuity: pages measured").toBe(5);
 });
 
-// The reading column (34rem, app/help/[...slug]/page.tsx) holds about 60 characters a line of the serif. Measured in the page:
+// With no section list beside the page, these are the ways to another article.
+test("from an article: next and previous, the section crumb to its card, and Help to a home that lists every article", async ({ page }) => {
+  await visit(page, LONG);
+  const pager = page.getByRole("navigation", { name: "Previous and next" });
+  const next = pager.getByRole("link", { name: /Next/ });
+  const nextHref = (await next.getAttribute("href"))!;
+  await next.click();
+  await expect(page).toHaveURL(new RegExp(`${nextHref}$`));
+  await page.getByRole("navigation", { name: "Previous and next" }).getByRole("link", { name: /Previous/ }).click();
+  await expect(page).toHaveURL(new RegExp(`${LONG}$`));
+
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await crumbs.getByRole("link", { name: "Registration" }).click();
+  await expect(page).toHaveURL(/\/help#registration$/);
+  await expect(page.locator("section#registration")).toBeInViewport();
+
+  await visit(page, LONG);
+  await crumbs.getByRole("link", { name: "Help", exact: true }).click();
+  await expect(page).toHaveURL(/\/help$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("How can we help?");
+  const listed = new Set(await page.locator("main section a").evaluateAll((as) => as.map((a) => a.getAttribute("href"))));
+  const articles = helpArticlePaths();
+  expect(articles.length, "anti-vacuity: articles on disk").toBeGreaterThan(50);
+  expect(articles.filter((a) => !listed.has(a)), `${articles.length} articles on the home`).toEqual([]);
+  expect(listed.has("/help/formats")).toBe(true);
+});
+
+// The reading column (the post's 680px, components/reading/reading-column.ts) holds about 70 characters a line of the 20px
+// serif, as a post does (it held about 60 in the old 34rem column beside the side menus). Measured in the page:
 // the characters on each rendered line of the article's longest paragraph, from the text's own glyph boxes.
 async function longestLine(page: Page): Promise<{ lines: number; maxChars: number }> {
   return page.evaluate(() => {
@@ -90,7 +112,7 @@ async function longestLine(page: Page): Promise<{ lines: number; maxChars: numbe
   });
 }
 
-test("the reading column holds about 60 characters a line, never more than 80, at 1024 and 1280", async ({ page }) => {
+test("the reading column holds a reading line, never more than 80 characters, at 1024 and 1280", async ({ page }) => {
   await visit(page, LONG);
   let checked = 0;
   for (const width of [1024, 1280]) {
@@ -105,27 +127,14 @@ test("the reading column holds about 60 characters a line, never more than 80, a
   expect(checked, "anti-vacuity").toBe(2);
 });
 
-test("1280: clicking an On this page entry lands its heading in view below the nav, marks it, and the rail stays in view", async ({ page }) => {
-  await visit(page, LONG);
-  const links = toc(page).getByRole("link");
-  expect(await links.count(), "the long page lists its sections").toBeGreaterThanOrEqual(5);
-  const third = links.nth(2);
-  const href = (await third.getAttribute("href"))!;
-  expect(href).toMatch(/^#/);
-  await third.click();
-  await expect(page).toHaveURL(new RegExp(`${href}$`));
-  const heading = page.locator(`[id="${href.slice(1)}"]`);
-  await expect(heading).toBeInViewport();
-  const navBottom = await page.locator("[data-mk-nav]").evaluate((n) => n.getBoundingClientRect().bottom);
-  const top = await heading.evaluate((h) => h.getBoundingClientRect().top);
-  expect(top, "the heading is not hidden under the sticky site nav").toBeGreaterThanOrEqual(navBottom);
-  await expect(third).toHaveAttribute("aria-current", "location");
-  await expect(toc(page).locator('[aria-current="location"]')).toHaveCount(1);
-
-  // Down at the foot of the page the rail is still on screen, and the marking has moved on.
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  await expect(toc(page)).toBeInViewport();
-  await expect(links.last()).toHaveAttribute("aria-current", "location");
+test("every link to another article's heading opens it with the heading in view below the site nav", async ({ page }) => {
+  const links = helpAnchorLinks();
+  const pairs = new Set(links.map((l) => `${l.from} ${l.to}`)).size;
+  expect(pairs, "anti-vacuity: anchor links in the articles").toBeGreaterThan(5);
+  test.setTimeout(Math.max(90_000, pairs * 8_000));
+  const followed = await followAnchorLinks(page, links, (path) => visit(page, path));
+  console.log(`help anchors: ${links.length} links, ${followed} followed, ${new Set(links.map((l) => l.to)).size} distinct headings`);
+  expect(followed).toBe(pairs);
 });
 
 test("search loads its index only when asked, offers the matching page with the word marked, and opens it", async ({ page }) => {
@@ -171,7 +180,7 @@ test("search loads its index only when asked, offers the matching page with the 
   expect(indexRequests, "never fetched again on this page").toHaveLength(1);
 });
 
-test("the search in the section column works on an article page too, and a word that matches nothing says so", async ({ page }) => {
+test("the search at the head of an article works too, and a word that matches nothing says so", async ({ page }) => {
   await visit(page, LONG);
   const box = page.getByRole("searchbox", { name: "Search help" });
   await box.fill("zzqqxx");
@@ -215,8 +224,8 @@ test("1280: a page a post names lists it under Read how it works, and the link o
   await expect(page.getByText("Read how it works")).toHaveCount(0);
 });
 
-// The reading style on a help ARTICLE (owner pick "H1", 2026-11-26): a blog post's serif body and large title, inside
-// help's own frame (search, section list, breadcrumb, "On this page", previous/next, the 34rem column: the tests above).
+// The reading style on a help ARTICLE (owner pick "H1", 2026-11-26): a blog post's serif body and large title, in the
+// post's column with help's search, breadcrumb and previous/next (the tests above).
 // The expected sizes and colours are typed from the approved style; the title is also compared with a post's own.
 test.describe("the reading style", () => {
   // Phones below 600; 599 and 600 are the two sides.
@@ -241,7 +250,7 @@ test.describe("the reading style", () => {
     });
   }
 
-  test("only the body text is serif: headings, tables, code, callouts, captions and help's own menus are not", async ({ page }) => {
+  test("only the body text is serif: headings, tables, code, callouts, captions, the breadcrumb, search and pager are not", async ({ page }) => {
     let checked = 0;
     for (const { path, selectors } of SANS) {
       await visit(page, path);
@@ -274,9 +283,13 @@ test.describe("the reading style", () => {
     expect(checked, "anti-vacuity").toBe(2);
   });
 
-  test("the column keeps its 34rem, and organiser prose does not take the style", async ({ page }) => {
+  test("the article's column is a post's, and organiser prose does not take the style", async ({ page }) => {
+    await visit(page, "/blog/how-standings-points-work");
+    const post = (await page.getByTestId("blog-post").boundingBox())!;
     await visit(page, LONG);
-    expect(Math.round((await page.locator(".reading-prose").boundingBox())!.width)).toBe(34 * 16);
+    const prose = (await page.locator(".reading-prose").boundingBox())!;
+    expect([Math.round(prose.x), Math.round(prose.width)]).toEqual([Math.round(post.x), Math.round(post.width)]);
+    expect(Math.round(prose.width)).toBe(680);
     await expect(page.locator(".blog-prose")).toHaveCount(0);
     // Organiser prose is `.competition-prose` alone: the same element without the reading class keeps the 15px sans.
     const plain = await page.evaluate(() => {
@@ -319,12 +332,12 @@ test.describe("the reading style", () => {
   });
 
   // EVERY article, from the disk. Two questions each: which characters of its body the serif does not draw, and whether
-  // anything runs past the column on the narrowest phone. The rule for the first: no letter, number or punctuation mark
+  // anything (a table, a picture, a long word) runs past the column at 1280, 768 or on the narrowest phone. The rule for the first: no letter, number or punctuation mark
   // may fall back to another face; a symbol the product's screens use (an arrow, a tick) may, and every one is reported.
-  test("every article: letters, numbers and punctuation are in the serif, and nothing runs past the column at 320", async ({ page }) => {
+  test("every article: letters, numbers and punctuation are in the serif, and nothing runs past the column at 1280, 768 or 320", async ({ page }) => {
     const paths = helpArticlePaths();
     expect(paths.length, "anti-vacuity: articles on disk").toBeGreaterThan(50);
-    test.setTimeout(Math.max(180_000, paths.length * 6_000));
+    test.setTimeout(Math.max(180_000, paths.length * 9_000));
     await visit(page, paths[0]!);
     const characters = new Map<string, number>();
     const mixed: string[] = [];
@@ -332,7 +345,8 @@ test.describe("the reading style", () => {
     const over: string[] = [];
     let nodes = 0;
     let glyphs = 0;
-    let measured = 0;
+    const measured: Record<number, number> = { 1280: 0, 768: 0, 320: 0 };
+    const pages: Record<number, number> = { 1280: 0, 768: 0, 320: 0 };
     // Body text and everything inline in it that is drawn in the body's face (code is its own face).
     const text = [".reading-prose :is(p, li, blockquote):not(.help-callout *)", ".reading-prose :is(p, li):not(.help-callout *) > :is(strong, em, a, del)"].join(", ");
     for (const path of paths) {
@@ -350,12 +364,15 @@ test.describe("the reading style", () => {
       glyphs += drawn.glyphs;
       const body = await page.evaluate((selector) => [...document.querySelectorAll(selector)].map((el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("")).join(""), text);
       for (const c of new Set(body)) if (!/\s/.test(c)) characters.set(c, (characters.get(c) ?? 0) + 1);
-      await page.setViewportSize({ width: 320, height: 900 });
-      const o = await readingOverflow(page);
-      expect(o.checked, `${path}: anti-vacuity, elements measured`).toBeGreaterThan(2);
-      measured += o.checked;
-      over.push(...o.over.map((x) => `${path}: ${x}`));
-      await expectNoHorizontalScroll(page);
+      for (const width of [1280, 768, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        const o = await readingOverflow(page);
+        expect(o.checked, `${path} at ${width}: anti-vacuity, elements measured`).toBeGreaterThan(2);
+        measured[width]! += o.checked;
+        pages[width]! += 1;
+        over.push(...o.over.map((x) => `${path} at ${width}: ${x}`));
+        await expectNoHorizontalScroll(page);
+      }
     }
     // Each character on its own, in the body's face, so the faces that drew it name it exactly.
     await visit(page, LONG);
@@ -375,7 +392,8 @@ test.describe("the reading style", () => {
       if (other.length > 0) missing.push({ char, code: `U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`, articles, face: other.join(", ") });
       probed++;
     }
-    console.log(`help sweep: ${paths.length} articles, ${nodes} elements, ${glyphs} glyphs, ${probed} distinct characters, ${measured} boxes measured at 320`);
+    console.log(`help sweep: ${paths.length} articles, ${nodes} elements, ${glyphs} glyphs, ${probed} distinct characters; articles measured by width ${JSON.stringify(pages)}, boxes ${JSON.stringify(measured)}`);
+    expect(pages, "anti-vacuity: every article at each width").toEqual({ 1280: paths.length, 768: paths.length, 320: paths.length });
     console.log(`not in the serif (${missing.length}): ${missing.map((m) => `${m.char} ${m.code} in ${m.articles} [${m.face}]`).join("; ")}`);
     console.log(`articles with a fallback glyph: ${mixed.length}`);
     expect(probed, "premise: ASCII and more were probed").toBeGreaterThan(70);
@@ -383,6 +401,6 @@ test.describe("the reading style", () => {
     expect(missing.filter((m) => /[\p{L}\p{N}\p{P}]/u.test(m.char)), "a letter, number or punctuation mark outside the serif").toEqual([]);
     // A last-resort face would be a missing-glyph box, not a readable fallback.
     expect(missing.filter((m) => /LastResort/i.test(m.face)), "drawn as a missing-glyph box").toEqual([]);
-    expect(over, `${paths.length} articles at 320`).toEqual([]);
+    expect(over, `${paths.length} articles at 1280, 768 and 320`).toEqual([]);
   });
 });
