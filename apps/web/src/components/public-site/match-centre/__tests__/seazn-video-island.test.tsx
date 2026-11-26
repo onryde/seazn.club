@@ -161,7 +161,7 @@ describe("the island: live", () => {
 // one quiet line says by how much. It is keyed on the VIDEO being live (the answer's `live`), never on the match's status: no line for a
 // replay, for the held box before the start, or after the stream ends. Words revised 2026-11-24 (T33c review m6, recommendation
 // applied): "court" is wrong for a pitch or a board, so the line says "the live action", in every sport and every locale.
-const OWNER_DELAY_LINE = "Video runs about 25 seconds behind the live action."; // the owner's words, verbatim (2026-11-25, "about 25 seconds")
+const OWNER_DELAY_LINE = "Video runs up to 25 seconds behind the live action."; // the owner's words, verbatim (2026-11-25 "25 seconds"; 2026-11-26 "up to 25 seconds")
 /** A playing-surface word in any of the four locales: the line must not name one (a pitch, a court, a board). */
 const SURFACE_WORD = /\b(court|pitch|board|field|pista|cancha|campo|terrain|plateau|veld|baan|bord)\b/i;
 /** The markup's text, its entities decoded (French "l'action" is serialised `l&#x27;action`). */
