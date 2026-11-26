@@ -466,8 +466,9 @@ export const SEAZN_TOKEN_FAILURE_CACHE_SECONDS = 60;
 /** Phase 1 review I1: a token mint not answered in this long is abandoned (ingest-cf.ts, `AbortSignal.timeout`) and counts as a
  *  failed mint. Every viewer of a uid waits on the one mint in flight, so a hung one held them all. */
 export const SEAZN_TOKEN_MINT_TIMEOUT_MS = 10_000;
-/** Owner 2026-11-25: how far a Seazn LIVE picture runs behind the live action, said under the live player ("Video runs about
- *  {seconds} seconds behind the live action."; one figure, no longer a range). The owner's stg stopwatch of 2026-11-25 (camera to the
+/** Owner 2026-11-25: how far a Seazn LIVE picture runs behind the live action, said under the live player ("Video runs up to
+ *  {seconds} seconds behind the live action."; one figure, no longer a range; "up to" by the owner 2026-11-26, after the
+ *  stg trial with 2.2 s segments and low-latency HLS read about 15 s). The owner's stg stopwatch of 2026-11-25 (camera to the
  *  public match page, Chrome's native player: 24.4, 24.4, 24.5 s) put it at about 25; before that "15-20" was the owner's figure from
  *  2026-11-23. Still NOT a measurement this code makes; HLS latency moves with the phone's keyframe interval and the viewer's buffer. */
 export const SEAZN_LIVE_DELAY_SECONDS = 25;

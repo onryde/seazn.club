@@ -861,7 +861,7 @@
   "seaznVideo.part": "Parte {n}",
   "seaznVideo.startingLive": "El vídeo en directo empezará aquí en breve",
   "seaznVideo.startingReplay": "La repetición estará lista aquí en unos minutos",
-  "seaznVideo.delay": "El vídeo va unos {seconds} segundos por detrás de la acción en directo.",
+  "seaznVideo.delay": "El vídeo va hasta {seconds} segundos por detrás de la acción en directo.",
   "paging.search.label": "Buscar un equipo",
   "paging.search.clear": "Borrar",
   "paging.search.none": "Ningún equipo se llama «{query}»",
