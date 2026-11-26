@@ -18,7 +18,8 @@ import "server-only";
 // The URL shapes are Cloudflare's: `https://<customer host>/<token>/manifest/video.m3u8` (C1) and
 // `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
 import { createHash } from "node:crypto";
-import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, programmeLowLatency, streamPlaybackHost } from "@/server/relay/config";
+import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
+import { lowLatencyOn } from "@/server/relay/low-latency";
 import type { CallTimeout, IngestProvider } from "@/server/relay/ports";
 
 /** A mint, in flight or done, and when its token expires. */
@@ -112,7 +113,7 @@ async function signedManifest(deps: PlaybackDeps, uid: string, now: Date, query 
 
 /** A live Seazn programme input's signed HLS, for the public match page and the organiser's panel (Task 14). */
 export function signLivePlayback(deps: PlaybackDeps, inputUid: string, now: Date): Promise<SignedPlayback> {
-  return signedManifest(deps, inputUid, now, programmeLowLatency() ? LL_HLS_QUERY : "");
+  return signedManifest(deps, inputUid, now, lowLatencyOn() ? LL_HLS_QUERY : "");
 }
 
 /** Recommendation 2026-11-21 (G-B, interim replay): a finished recording's signed HLS, from session end until a verified Bunny

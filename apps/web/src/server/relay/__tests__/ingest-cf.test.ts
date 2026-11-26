@@ -337,9 +337,11 @@ describe("CloudflareIngest", () => {
     const bodyOf = (c: { init: RequestInit }) => JSON.parse(String(c.init.body)) as Record<string, unknown> & { recording: Record<string, unknown> };
     const creates = () => rec.calls.filter((c) => c.init.method === "POST").map(bodyOf);
 
-    it("on (the default, unset or blank or \"true\"): the programme create carries preferLowLatency: true at the top level, never inside recording; the camera create never carries it", async () => {
+    it("on (\"true\" in any case anywhere; unset or blank on stg only): the programme create carries preferLowLatency: true at the top level, never inside recording; the camera create never carries it", async () => {
       let checked = 0;
-      for (const v of [undefined, "", "  ", "true", "TRUE"]) {
+      // [the variable, ENV_NAME]: the default is on only where the deploy says it is stg (review I3), so each spelling names its own.
+      for (const [v, envName] of [[undefined, "stg"], ["", "stg"], ["  ", "stg"], ["true", "prod"], ["TRUE", ""]] as const) {
+        vi.stubEnv("ENV_NAME", envName);
         vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", v);
         rec.calls.length = 0;
         await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
@@ -355,9 +357,10 @@ describe("CloudflareIngest", () => {
       expect(checked, "five spellings of on were driven").toBe(5);
     });
 
-    it("off (STREAM_PROGRAMME_LOW_LATENCY=false, any case): the programme create omits the key entirely, and is the camera's body but for its name", async () => {
+    it("off (false in any case anywhere; unset or blank on prod, local, ci or no ENV_NAME): the programme create omits the key entirely, and is the camera's body but for its name", async () => {
       let checked = 0;
-      for (const v of ["false", "FALSE", " false "]) {
+      for (const [v, envName] of [["false", "stg"], ["FALSE", ""], [" false ", "prod"], [undefined, "prod"], ["", "local"], [undefined, "ci"], [undefined, ""]] as const) {
+        vi.stubEnv("ENV_NAME", envName);
         vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", v);
         rec.calls.length = 0;
         await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
@@ -367,11 +370,11 @@ describe("CloudflareIngest", () => {
         expect({ ...prog!, meta: undefined }).toEqual({ ...cam!, meta: undefined });
         checked++;
       }
-      expect(checked).toBe(3);
+      expect(checked, "seven off cases were driven").toBe(7);
     });
 
     it("a signed programme create (a Seazn session) carries it too, beside requireSignedURLs inside recording", async () => {
-      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
       await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED });
       const [prog] = creates();
       expect(prog!.preferLowLatency).toBe(true);
@@ -380,7 +383,7 @@ describe("CloudflareIngest", () => {
 
     it("the switch (PUT) re-sends the flag for a programme input when on, omits it when off, and never puts it on a camera's", async () => {
       let checked = 0;
-      for (const [env, role, want] of [["", "programme", true], ["false", "programme", false], ["", "camera", false], ["", undefined, false]] as const) {
+      for (const [env, role, want] of [["true", "programme", true], ["false", "programme", false], ["true", "camera", false], ["true", undefined, false]] as const) {
         vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", env);
         rec.calls.length = 0;
         await ingest.setInputEnabled("in_abc", false, { sessionId: "s1", slot: 0, ...(role ? { role, access: null } : {}) });
@@ -392,14 +395,23 @@ describe("CloudflareIngest", () => {
       expect(checked).toBe(4);
     });
 
-    it("a malformed value throws naming the variable, before anything is sent", async () => {
-      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "maybe");
-      await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" })).rejects.toThrow(/STREAM_PROGRAMME_LOW_LATENCY/);
-      expect(rec.calls, "nothing was sent").toHaveLength(0);
+    it("a malformed value NEVER throws (review I2): the create goes out as plain HLS, with no key, on stg too; the switch PUT likewise", async () => {
+      let checked = 0;
+      for (const bad of ["maybe", "1", "on", "yes"]) {
+        vi.stubEnv("ENV_NAME", "stg");
+        vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", bad);
+        rec.calls.length = 0;
+        await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" }), bad).resolves.toBeDefined();
+        await expect(ingest.setInputEnabled("in_abc", false, { sessionId: "s1", slot: 0, role: "programme", access: null }), bad).resolves.toBeUndefined();
+        expect(rec.calls, `${bad}: both calls were sent`).toHaveLength(2);
+        for (const c of rec.calls) expect("preferLowLatency" in bodyOf(c), `${bad}: ${String(c.init.method)} omits the key`).toBe(false);
+        checked++;
+      }
+      expect(checked).toBe(4);
     });
 
     it("an echo that does not say preferLowLatency true is WARNED (the input still works as plain HLS), never refused; a true echo is silent; the warning carries no id, url or token", async () => {
-      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
       const warns: { fields: Record<string, unknown>; message: string }[] = [];
       const build = (echo: boolean | undefined) => new CloudflareIngest({
         fetchImpl: recorder((c) => {
@@ -524,7 +536,7 @@ describe("CloudflareIngest", () => {
   // `recording` leaves the recording untouched — and the recording is the thing C4 measured: an input whose mode went
   // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
   it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (preferLowLatency only on a programme input, W-LL)", async () => {
-    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");   // unset = on: the default
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");   // explicit: the default is stg-only (review I3)
     let checked = 0;
     // Every role the create names differently: the camera (the default) and a programme input — Task 12: unsigned (an external
     // destination's, whose row reads `access` null) and signed (a Seazn session's). The switch is told the access its row holds.

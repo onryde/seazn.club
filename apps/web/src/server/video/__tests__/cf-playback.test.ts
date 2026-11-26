@@ -248,21 +248,42 @@ describe("signDownload (C5, Phase 2's mover)", () => {
 // typed here as the post spells it. It goes on the LIVE PROGRAMME manifest only: the token stays the first path segment, so the match
 // page's token swap and its same-video check (both read the address after the token) still see one shape.
 describe("W-LL: the live programme manifest asks for LL-HLS with ?protocol=llhls (STREAM_PROGRAMME_LOW_LATENCY)", () => {
-  it("on (the default): the live manifest ends in ?protocol=llhls after the token path; off: it is the plain manifest; a recording and a download never carry it either way", async () => {
+  it("on (true anywhere; unset on stg only): the live manifest ends in ?protocol=llhls after the token path; off (false, or unset elsewhere): it is the plain manifest; a recording and a download never carry it either way", async () => {
     let checked = 0;
-    for (const [env, want] of [[undefined, true], ["", true], ["true", true], ["false", false]] as const) {
+    // [the variable, ENV_NAME, on]: the default is on only where the deploy says it is stg (review I3).
+    for (const [env, envName, want] of [
+      [undefined, "stg", true], ["", "stg", true], ["true", "prod", true], ["TRUE", "", true], ["false", "stg", false],
+      [undefined, "prod", false], ["", "local", false], [undefined, "", false],
+    ] as const) {
+      vi.stubEnv("ENV_NAME", envName);
       vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", env);
       const { deps } = rig();
       const live = await signLivePlayback(deps, "in-1", T0);
       const recording = await signRecordingPlayback(deps, "in-1", T0);
       const download = await signDownload(deps, "in-1", T0, 300);
       const token = tokenOf(live.src);
-      expect(live.src, `env ${JSON.stringify(env)}`).toBe(`https://playback.fake.invalid/${token}/manifest/video.m3u8${want ? "?protocol=llhls" : ""}`);
+      expect(live.src, `env ${JSON.stringify(env)} on ${JSON.stringify(envName)}`).toBe(`https://playback.fake.invalid/${token}/manifest/video.m3u8${want ? "?protocol=llhls" : ""}`);
       expect(recording.src, "a recording is plain HLS").toMatch(PLAY_PLAIN);
       expect(download, "a download never carries it").not.toContain("?");
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked, "eight environments").toBe(8);
+  });
+
+  // Review I2: this runs on every live read of the match page; a throw is a 500 on every poll of a live Seazn fixture.
+  it("a malformed value never throws or rejects: the live manifest is the plain one, on stg too, and every read after it answers", async () => {
+    let checked = 0;
+    for (const bad of ["maybe", "1", "on"]) {
+      vi.stubEnv("ENV_NAME", "stg");
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", bad);
+      const { deps } = rig();
+      // A SYNCHRONOUS throw would escape the caller's `.then(ok, err)` isolation (seazn-video.ts), so it is asserted on its own.
+      expect(() => void signLivePlayback(deps, "in-1", T0), bad).not.toThrow();
+      await expect(signLivePlayback(deps, "in-1", T0), bad).resolves.toMatchObject({ id: expect.stringMatching(/^[0-9a-f]{16}$/) });
+      expect((await signLivePlayback(deps, "in-1", T0)).src, bad).toMatch(PLAY_PLAIN);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("the id does not see the query (one video, on or off), and a re-mint changes only the token: the part after it is equal", async () => {

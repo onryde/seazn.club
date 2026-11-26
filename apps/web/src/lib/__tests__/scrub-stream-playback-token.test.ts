@@ -81,6 +81,8 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.stubEnv("STREAM_PLAYBACK_HOST", HOST);
+  // W-LL: the live address carries the LL-HLS query only while the switch is on, and its default is stg-only (review I3): explicit.
+  vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
 });
 afterEach(() => {
   vi.unstubAllEnvs();

@@ -111,7 +111,8 @@ export type PublicOrgLiveT = z.infer<typeof PublicOrgLive>;
 // ---------------------------------------------------------------------------
 
 /** A signed playback URL and when its token stops working. The token is a PATH segment of `src` (Cloudflare's
- *  `https://<customer host>/<token>/manifest/video.m3u8`), never a query, and the route answers it `private, no-store`. */
+ *  `https://<customer host>/<token>/manifest/video.m3u8`); the token is never in a query. A LIVE address may end in Cloudflare's
+ *  LL-HLS query `?protocol=llhls` while the programme low-latency switch is on (nothing else), and the route answers it `private, no-store`. */
 const SignedPlayback = z.object({
   src: z.url(),
   expiresAt: z.string().datetime(),

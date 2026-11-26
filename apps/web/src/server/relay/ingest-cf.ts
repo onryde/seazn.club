@@ -29,7 +29,8 @@
 //    "not known yet" — `measured()` maps those to null on the VALUE, never on
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
-import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS, programmeLowLatency } from "./config";
+import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS } from "./config";
+import { lowLatencyOn } from "./low-latency";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -84,11 +85,11 @@ export function liveInputRecording(access?: IngestCreateSpec["access"]): typeof 
  *  guide   https://developers.cloudflare.com/stream/stream-live/start-stream-live/  (default false, BETA, recording `mode` must be
  *          `automatic` — which the one LIVE_INPUT_RECORDING constant always is; B-frames unsupported, GOP 2-4 s, RTMP preferred over SRT).
  *  Nothing there says how it interacts with `requireSignedURLs` (UNMEASURED: the stg trial reads it), and the docs list no extra price.
- *  Camera: never — the relay pulls it over SRT and LL could change that. Off (config's STREAM_PROGRAMME_LOW_LATENCY=false): the key is
+ *  Camera: never — the relay pulls it over SRT and LL could change that. Off (config's STREAM_PROGRAMME_LOW_LATENCY false, unset off stg, or malformed): the key is
  *  omitted, never sent as false. The PUT re-sends the same current value because a PUT's omitted fields are not known to be kept
  *  (C4's lesson about `recording`); a flag flipped between a create and its switch therefore reaches that input at the switch. */
 const lowLatencyFor = (role: IngestCreateSpec["role"]): { preferLowLatency?: true } =>
-  role === "programme" && programmeLowLatency() ? { preferLowLatency: true } : {};
+  role === "programme" && lowLatencyOn() ? { preferLowLatency: true } : {};
 
 /** Task 12 (U1: every setting sent is read back): what an echo says of the input's signing, against what was sent. Signed
  *  sent ⇒ `requireSignedURLs` must echo `true` and the origins must be the same hosts (order is not compared). Unsigned sent ⇒

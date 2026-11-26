@@ -368,18 +368,32 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
 }
 /** W-LL (owner 2026-11-26, research lever 2, cf-stream-optimisation-research.md): whether the PROGRAMME live input is created asking
  *  Cloudflare for Low-Latency HLS (`preferLowLatency`, beta) and its live manifest address carries `?protocol=llhls`. The camera input
- *  never does (the relay pulls it over SRT). DEFAULT ON: unset or blank means on, so a deploy that does not name the variable gets it;
- *  `false` is the switch off without a code change. Anything but true/false throws, naming the variable (like STREAM_SRT_ENABLED).
- *  A server setting only, read per call, never cached: a new input reads it at its create; a session already running keeps what its
- *  input was created with. Cloudflare's docs, which this follows: the flag is a top-level create/update body field
+ *  never does (the relay pulls it over SRT).
+ *
+ *  DEFAULT (unset or blank): ON only where `ENV_NAME` is exactly "stg" (the deploy identity every Fly deployment carries, read the
+ *  way `envNameOf` does); OFF everywhere else — prod, local, ci, unset. Review of #1322 (I3): stg and prod run ONE image and differ
+ *  only in secrets, so an unconditional default ON would switch a feature Cloudflare calls beta (and not production-ready) on in
+ *  prod at the first tag. `true` / `false` (any case) always win over the default.
+ *
+ *  NEVER THROWS (review I2): the value is read on a request path (every live read, every programme create), and a throw there is a
+ *  500 on every poll or a refused session start. Anything but true/false reads as OFF and is named in `invalid`, for the caller to
+ *  report ONCE (relay/low-latency.ts). Read per call, never cached: a new input reads it at its create; a session already running
+ *  keeps what its input was created with.
+ *
+ *  Cloudflare's docs, which this follows: the flag is a top-level create/update body field
  *  (https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/create/), documented as beta and as
  *  needing recording mode `automatic` (https://developers.cloudflare.com/stream/stream-live/start-stream-live/), and the manifest
  *  query is from https://blog.cloudflare.com/cloudflare-stream-low-latency-hls-open-beta/ (not production-ready there). */
+export function programmeLowLatencyReading(env: Record<string, string | undefined> = process.env): { on: boolean; invalid: string | null } {
+  const raw = env.STREAM_PROGRAMME_LOW_LATENCY;
+  const v = raw?.trim().toLowerCase();
+  if (!v) return { on: envNameOf(env) === "stg", invalid: null };
+  if (v === "true") return { on: true, invalid: null };
+  if (v === "false") return { on: false, invalid: null };
+  return { on: false, invalid: raw! };
+}
 export function programmeLowLatency(env: Record<string, string | undefined> = process.env): boolean {
-  const v = env.STREAM_PROGRAMME_LOW_LATENCY?.trim().toLowerCase();
-  if (!v || v === "true") return true;
-  if (v === "false") return false;
-  throw new Error(`STREAM_PROGRAMME_LOW_LATENCY must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_PROGRAMME_LOW_LATENCY)}`);
+  return programmeLowLatencyReading(env).on;
 }
 /** Task 34: whether the stream code's paste field and its Copy show under the QR (the QR itself always does). They are for
  *  developers and the harnesses — e2e/helpers/fake-capture-phone.ts reads the field to drive the phone routes — never for a

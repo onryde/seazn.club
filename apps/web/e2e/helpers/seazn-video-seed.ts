@@ -41,7 +41,7 @@ export interface SeaznMatch extends SeaznSession {
 
 /** The address the fake driver signs for a programme uid: `https://<fake host>/fake.<uid>.<exp seconds>/manifest/video.m3u8`
  *  (fakes.ts `playbackToken`, cf-playback.ts). Read from the server's own declarations by the caller, never retyped here beyond the
- *  uid, which this file writes. W-LL: a LIVE programme address ends in `?protocol=llhls` while STREAM_PROGRAMME_LOW_LATENCY is on
+ *  uid, which this file writes. W-LL: a LIVE programme address ends in `?protocol=llhls` while STREAM_PROGRAMME_LOW_LATENCY is on (stg by default)
  *  (the default); a recording's never does (the unit tests pin that, this pattern accepts either). */
 export const signedAddressPattern = (uid: string): RegExp =>
   new RegExp(`^https://playback\\.fake\\.invalid/fake\\.${uid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.\\d+/manifest/video\\.m3u8(?:\\?protocol=llhls)?$`);
