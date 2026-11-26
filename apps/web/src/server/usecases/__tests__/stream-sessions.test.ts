@@ -83,13 +83,17 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 // N4 (Task 14b re-review): apply's POOLED rate read, switchable so one test can make it throw. A pass-through otherwise —
 // every other test reads the real V426 row.
-const rateRead = vi.hoisted(() => ({ fail: null as Error | null, calls: 0 }));
+// `hold` (m4): ONE-SHOT — the next read parks on it. It is read before apply's transaction, so a parked apply holds no lock.
+const rateRead = vi.hoisted(() => ({ fail: null as Error | null, calls: 0, hold: null as (() => Promise<void>) | null }));
 vi.mock("../stream-credits", async (importOriginal) => {
   const real = await importOriginal<typeof import("../stream-credits")>();
   return {
     ...real,
     streamMonthlyRate: async (orgId: string) => {
       rateRead.calls++;
+      const hold = rateRead.hold;
+      rateRead.hold = null;
+      if (hold) await hold();
       if (rateRead.fail) throw rateRead.fail;
       return real.streamMonthlyRate(orgId);
     },
@@ -3541,33 +3545,99 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   // ended session (InvalidTransition → a 500 on the organiser's own create). Driven through the REAL stopSession from
   // inside the ingest call, so the race is the production one, not a rewritten row. Both modes: passthrough's
   // `provisioned` guard was already there, and is the positive pair.
-  // Seazn Task 36b: a composed start asks for its Machine BESIDE the inputs, so by the time a Stop lands inside the ingest call
-  // the Machine has been (or is being) asked for. The domain's answer is the same — the session ends `stopped`, the create
-  // resolves, no credit moves — and the Machine it made is torn down, none left alive; only "no Machine is asked for" stopped
-  // being true of composed. Passthrough has no Machine and is the positive pair.
-  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is left alive and no credit moves", async (mode) => {
+  // Seazn Task 36b: a composed start asks for its Machine BESIDE the inputs, so a Stop landing inside the ingest call races
+  // the Machine's request, which is database round trips of its own. Nothing orders the two (CI runs 45725141308 and
+  // 45690193774: the Stop took the row first and no Machine was asked for), and every order is the product's to answer. So
+  // each is its own case, and each is FORCED by a gate on the event that defines it, never left to which query returns first:
+  //   unasked  — the Stop takes the row before the Machine's request does: no Machine is asked for (the m4 guard);
+  //   creating — the request is on the row and the provider's create is out: the Machine it makes is destroyed on arrival;
+  //   booting  — the create has answered and the row holds the Machine: it is stopped, and is gone by the next look.
+  // The session ends `stopped`, the create resolves and no credit moves in all of them. Passthrough has no Machine and is
+  // the positive pair. The ledger's runner edges prove each case got the order it names.
+  const M4_CASES = [
+    { name: "composed, Stop before the Machine is asked for", mode: "composed", order: "unasked", edges: [] },
+    { name: "composed, Stop while the Machine's create is out", mode: "composed", order: "creating", edges: ["create_started", "session_stop", "create_ok"] },
+    { name: "composed, Stop after the Machine answered", mode: "composed", order: "booting", edges: ["create_started", "create_ok", "session_stop"] },
+    { name: "passthrough", mode: "passthrough", order: "unasked", edges: [] },
+  ] as const;
+  // Not an ordering device: a start that never reaches a gate (a Machine asked for only after the inputs) cannot reach it
+  // while the ingest call is waiting here, so the wait is bounded and that is a named red instead of a hung test.
+  const M4_GATE_WAIT_MS = 8_000;
+  async function reached(gate: Promise<void>): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([gate.then(() => true), new Promise<boolean>((res) => { timer = setTimeout(() => res(false), M4_GATE_WAIT_MS); })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  it.each(M4_CASES.map((c) => [c.name, c] as const))("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is left alive and no credit moves", async (_name, { mode, order, edges }) => {
     const r = await rig({ credits: 1 });
     const real = r.ingest.createLiveInput.bind(r.ingest);
     const seen: string[] = [];
+    const gated: boolean[] = [];
+    // booting: `create_ok` is being written, on a transaction holding the org's money lock — the Stop's own transaction
+    // takes that lock first, so it decides only after this one has committed.
+    let adopted!: () => void;
+    const createOk = new Promise<void>((res) => { adopted = res; });
+    const record = telemetry.recordEvent;
+    const ledgerSpy = vi.spyOn(telemetry, "recordEvent").mockImplementation((tx, e) => {
+      if (e.kind === "runner_transition" && e.type === "create_ok") adopted();
+      return record(tx, e);
+    });
+    if (order === "creating") r.runner.holdCreates();
     const spy = vi.spyOn(r.ingest, "createLiveInput").mockImplementationOnce(async (args) => {
-      seen.push((await stopSession(r.auth, r.fixtureId, args.sessionId, r.deps)).state);
+      const parkedRequest: { release?: () => void } = {};
+      if (mode === "composed" && order === "unasked") {
+        // This call is made synchronously after the Machine's request starts, before that request has read the rate: the
+        // next rate read is its own. It stays parked, holding no lock, until the Stop has returned.
+        let parked!: () => void;
+        const atRead = new Promise<void>((res) => { parked = res; });
+        rateRead.hold = () => new Promise<void>((release) => { parkedRequest.release = release; parked(); });
+        gated.push(await reached(atRead));
+        rateRead.hold = null;
+      }
+      if (order === "creating") gated.push(await reached(r.runner.whenHeld(1)));
+      if (order === "booting") gated.push(await reached(createOk));
+      try {
+        seen.push((await stopSession(r.auth, r.fixtureId, args.sessionId, r.deps)).state);
+      } finally {
+        parkedRequest.release?.();
+        r.runner.holdCreates(false);
+        for (const h of r.runner.heldCreates) h.answer();
+      }
       return real(args);
     });
     try {
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps);
+      expect(gated, `PREMISE: the Stop waited for the point "${order}" names`).toEqual(mode === "composed" ? [true] : []);
       expect(seen, "the stop really landed mid-create").toHaveLength(1);
-      if (mode === "composed") {
+      const ledger = await sql<{ type: string }[]>`
+        select type from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
+      expect(ledger.map((e) => e.type).filter((t) => ["create_started", "session_stop", "create_ok"].includes(t)),
+        "PREMISE: the ledger's runner edges are in the order this case forces").toEqual(edges);
+      if (order === "creating") {
         expect(r.runner.created, "PREMISE (Task 36b): the Machine was asked for beside the inputs, before the Stop").toHaveLength(1);
         expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "destroyed" });
         expect(r.runner.destroyed, "the Machine the start made is torn down").toHaveLength(1);
         expect(await r.runner.list(), "none left alive").toEqual([]);
+      } else if (order === "booting") {
+        expect(r.runner.created, "PREMISE (Task 36b): the Machine was asked for beside the inputs, before the Stop").toHaveLength(1);
+        expect(r.runner.stops.map((x) => x.signal), "the running Machine is told to stop").toEqual(["SIGINT"]);
+        // A stopping Machine is OBSERVED gone: the organiser's next polls complete the session.
+        for (let i = 0; i < 4; i++) { r.tick(STREAM_POLL_MS); await currentSession(r.auth, r.fixtureId, r.deps); }
+        expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "destroyed" });
+        expect(await r.runner.list(), "none left alive").toEqual([]);
       } else {
         expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
         expect(r.runner.created).toEqual([]);
+        expect(await r.runner.list(), "none left alive").toEqual([]);
       }
       expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
     } finally {
+      rateRead.hold = null;
       spy.mockRestore();
+      ledgerSpy.mockRestore();
     }
   });
 
