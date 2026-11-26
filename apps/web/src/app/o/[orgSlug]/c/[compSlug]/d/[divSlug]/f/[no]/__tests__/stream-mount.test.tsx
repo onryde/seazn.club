@@ -21,7 +21,9 @@ const scene = vi.hoisted(() => ({
   awayId: "e-away" as string | null,
   outcome: null as unknown,
   // Task 33d: the signed-in organiser's role, and the user ids the member-seat freeze answers for the org.
-  role: "admin" as string,
+  // Back to fixtures: `null` is an accepted official who is NOT a member of the org.
+  role: "admin" as string | null,
+  locale: "en",
   frozenIds: [] as string[],
 }));
 const spies = vi.hoisted(() => ({
@@ -112,7 +114,7 @@ vi.mock("@/lib/entitlements", () => ({
   orgPlanKey: vi.fn(async () => "pro"),
 }));
 vi.mock("@/lib/db", () => ({ sql: () => Promise.resolve([]) }));
-vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => scene.locale) }));
 vi.mock("@/components/v2/checkin-qr", () => ({ CheckinQr: () => null }));
 vi.mock("@/components/v2/fixture-officials-strip", () => ({ FixtureOfficialsStrip: () => null }));
 vi.mock("@/components/v2/fixture-console", () => ({ FixtureConsole: () => null }));
@@ -122,7 +124,14 @@ vi.mock("@/server/video/organiser-replays", () => ({ fixtureSeaznReplays: spies.
 vi.mock("@/components/v2/fixture-replays-section", () => ({ FixtureReplaysSection: () => null }));
 vi.mock("@/server/usecases/entitlement-freeze", () => ({ frozenMemberIds: spies.frozen }));
 
+import { renderToStaticMarkup } from "react-dom/server";
 import FixturePage from "../page";
+import { BackLink } from "@/components/back-link";
+import { CheckinQr } from "@/components/v2/checkin-qr";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import { FixtureReplaysSection } from "@/components/v2/fixture-replays-section";
 
@@ -174,7 +183,7 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 beforeEach(() => {
   Object.assign(scene, {
     canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null,
-    homeId: "e-home", awayId: "e-away", outcome: null, role: "admin", frozenIds: [],
+    homeId: "e-home", awayId: "e-away", outcome: null, role: "admin", locale: "en", frozenIds: [],
   });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
@@ -562,5 +571,112 @@ describe("Task 33d: a member whose seat is paused sees the replays without the a
     expect(p.consoleEl, "the page rendered").not.toBeNull();
     expect(p.section, "the list too").not.toBeNull();
     expect(p.paused).toBe(false);
+  });
+});
+
+/** Every element in the page's tree that `match` accepts, in document order. */
+function findAll(node: ReactNode, match: (el: ReactElement) => boolean): ReactElement[] {
+  if (Array.isArray(node)) return node.flatMap((child) => findAll(child as ReactNode, match));
+  if (!isValidElement(node)) return [];
+  const below = findAll((node.props as { children?: ReactNode }).children, match);
+  return match(node) ? [node, ...below] : below;
+}
+
+const props = (el: ReactElement) => el.props as Record<string, unknown>;
+
+// The one sport here (football) is enough: the destination is built from the three slugs alone, no sport reaches it.
+describe("the match page's back button to the division's fixtures", () => {
+  /** Everyone `requireFixturePage` lets in. `member` is what decides whether the division page opens at all. */
+  const VIEWERS = [
+    { who: "owner", role: "owner", canEdit: true, canScore: true, member: true },
+    { who: "admin", role: "admin", canEdit: true, canScore: true, member: true },
+    { who: "member viewer", role: "viewer", canEdit: false, canScore: false, member: true },
+    { who: "member official scorer", role: "viewer", canEdit: false, canScore: true, member: true },
+    { who: "non-member official scorer", role: null, canEdit: false, canScore: true, member: false },
+  ] as const;
+  const STATUSES = ["scheduled", "in_play", "decided", "finalized", "forfeited", "abandoned", "cancelled"];
+  // The route the division page really serves (app/o/[orgSlug]/c/[compSlug]/d/[divSlug], `?tab=fixtures`), spelled out.
+  const FIXTURES = "/o/org/c/comp/d/div-one?tab=fixtures";
+
+  async function render() {
+    const tree = (await FixturePage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div-one", no: "7" }),
+      searchParams: Promise.resolve({}),
+    })) as ReactNode;
+    const backs = findAll(tree, (el) => el.type === BackLink);
+    const rows = findAll(tree, (el) => props(el)["data-role"] === "match-top-row");
+    return {
+      backs,
+      rows,
+      inRow: rows[0] ? findAll(rows[0], (el) => el.type === BackLink || el.type === CheckinQr).map((el) => el.type) : [],
+      checkin: findAll(tree, (el) => el.type === CheckinQr).length,
+      meLinks: findAll(tree, (el) => el.type !== BackLink && props(el).href === "/me"),
+    };
+  }
+
+  it("every viewer, every fixture status, frozen or not: exactly one, first in the top row, to a page that viewer can open", async () => {
+    let checked = 0;
+    let withCheckin = 0;
+    let withoutCheckin = 0;
+    for (const v of VIEWERS) {
+      for (const status of STATUSES) {
+        for (const frozen of [false, true]) {
+          Object.assign(scene, { role: v.role, canEdit: v.canEdit, canScore: v.canScore, status, frozen });
+          const at = `${v.who} · ${status} · frozen ${String(frozen)}`;
+          const p = await render();
+          expect(p.backs, at).toHaveLength(1);
+          expect(p.rows, at).toHaveLength(1);
+          expect(props(p.backs[0]!).href, at).toBe(v.member ? FIXTURES : "/me");
+          expect(props(p.backs[0]!).emphasis, at).toBe("round");
+          expect(props(p.backs[0]!).label, at).toBe(v.member ? uiEn["fixture.back.fixtures"] : uiEn["fixture.back.myMatches"]);
+          // Same row as the check-in QR, back button first (left). The QR keeps its own gate.
+          const offersCheckin = v.canEdit && status === "scheduled" && !frozen;
+          expect(p.inRow, at).toEqual(offersCheckin ? [BackLink, CheckinQr] : [BackLink]);
+          expect(p.checkin, at).toBe(offersCheckin ? 1 : 0);
+          if (offersCheckin) withCheckin++;
+          else withoutCheckin++;
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(VIEWERS.length * STATUSES.length * 2);
+    expect(withCheckin, "anti-vacuity: some scenes do offer the QR").toBeGreaterThan(0);
+    expect(withoutCheckin, "anti-vacuity: and some do not").toBeGreaterThan(0);
+  });
+
+  it("an official scorer's courtside line: a member keeps its My matches shortcut; a non-member's is the back button, not a second link", async () => {
+    Object.assign(scene, { role: "viewer", canEdit: false, canScore: true });
+    const member = await render();
+    expect(member.meLinks, "member official: the shortcut stays").toHaveLength(1);
+    expect(props(member.meLinks[0]!).children).toBe(uiEn["fixture.myMatches"]);
+    Object.assign(scene, { role: null });
+    const stranger = await render();
+    expect(stranger.meLinks, "non-member official: no second way to /me").toHaveLength(0);
+    expect(props(stranger.backs[0]!).href).toBe("/me");
+  });
+
+  it("is a real link with a localised name and a 44px target, in all four locales", async () => {
+    let checked = 0;
+    for (const [locale, ui] of [["en", uiEn], ["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      for (const [role, key, href] of [
+        ["admin", "fixture.back.fixtures", FIXTURES],
+        [null, "fixture.back.myMatches", "/me"],
+      ] as const) {
+        Object.assign(scene, { locale, role, canEdit: role !== null, canScore: true });
+        const [back] = (await render()).backs;
+        const html = renderToStaticMarkup(back!);
+        const name = ui[key];
+        expect(name, `${locale} has the key`).toBeTruthy();
+        expect(html, locale).toMatch(/^<a [^>]*>.*<\/a>$/);
+        expect(html, locale).toContain(`href="${href}"`);
+        expect(html, locale).toContain(`aria-label="${name.replaceAll("'", "&#x27;")}"`);
+        // h-11 w-11 = 44px square.
+        expect(html, locale).toMatch(/class="[^"]*\bh-11 w-11\b[^"]*"/);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    const translated = new Set([uiEn, uiEs, uiFr, uiNl].map((ui) => ui["fixture.back.fixtures"]));
+    expect(translated.size, "four different strings, not English four times").toBe(4);
   });
 });
