@@ -1,0 +1,10 @@
+{
+  "state": "playing",
+  "programmePhase": "live",
+  "input": "connected",
+  "output": "connected",
+  "inputReceivedFps": 29.9,
+  "inputReceivedKbps": 1512,
+  "inputWidth": 1280,
+  "inputHeight": 720
+}

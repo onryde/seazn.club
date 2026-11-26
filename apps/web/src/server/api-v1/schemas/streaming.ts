@@ -669,6 +669,13 @@ export const RelayHeartbeat = z
     inputReceivedKbps: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
     inputWithheldSpans: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
     inputQueueOverruns: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
+    // Task E (compositor docs/specs/2026-11-26-heartbeat-input-picture.proposed.json, whose two declarations these are,
+    // verbatim): the size of the camera's decoded picture as the relay's decoder makes it, before the relay scales it into the
+    // programme's box. Sent with the six above (RELAY_INPUT_BEAT=1) and only while the camera is connected; a whole number of
+    // pixels from 1 to 16384, the compositor dropping a pair outside that rather than 400-ing the beat. Stored as sent, in both
+    // beat stores (relay/sanitise.ts); relay-contract.test.ts compares each to the proposal's copy.
+    inputWidth: z.number().int().min(1).max(16384).nullish(),
+    inputHeight: z.number().int().min(1).max(16384).nullish(),
   })
   .strict()
   // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a

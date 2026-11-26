@@ -780,6 +780,34 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(before).toBe(3);
   });
 
+  // Task E: the camera's decoded picture size, through the real route into BOTH stores (the allowlist entry is what keeps it in the
+  // sample's raw; last_heartbeat keeps the whole body). A beat that carries a size the contract refuses writes nothing.
+  it("Task E: heartbeat-camera-picture through the ROUTE is 200, and inputWidth and inputHeight land in BOTH stores as sent; a width past the ceiling, 0 and a string are each a 400 that writes nothing", async () => {
+    const s = await session();
+    const beat = vector("heartbeat-camera-picture");
+    const keys = ["inputWidth", "inputHeight"];
+    for (const k of keys) expect(beat, `premise: the vector carries ${k}`).toHaveProperty(k);
+    expect((await postBeat(s.sessionId, beat, { token: s.jobToken })).status).toBe(200);
+    let checked = 0;
+    for (const [store, row] of [["last_heartbeat", await lastHeartbeat(s.sessionId)], ["samples.raw", (await newestRaw(s.sessionId)).raw]] as const) {
+      for (const k of keys) {
+        expect(row, `${store}.${k}`).toHaveProperty(k, beat[k]);
+        checked++;
+      }
+      expect(row, `${store}: the whole body`).toEqual(beat);
+    }
+    expect(checked, "anti-vacuity: two keys, two stores").toBe(4);
+    const before = (await newestRaw(s.sessionId)).n;
+    let refused = 0;
+    for (const bad of [{ ...beat, inputWidth: 16385 }, { ...beat, inputHeight: 0 }, { ...beat, inputWidth: "1280" }]) {
+      expect((await postBeat(s.sessionId, bad, { token: s.jobToken })).status, JSON.stringify(bad)).toBe(400);
+      refused++;
+    }
+    expect(refused).toBe(3);
+    expect((await newestRaw(s.sessionId)).n, "a refused body is not a sample").toBe(before);
+    expect(await lastHeartbeat(s.sessionId), "a refused body is not the latest beat").toEqual(beat);
+  });
+
   // Owner scope addition (2026-10-15): the final beat carries the exit reason, recorded in both beat stores. The runner's
   // own exit columns are written from the OBSERVED exit (A5), never from a beat. What web DOES with each reason is R2003's
   // (the describe block "R2003: the final beat's exit reason" below); this test keeps the record and the one reaction

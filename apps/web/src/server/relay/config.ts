@@ -433,7 +433,7 @@ export function seaznHostedCost(env: Record<string, string | undefined> = proces
   return seaznFlag("SEAZN_HOSTED_COST", env);
 }
 /** T44 (compositor Owed 110 + 111): whether web copies `RELAY_INPUT_BEAT=1` into each relay Machine's env, which makes the
- *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat). Web's heartbeat
+ *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat) and, from Task E, its decoded picture's size (`inputWidth`, `inputHeight`). Web's heartbeat
  *  contract declares them from T44, so it accepts the beat either way; the flag is what asks for them. DEFAULT OFF, and OFF in prod
  *  until the owner says: the keys add a few fields to every beat and every sample's raw, and nothing reads them yet. Named like
  *  RELAY_AIRINGS, the other switch web passes through to the Machine, and read the same way (runner-fly.ts): ONLY the exact "1"
