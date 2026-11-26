@@ -7,6 +7,10 @@
 // shapes are Cloudflare's (C1: `/<token>/manifest/video.m3u8`; C5: `/<token>/downloads/default.mp4`), never read off the
 // module under test. Every case builds its own empty cache, so no case depends on another's order.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { warn, capture } = vi.hoisted(() => ({ warn: vi.fn(), capture: vi.fn() }));
+vi.mock("@/server/logger", () => ({ log: { warn } }));
+vi.mock("@/lib/sentry", () => ({ captureError: capture }));
 import { parseSignedAddress, withToken } from "@/components/public-site/match-centre/seazn-signed-address";
 import { FakeIngest } from "@/server/relay/fakes";
 import { CloudflareIngest } from "@/server/relay/ingest-cf";
@@ -271,19 +275,28 @@ describe("W-LL: the live programme manifest asks for LL-HLS with ?protocol=llhls
   });
 
   // Review I2: this runs on every live read of the match page; a throw is a 500 on every poll of a live Seazn fixture.
-  it("a malformed value never throws or rejects: the live manifest is the plain one, on stg too, and every read after it answers", async () => {
+  it("a malformed value never throws or rejects: the live manifest is the plain one, on stg too, every read answers, and it is reported ONCE per value through the logger and the Sentry helper", async () => {
     let checked = 0;
-    for (const bad of ["maybe", "1", "on"]) {
+    for (const bad of ["ll-bad-a", "ll-bad-b", "ll-bad-c"]) {
       vi.stubEnv("ENV_NAME", "stg");
       vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", bad);
       const { deps } = rig();
+      const before = [warn.mock.calls.length, capture.mock.calls.length];
       // A SYNCHRONOUS throw would escape the caller's `.then(ok, err)` isolation (seazn-video.ts), so it is asserted on its own.
       expect(() => void signLivePlayback(deps, "in-1", T0), bad).not.toThrow();
       await expect(signLivePlayback(deps, "in-1", T0), bad).resolves.toMatchObject({ id: expect.stringMatching(/^[0-9a-f]{16}$/) });
       expect((await signLivePlayback(deps, "in-1", T0)).src, bad).toMatch(PLAY_PLAIN);
+      expect([warn.mock.calls.length - before[0]!, capture.mock.calls.length - before[1]!], `${bad}: three-plus reads, one report each`).toEqual([1, 1]);
+      expect(capture.mock.calls.at(-1)![0]).toBeInstanceOf(Error);
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  it("a logger or Sentry that fails cannot fail the read", async () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "ll-bad-d");
+    warn.mockImplementationOnce(() => { throw new Error("logger down"); });
+    await expect(signLivePlayback(rig().deps, "in-1", T0)).resolves.toMatchObject({ src: expect.stringMatching(PLAY_PLAIN) });
   });
 
   it("the id does not see the query (one video, on or off), and a re-mint changes only the token: the part after it is equal", async () => {

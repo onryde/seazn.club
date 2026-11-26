@@ -30,7 +30,7 @@
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
 import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS } from "./config";
-import { lowLatencyOn } from "./low-latency";
+import { invalidLowLatencyMessage, lowLatencyReader } from "./low-latency";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -77,19 +77,6 @@ export function liveInputRecording(access?: IngestCreateSpec["access"]): typeof 
   if (!access) return { ...LIVE_INPUT_RECORDING };
   return { ...LIVE_INPUT_RECORDING, requireSignedURLs: true, allowedOrigins: [...access.allowedOrigins] };
 }
-
-/** W-LL (owner 2026-11-26, research lever 2): the LL-HLS ask a PROGRAMME input's create (and the switch's PUT, which re-sends the create's
- *  body) carries — Cloudflare's `preferLowLatency`, a boolean at the TOP LEVEL of the body beside `recording`, not inside it. Sources:
- *  create  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/create/index.md  (request + response)
- *  update  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/update/index.md  (the PUT takes it too)
- *  guide   https://developers.cloudflare.com/stream/stream-live/start-stream-live/  (default false, BETA, recording `mode` must be
- *          `automatic` — which the one LIVE_INPUT_RECORDING constant always is; B-frames unsupported, GOP 2-4 s, RTMP preferred over SRT).
- *  Nothing there says how it interacts with `requireSignedURLs` (UNMEASURED: the stg trial reads it), and the docs list no extra price.
- *  Camera: never — the relay pulls it over SRT and LL could change that. Off (config's STREAM_PROGRAMME_LOW_LATENCY false, unset off stg, or malformed): the key is
- *  omitted, never sent as false. The PUT re-sends the same current value because a PUT's omitted fields are not known to be kept
- *  (C4's lesson about `recording`); a flag flipped between a create and its switch therefore reaches that input at the switch. */
-const lowLatencyFor = (role: IngestCreateSpec["role"]): { preferLowLatency?: true } =>
-  role === "programme" && lowLatencyOn() ? { preferLowLatency: true } : {};
 
 /** Task 12 (U1: every setting sent is read back): what an echo says of the input's signing, against what was sent. Signed
  *  sent ⇒ `requireSignedURLs` must echo `true` and the origins must be the same hosts (order is not compared). Unsigned sent ⇒
@@ -212,6 +199,8 @@ export class CloudflareIngest implements IngestProvider {
   private readonly reportError: ErrorReporter;
   /** Phase 1 review I3: the lock's echo with no scheduled deletion. INJECTED like `reportError`. Default: nothing. */
   private readonly warn: Warn;
+  /** W-LL: the switch's reader; a bad value is reported once through THIS adapter's `warn` (relay/low-latency.ts). */
+  private readonly lowLatencyOn: () => boolean;
   /** m-2 / G-1 / m-c: what has already been reported, `<what>:<session, or input:<uid> with no session>` — each kind of
    *  report goes out once per session (per process: the live pair is a process singleton, drivers.ts). */
   private readonly reported = new Set<string>();
@@ -242,6 +231,8 @@ export class CloudflareIngest implements IngestProvider {
     this.rec = opts.recorder ?? NOOP_RECORDER;
     this.reportError = opts.reportError ?? (() => undefined);
     this.warn = opts.warn ?? (() => undefined);
+    const readLowLatency = lowLatencyReader((invalid) => this.warn({ value: JSON.stringify(invalid.slice(0, 40)) }, invalidLowLatencyMessage(invalid)));
+    this.lowLatencyOn = () => readLowLatency();
   }
 
   /** One request, one record (ruling 13). `meta.ids` are the ids the caller
@@ -325,8 +316,22 @@ export class CloudflareIngest implements IngestProvider {
     throw new Error(this.red(`cloudflare ${what}: HTTP ${r.status}${e ? ` code ${e.code} ${e.message}` : ""}`, per));
   }
 
+  /** W-LL (owner 2026-11-26, research lever 2): the LL-HLS ask a PROGRAMME input's create (and the switch's PUT, which re-sends the create's
+   *  body) carries — Cloudflare's `preferLowLatency`, a boolean at the TOP LEVEL of the body beside `recording`, not inside it. Sources:
+   *  create  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/create/index.md  (request + response)
+   *  update  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/update/index.md  (the PUT takes it too)
+   *  guide   https://developers.cloudflare.com/stream/stream-live/start-stream-live/  (default false, BETA, recording `mode` must be
+   *          `automatic` — which the one LIVE_INPUT_RECORDING constant always is; B-frames unsupported, GOP 2-4 s, RTMP preferred over SRT).
+   *  Nothing there says how it interacts with `requireSignedURLs` (UNMEASURED: the stg trial reads it), and the docs list no extra price.
+   *  Camera: never — the relay pulls it over SRT and LL could change that. Off (config's STREAM_PROGRAMME_LOW_LATENCY false, unset off stg, or malformed): the key is
+   *  omitted, never sent as false. The PUT re-sends the same current value because a PUT's omitted fields are not known to be kept
+   *  (C4's lesson about `recording`); a flag flipped between a create and its switch therefore reaches that input at the switch. */
+  private lowLatencyFor(role: IngestCreateSpec["role"]): { preferLowLatency?: true } {
+    return role === "programme" && this.lowLatencyOn() ? { preferLowLatency: true } : {};
+  }
+
   async createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials> {
-    const asked = lowLatencyFor(spec.role);
+    const asked = this.lowLatencyFor(spec.role);
     const r = await this.call<{
       uid: string;
       rtmps: { url: string; streamKey: string };
@@ -583,7 +588,7 @@ export class CloudflareIngest implements IngestProvider {
     const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
     const r = await this.call<{ enabled?: boolean; recording?: { mode?: string; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
       ...named, enabled, recording: liveInputRecording(meta.access ?? undefined), deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
-      ...lowLatencyFor(meta.role),
+      ...this.lowLatencyFor(meta.role),
     }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 && !enabled) return;
     if (!r.json.success || !r.json.result) this.fail("set input enabled", r);

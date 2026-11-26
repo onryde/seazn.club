@@ -19,7 +19,9 @@ import "server-only";
 // `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
 import { createHash } from "node:crypto";
 import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
-import { lowLatencyOn } from "@/server/relay/low-latency";
+import { invalidLowLatencyMessage, lowLatencyReader } from "@/server/relay/low-latency";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 import type { CallTimeout, IngestProvider } from "@/server/relay/ports";
 
 /** A mint, in flight or done, and when its token expires. */
@@ -104,6 +106,13 @@ async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, 
  *  segment and everything after it is one tail: the match page's token swap and same-video check read `origin` and `tail` and see the
  *  same pair on every machine. The LIVE programme manifest only: a recording is plain HLS, a download is not a manifest. */
 const LL_HLS_QUERY = "?protocol=llhls";
+
+/** Review I2: a value that is neither true nor false reads OFF here, and is reported ONCE per process: the app logger's warn and the app's
+ *  Sentry capture helper (never a second init). A reporter that fails cannot fail the read (relay/low-latency.ts). */
+const lowLatencyOn = lowLatencyReader((invalid) => {
+  log.warn({ value: JSON.stringify(invalid.slice(0, 40)) }, invalidLowLatencyMessage(invalid));
+  captureError(new Error(invalidLowLatencyMessage(invalid)), { route: "video/cf-playback" });
+});
 
 async function signedManifest(deps: PlaybackDeps, uid: string, now: Date, query = ""): Promise<SignedPlayback> {
   const host = hostOrThrow();

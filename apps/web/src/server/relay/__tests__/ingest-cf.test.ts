@@ -395,19 +395,27 @@ describe("CloudflareIngest", () => {
       expect(checked).toBe(4);
     });
 
-    it("a malformed value NEVER throws (review I2): the create goes out as plain HLS, with no key, on stg too; the switch PUT likewise", async () => {
+    it("a malformed value NEVER throws (review I2): the create goes out as plain HLS, with no key, on stg too; the switch PUT likewise; the adapter's own warn names it once per value", async () => {
+      const warns: { fields: Record<string, unknown>; message: string }[] = [];
+      const adapter = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: "tok", warn: (fields, message) => warns.push({ fields, message }) });
       let checked = 0;
       for (const bad of ["maybe", "1", "on", "yes"]) {
         vi.stubEnv("ENV_NAME", "stg");
         vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", bad);
         rec.calls.length = 0;
-        await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" }), bad).resolves.toBeDefined();
-        await expect(ingest.setInputEnabled("in_abc", false, { sessionId: "s1", slot: 0, role: "programme", access: null }), bad).resolves.toBeUndefined();
+        await expect(adapter.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" }), bad).resolves.toBeDefined();
+        await expect(adapter.setInputEnabled("in_abc", false, { sessionId: "s1", slot: 0, role: "programme", access: null }), bad).resolves.toBeUndefined();
         expect(rec.calls, `${bad}: both calls were sent`).toHaveLength(2);
         for (const c of rec.calls) expect("preferLowLatency" in bodyOf(c), `${bad}: ${String(c.init.method)} omits the key`).toBe(false);
+        expect(warns, `${bad}: reported once across the create and the PUT`).toHaveLength(checked + 1);
+        expect(warns[checked]!.message).toMatch(/STREAM_PROGRAMME_LOW_LATENCY.*OFF/);
         checked++;
       }
       expect(checked).toBe(4);
+      // A camera never reads the switch, so a bad value is not reported for it.
+      warns.length = 0;
+      await adapter.createLiveInput({ sessionId: "s1", slot: 0 });
+      expect(warns, "the camera create reports nothing").toEqual([]);
     });
 
     it("an echo that does not say preferLowLatency true is WARNED (the input still works as plain HLS), never refused; a true echo is silent; the warning carries no id, url or token", async () => {
