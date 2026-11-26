@@ -250,13 +250,13 @@
   "home.app.line": "Scan de code van je organisator om een wedstrijd te streamen met de score in beeld, of om te scoren.",
   "product.streaming.app.title": "Je camera past in je broekzak",
   "product.streaming.app.label": "Seazn Club Mobile App",
-  "product.streaming.app.line": "Scan de code van een wedstrijd of baan en ga live. Geen laptop, geen capturekaart.",
+  "product.streaming.app.line": "Scan de code van een wedstrijd of baan en houd de knop Live gaan ingedrukt. Geen laptop, geen capturekaart.",
   "product.matchday.app.title": "Eén telefoon volgt de baan",
   "product.matchday.app.label": "Seazn Club Mobile App",
   "product.matchday.app.line": "Scan één keer de code van de baan. De stream gaat live als een wedstrijd begint en stopt als die eindigt.",
   "product.remote.app.title": "Scoor ook vanuit de app",
   "product.remote.app.label": "Seazn Club Mobile App",
-  "product.remote.app.line": "Scan de scorecode van je organisator en scoor elk punt, elke bal of elk doelpunt. De scorepad in de browser blijft werken.",
+  "product.remote.app.line": "Scan de scorecode van je organisator en scoor elk punt, elke bal of elk doelpunt. Het scorepad in de browser blijft werken.",
   "discovery.inPlay": "In het spel",
   "discovery.badge.live": "Live",
   "discovery.badge.featured": "Uitgelicht",
@@ -1427,7 +1427,7 @@
   "product.matchday.club.text": "Seazn Demo Club draait een wedstrijddag die je kunt openen: velden, oproepen en live scores.",
   "product.matchday.club.alt": "De wedstrijddag op het web: twee velden opgeroepen, één vrij, één wedstrijd bezig",
   "product.matchday.faq.1.q": "Hebben vrijwilligers een account nodig?",
-  "product.matchday.faq.1.a": "Nee. Ze scannen één Wedstrijddag-code in de Seazn Club Mobile App en krijgen de wedstrijden van de dag.",
+  "product.matchday.faq.1.a": "Nee. Ze scannen één wedstrijddagcode in de Seazn Club Mobile App en krijgen de wedstrijden van de dag.",
   "product.matchday.faq.2.q": "Wat als twee mensen dezelfde baan oproepen?",
   "product.matchday.faq.2.a": "Een baan met een opgeroepen of lopende wedstrijd neemt geen andere oproep aan: de tweede krijgt te zien dat hij bezet is. Een oproep kan ongedaan worden gemaakt.",
   "product.matchday.faq.3.q": "Krijgen spelers bericht als hun wedstrijd wordt opgeroepen?",
@@ -1610,5 +1610,6 @@
   "blog.topic.social": "Sociale formaten",
   "blog.topic.ladder": "Ladders",
   "blog.topic.withdrawal": "Terugtrekkingen",
-  "blog.topic.forfeits": "Forfaits en walkovers"
+  "blog.topic.forfeits": "Forfaits en walkovers",
+  "blog.topic.streaming": "Streaminggidsen"
 }

@@ -2,7 +2,8 @@
 // pure function each so a test reads what a page declares without rendering it. Client-safe (no fs, no engine).
 import type { Metadata } from "next";
 import { breadcrumbLd, organizationLd } from "@/components/seo/json-ld";
-import { BLOG_AUTHOR, blogUrl, type BlogPostMeta } from "@/lib/blog";
+import { BLOG_AUTHOR, BLOG_TITLE_MAX, blogUrl, type BlogPostMeta } from "@/lib/blog";
+import { OG_ALT } from "@/lib/seo-meta";
 import { siteOrigin } from "@/lib/site-origin";
 
 /** The same form as help's "%s — Seazn Club Help" (app/help/layout.tsx). */
@@ -21,15 +22,27 @@ export function blogIndexMetadata(): Metadata {
     title: { absolute: BLOG_INDEX_TITLE },
     description: BLOG_INDEX_DESCRIPTION,
     alternates: { canonical: "/blog", types: feedAlternate },
-    openGraph: { type: "website", siteName: "Seazn Club", title: BLOG_SITE_TITLE, description: BLOG_INDEX_DESCRIPTION, url: "/blog" },
+    openGraph: {
+      type: "website",
+      siteName: "Seazn Club",
+      title: BLOG_SITE_TITLE,
+      description: BLOG_INDEX_DESCRIPTION,
+      url: "/blog",
+      // A page's openGraph replaces the inherited one whole, the root card with it, so it is named here.
+      images: [{ url: "/opengraph-image", width: 1200, height: 630, type: "image/png", alt: OG_ALT }],
+    },
     twitter: { card: "summary_large_image", title: BLOG_SITE_TITLE, description: BLOG_INDEX_DESCRIPTION },
   };
 }
 
 export function blogPostMetadata(post: BlogPostMeta): Metadata {
   const url = blogUrl(post.slug);
+  // Only the <title> takes the short search title, if the post has one; the share cards below keep the question.
+  // The site suffix is added where both fit in BLOG_TITLE_MAX and gives way otherwise.
+  const searchTitle = post.seoTitle ?? post.title;
+  const fits = BLOG_TITLE_TEMPLATE.replace("%s", () => searchTitle).length <= BLOG_TITLE_MAX;
   return {
-    title: post.title,
+    title: fits ? searchTitle : { absolute: searchTitle },
     description: post.description,
     alternates: { canonical: url, types: feedAlternate },
     openGraph: {
@@ -49,7 +62,7 @@ export function blogPostMetadata(post: BlogPostMeta): Metadata {
 /** The author is the organisation, never a person (owner, 2026-11-19). */
 const author = { "@type": "Organization", name: BLOG_AUTHOR } as const;
 
-function publisher() {
+export function publisher() {
   const org = organizationLd();
   return { "@type": org["@type"], name: org.name, url: org.url, logo: org.logo };
 }

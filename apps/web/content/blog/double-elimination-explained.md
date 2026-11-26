@@ -1,5 +1,6 @@
 ---
 title: How does double elimination work, and what is a grand final reset?
+seoTitle: Double elimination and the grand final reset, explained
 description: In double elimination you are out after a second defeat, or at once if you forfeit, withdraw or retire. A reset keeps that true in the grand final too.
 date: 2026-11-23
 author: Seazn

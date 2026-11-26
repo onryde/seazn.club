@@ -15,12 +15,16 @@ export const BLOG_TOPICS = [
   "ladder",
   "withdrawal",
   "forfeits",
+  "streaming",
 ] as const;
 export type BlogTopic = (typeof BLOG_TOPICS)[number];
 
 /** Meta-description length: the description is also the page's <meta name="description">. */
 export const BLOG_DESCRIPTION_MIN = 50;
 export const BLOG_DESCRIPTION_MAX = 160;
+
+/** What a search result shows of a <title>: no post's document title runs past this. */
+export const BLOG_TITLE_MAX = 65;
 
 /** A help page lists at most this many posts under "Read how it works". The content layer refuses a fourth on one page. */
 export const BLOG_HELP_MAX = 3;
@@ -39,6 +43,11 @@ export interface BlogPostMeta {
   slug: string;
   /** A question in organiser words; ends with "?". */
   title: string;
+  /**
+   * A shorter title for the page's <title> alone, for a question longer than BLOG_TITLE_MAX. The H1, the share cards,
+   * the feed and the structured data keep the question.
+   */
+  seoTitle?: string;
   /** The one-line answer; also the meta description. */
   description: string;
   /** ISO `YYYY-MM-DD`. */
@@ -52,7 +61,7 @@ export interface BlogPostMeta {
   help: string;
   /** 2 to 4 other post slugs. */
   related: string[];
-  /** Example ids the body uses, each exactly once. */
+  /** Example ids the body uses, each exactly once. Empty only in a post that places art (blog/art.ts). */
   examples: string[];
 }
 

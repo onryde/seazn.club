@@ -250,13 +250,13 @@
   "home.app.line": "Escanea el código de tu organizador para emitir un partido con el marcador en pantalla, o para anotarlo.",
   "product.streaming.app.title": "Lleva la cámara en el bolsillo",
   "product.streaming.app.label": "Seazn Club Mobile App",
-  "product.streaming.app.line": "Escanea el código de un partido o de una pista y emite en directo. Sin portátil ni capturadora.",
+  "product.streaming.app.line": "Escanea el código de un partido o de una pista y mantén pulsado el botón Emitir. Sin portátil ni capturadora.",
   "product.matchday.app.title": "Un solo móvil sigue la pista",
   "product.matchday.app.label": "Seazn Club Mobile App",
-  "product.matchday.app.line": "Escanea una vez el código de la pista. Emite en directo cuando empieza un partido y para cuando termina.",
+  "product.matchday.app.line": "Escanea una vez el código de la pista. El móvil emite en directo cuando empieza un partido y deja de emitir cuando termina.",
   "product.remote.app.title": "Anota también desde la app",
   "product.remote.app.label": "Seazn Club Mobile App",
-  "product.remote.app.line": "Escanea el código de anotación de tu organizador y anota cada punto, bola o gol. El marcador del navegador sigue funcionando.",
+  "product.remote.app.line": "Escanea el código de anotación de tu organizador y anota cada punto, bola o gol. El panel de anotación del navegador sigue funcionando.",
   "discovery.inPlay": "En juego",
   "discovery.badge.live": "En directo",
   "discovery.badge.featured": "Destacado",
@@ -555,7 +555,7 @@
   "product.streaming.road.3.p": "Tu voluntario toca el marcador en un móvil. El directo, la página pública y la pantalla del club se mueven a la vez.",
   "product.streaming.road.3.cap": "La Seazn Club Mobile App, en mitad de un over.",
   "product.streaming.cam.title": "Tu móvil es la cámara",
-  "product.streaming.cam.lede": "Escanea el código del partido en la Seazn Club Mobile App y coloca el móvil en un trípode. Comprueba cámara, micrófono y señal, y te espera.",
+  "product.streaming.cam.lede": "Escanea el código del partido en la Seazn Club Mobile App y coloca el móvil en un trípode. La app comprueba la cámara, el micrófono y la señal, y te espera.",
   "product.streaming.cam.1.h": "Listo, y mantén pulsado para emitir",
   "product.streaming.cam.1.p": "El partido ya tiene nombre. Mantener tres segundos inicia la emisión, así que un bolsillo no puede. Imagen de la cámara ilustrada.",
   "product.streaming.cam.2.h": "Empieza y termina solo",
@@ -1610,5 +1610,6 @@
   "blog.topic.social": "Formatos sociales",
   "blog.topic.ladder": "Escaleras",
   "blog.topic.withdrawal": "Retiradas",
-  "blog.topic.forfeits": "Incomparecencias y walkovers"
+  "blog.topic.forfeits": "Incomparecencias y walkovers",
+  "blog.topic.streaming": "Guías de streaming"
 }

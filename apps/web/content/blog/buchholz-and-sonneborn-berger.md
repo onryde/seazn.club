@@ -1,5 +1,6 @@
 ---
 title: What are Buchholz and Sonneborn-Berger, and why do they decide Swiss ties?
+seoTitle: Buchholz and Sonneborn-Berger: why do they decide Swiss ties?
 description: In a Swiss, level players often never met. Buchholz adds up the scores of their opponents, and Sonneborn-Berger weighs those scores by the result.
 date: 2026-11-23
 author: Seazn

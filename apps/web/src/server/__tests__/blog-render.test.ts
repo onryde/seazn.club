@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 import { renderBlogPost } from "@/server/blog-render";
+import { renderHelpArticle } from "@/server/help-content";
 
 const RESULT: ExampleResult = {
   facts: { ana: 3, bye: "½", label: "Chess" },
@@ -12,7 +13,7 @@ const RESULT: ExampleResult = {
 };
 const GOLDENS = { one: RESULT, two: { facts: { n: 2 }, text: [] } } as Record<string, ExampleResult>;
 
-const post = (markdown: string, examples = ["one"], slug = "a-post") => ({ slug, markdown, examples });
+const post = (markdown: string, examples = ["one"], slug = "a-post") => ({ slug, topic: "round-robin" as const, markdown, examples });
 
 describe("fact tokens", () => {
   it("a fact token resolves to the golden's value, a number or a string, before Markdown is rendered", async () => {
@@ -122,8 +123,8 @@ describe("a prose table in a post is a focusable, named scroll region", () => {
     const html = out.parts.flatMap((p) => (p.kind === "html" ? [p.html] : []));
     expect(html.length, "anti-vacuity: two html segments").toBe(2);
     for (const part of html) {
-      expect(part.match(/<table>/g)?.length, "anti-vacuity: the segment has a table").toBe(1);
-      expect(part).toMatch(/<div class="help-scroll" tabindex="0" role="region" aria-label="Table"><table>/);
+      expect(part.match(/<table\b/g)?.length, "anti-vacuity: the segment has a table").toBe(1);
+      expect(part).toMatch(/<div class="help-scroll" tabindex="0" role="region" aria-label="Table"><table class="blog-stack" role="table">/);
       expect(part).toMatch(/<\/table><\/div>/);
     }
     expect(html[0]).toMatch(/<p>Before\.<\/p>\s*<div class="help-scroll"/);
@@ -134,5 +135,47 @@ describe("a prose table in a post is a focusable, named scroll region", () => {
     const html = (out.parts[0] as { html: string }).html;
     expect(html).toContain("Just words.");
     expect(html).not.toMatch(/tabindex|role=|aria-label|help-scroll/);
+  });
+});
+
+// A post's own Markdown table is a card per row on a narrow phone (globals.css `.blog-stack`, e2e/blog.spec.ts). The
+// renderer gives it what that needs: explicit table roles (a CSS `display` change drops the implied ones in some
+// browsers) and each cell's column name, hidden from a screen reader, which already reads the column header.
+describe("a post's Markdown table, marked up to stack on a narrow phone", () => {
+  const TABLE = "| What | Minimum | **Better** `now` |\n| --- | --- | --- |\n| Phone | Android | A spare |\n| Power | Charger | |";
+  const htmlOf = async (markdown: string) => {
+    const out = await renderBlogPost(post(`${markdown}\n\n{{example:one}}`), GOLDENS);
+    return out.parts.map((p) => (p.kind === "html" ? p.html : "")).join("");
+  };
+
+  it("names every part of the table, and puts each column's name in its cells, out of a screen reader's way", async () => {
+    const html = await htmlOf(TABLE);
+    expect(html).toMatch(/<table class="blog-stack" role="table">/);
+    const count = (re: RegExp) => html.match(re)?.length ?? 0;
+    expect(count(/<(?:thead|tbody) role="rowgroup">/g), "head and body").toBe(2);
+    expect(count(/<tr role="row">/g), "every row").toBe(3);
+    expect(count(/<th role="columnheader">/g), "every column header").toBe(3);
+    // The first cell of a body row names the row; it carries no label of its own.
+    expect([...html.matchAll(/<td role="rowheader">([^<]*)<\/td>/g)].map((m) => m[1])).toEqual(["Phone", "Power"]);
+    const cells = [...html.matchAll(/<td role="cell"><span class="blog-cell-label" aria-hidden="true">([^<]*)<\/span>([^<]*)<\/td>/g)].map((m) => [m[1], m[2]]);
+    // An empty cell keeps its label, so the card never loses a line. A header's formatting is read as its words.
+    expect(cells).toEqual([["Minimum", "Android"], ["Better now", "A spare"], ["Minimum", "Charger"], ["Better now", ""]]);
+    expect(count(/<td\b/g), "anti-vacuity: no body cell is left unnamed").toBe(2 + cells.length);
+    // The scroll box the shared pipeline puts around every table is still there.
+    expect(html).toMatch(/<div class="help-scroll" tabindex="0" role="region" aria-label="Table"><table class="blog-stack"/);
+  });
+
+  it("a header with no words gives its cells no empty label", async () => {
+    const html = await htmlOf("| What |  |\n| --- | --- |\n| Phone | Android |");
+    expect(html).toContain('<td role="cell">Android</td>');
+    expect(html).not.toContain("blog-cell-label");
+  });
+
+  it("a help article's table is untouched", async () => {
+    const { html } = await renderHelpArticle({ markdown: TABLE }, async () => {
+      throw new Error("no token, so no matrix");
+    });
+    expect(html, "premise: the table was rendered").toContain("<table>");
+    expect(html).not.toMatch(/blog-stack|blog-cell-label|role="(?:table|row|cell|rowheader|columnheader|rowgroup)"/);
   });
 });

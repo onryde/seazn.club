@@ -62,12 +62,12 @@ export function findBlogLeaks(text: string): BlogLeak[] {
 
 /**
  * The text of a post that a reader sees, for scanning: link targets, image paths and the blog's own
- * `{{fact:...}}` / `{{example:...}}` tokens are dropped (their ids are code-shaped on purpose and are
+ * `{{fact:...}}` / `{{example:...}}` / `{{art:...}}` tokens are dropped (their ids are code-shaped on purpose and are
  * replaced before a reader sees anything), and Markdown marks are left alone. Underscores are kept.
  */
 export function blogLeakText(markdown: string): string {
   return markdown
-    .replace(/\{\{(?:fact|example):[^}]*\}\}/g, " ")
+    .replace(/\{\{(?:fact|example|art):[^}]*\}\}/g, " ")
     // A picture's or link's quoted title is text a reader sees (help-figures.ts renders it as the <figcaption>): keep it.
     .replace(/!\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2")
     .replace(/\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2");

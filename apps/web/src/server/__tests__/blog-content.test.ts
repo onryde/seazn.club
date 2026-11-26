@@ -171,6 +171,36 @@ describe("parseBlogFrontmatter: passing cases", () => {
   });
 });
 
+// `seoTitle` is the optional short title for the page's <title> alone (a question can run past what a search result
+// shows). It is typed here as the rule: at most 65 characters, plain words, no plan figure.
+describe("parseBlogFrontmatter: the optional search title", () => {
+  const withSeo = (value: string) => read(FIXTURES, "how-swiss-pairs-round-two.md").replace(/^title: .*$/m, (line) => `${line}\nseoTitle: ${value}`);
+  const seoProblems = (value: string): string[] => {
+    try {
+      parseBlogFrontmatter(withSeo(value), "content/blog/how-swiss-pairs-round-two.md");
+      return [];
+    } catch (e) {
+      if (!(e instanceof BlogFrontmatterError)) throw e;
+      return e.problems.map((p) => `${p.key}: ${p.message}`);
+    }
+  };
+
+  it("is read as written, up to 65 characters; a post without one carries no key", () => {
+    const longest = "S".repeat(65);
+    expect(parseBlogFrontmatter(withSeo("Swiss round two pairing"), "content/blog/how-swiss-pairs-round-two.md").seoTitle).toBe("Swiss round two pairing");
+    expect(parseBlogFrontmatter(withSeo(longest), "content/blog/how-swiss-pairs-round-two.md").seoTitle).toBe(longest);
+    const plain = parseBlogFrontmatter(read(FIXTURES, "how-swiss-pairs-round-two.md"), "content/blog/how-swiss-pairs-round-two.md");
+    expect("seoTitle" in plain).toBe(false);
+  });
+
+  it("is refused when it is too long, empty, carries a token or types a plan figure", () => {
+    expect(seoProblems("S".repeat(66))).toEqual(["seoTitle: must be 1 to 65 characters, is 66"]);
+    expect(seoProblems("")).toEqual(["seoTitle: must be 1 to 65 characters, is 0"]);
+    expect(seoProblems("Pairing {{fact:a.b}}")).toEqual(["seoTitle: must not carry a token (front-matter is never resolved)"]);
+    expect(seoProblems("Pro takes 5% of a fee").join()).toMatch(/^seoTitle: line 1 types a plan figure/);
+  });
+});
+
 describe("parseBlogFrontmatter: failing cases, one defect per fixture", () => {
   const entries = Object.entries(INVALID_CASES);
   it("reads the failing fixtures", () => {
@@ -265,7 +295,9 @@ describe("related: slugs planned but not yet written", () => {
     expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
     expect(written.length, "anti-vacuity: written posts").toBeGreaterThan(0);
     expect(written.filter((p) => BLOG_PLANNED_SLUGS.has(p.slug)).map((p) => p.slug), "a written post is no longer planned").toEqual([]);
-    expect(written.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
+    // Streaming guides are outside the programme's list (2026-11-25), so they are not counted into its 33.
+    const programme = written.filter((p) => p.topic !== "streaming");
+    expect(programme.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });

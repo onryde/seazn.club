@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
+import { HELP_DESCRIPTION } from "@/lib/help-seo";
 
 export const metadata: Metadata = {
   title: { default: "Help centre — Seazn Club", template: "%s — Seazn Club Help" },
-  description:
-    "How to run tournaments and leagues on seazn.club — setup, registration, scheduling, scoring, sharing and billing, in plain words.",
+  description: HELP_DESCRIPTION,
 };
 
 // The help tree's frame: the site's nav and footer around a centred column. Each page draws its own

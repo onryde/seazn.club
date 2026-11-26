@@ -19,6 +19,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { helpPageWithPosts } from "../blog-help-pages";
+import { SERIF, style } from "../reading-font";
+import { QUOTE_AND_CALLOUT, SANS, expectBodyType, readingOverflow } from "../help-reading";
 import { projectViewport } from "./_shared";
 
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -128,6 +130,30 @@ test("On this page is folded under the lede below 1100; it opens, and an entry l
   await expect(page.locator(`[id="${href.slice(1)}"]`)).toBeInViewport();
   // Choosing an entry folds the list again, so the reader is left on the section.
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
+
+// The reading style (owner pick "H1", 2026-11-26) at this width; 1280 and the every-article sweep are e2e/help.spec.ts.
+test("the article's type at this width: the serif body, the large title, sans everywhere else, nothing past the column", async ({ page }) => {
+  const phone = width() < 600;
+  await visit(page, QUOTE_AND_CALLOUT);
+  expect(await expectBodyType(page, width(), ["paragraph", "item", "quote"])).toBe(3);
+  expect((await style(page, "main article h1")).size).toBe(phone ? "31px" : "42px");
+  expect((await style(page, ".reading-prose h2")).size).toBe(phone ? "21px" : "24px");
+  expect((await style(page, ".reading-prose .help-callout p")).size).toBe("15px");
+  let checked = 0;
+  for (const { path, selectors } of SANS) {
+    await visit(page, path);
+    for (const selector of selectors) {
+      await expect(page.locator(selector).first(), `anti-vacuity: ${selector}`).toBeAttached();
+      expect((await style(page, selector)).family, selector).not.toMatch(SERIF);
+      checked++;
+    }
+    const o = await readingOverflow(page);
+    expect(o.checked, `${path}: anti-vacuity`).toBeGreaterThan(10);
+    expect(o.over, path).toEqual([]);
+    await expectNoHorizontalScroll(page);
+  }
+  expect(checked, "anti-vacuity: parts read").toBe(SANS.flatMap((s) => s.selectors).length);
 });
 
 test("search works at this width: results as you type, with the section shown, and one opens", async ({ page }) => {

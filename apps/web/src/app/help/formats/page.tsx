@@ -8,16 +8,16 @@ import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { HelpRelated } from "@/components/help/help-related";
 import { helpBlogLinks } from "@/server/blog-help-links";
+import { JsonLd } from "@/components/seo/json-ld";
+import { FORMAT_GALLERY_DESCRIPTION as DESCRIPTION, FORMAT_GALLERY_TITLE as TITLE, helpBreadcrumbLd, helpCollectionLd } from "@/lib/help-seo";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
 export const dynamic = "error";
 export const revalidate = 300;
 
-export const metadata: Metadata = {
-  title: "Format gallery",
-  description:
-    "League, knockout, groups, swiss, double elimination, americano, ladder — every tournament format explained with a diagram and a live example.",
-};
+const TRAIL = [{ href: "/help#formats", label: "Formats" }];
+
+export const metadata: Metadata = { title: TITLE, description: DESCRIPTION, alternates: { canonical: "/help/formats" } };
 
 export default async function FormatGalleryPage() {
   // The badge reads the live plan table. At build there is no database, so an unreadable table shows no badge rather
@@ -29,7 +29,9 @@ export default async function FormatGalleryPage() {
   const blogLinks = await helpBlogLinks("formats/overview");
   return (
     <HelpShell currentHref="/help/formats">
-      <HelpBreadcrumb trail={[{ href: "/help#formats", label: "Formats" }]} />
+      <JsonLd data={helpCollectionLd({ path: "/help/formats", name: TITLE, description: DESCRIPTION })} />
+      <JsonLd data={helpBreadcrumbLd(TRAIL, { path: "/help/formats", name: TITLE })} />
+      <HelpBreadcrumb trail={TRAIL} />
       <h1 className="mk-display mt-3 text-4xl font-bold text-purple-950">
         Pick the right shape for your day
       </h1>

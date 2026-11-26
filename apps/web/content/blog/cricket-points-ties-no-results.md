@@ -1,5 +1,6 @@
 ---
 title: How many points does a cricket team get for a tie or a washed-out match?
+seoTitle: Cricket points for a tied or washed-out match
 description: With the starting rules, a tied or washed-out cricket match gives each team the same: more than a loss and less than a win.
 date: 2026-11-23
 author: Seazn

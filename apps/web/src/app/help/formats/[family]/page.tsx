@@ -6,6 +6,8 @@ import { FormatPreviewView } from "@/components/format-preview-view";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { HelpRelated } from "@/components/help/help-related";
 import { helpBlogLinks } from "@/server/blog-help-links";
+import { JsonLd } from "@/components/seo/json-ld";
+import { familyDescription, helpArticleLd, helpBreadcrumbLd } from "@/lib/help-seo";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
 import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
@@ -24,7 +26,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { family } = await params;
   const f = formatFamily(family);
   if (!f) return {};
-  return { title: `${f.title} — format guide`, description: f.tagline };
+  return {
+    title: `${f.title} — format guide`,
+    description: familyDescription(f),
+    alternates: { canonical: `/help/formats/${f.slug}` },
+  };
 }
 
 export default async function FormatExplainerPage({ params }: Props) {
@@ -43,11 +49,15 @@ export default async function FormatExplainerPage({ params }: Props) {
   });
 
   const blogLinks = await helpBlogLinks(`formats/${f.slug}`);
+  const path = `/help/formats/${f.slug}`;
+  const trail = [{ href: "/help/formats", label: "Format gallery" }];
 
   return (
     <HelpShell currentHref="/help/formats">
     <article>
-      <HelpBreadcrumb trail={[{ href: "/help/formats", label: "Format gallery" }]} />
+      <JsonLd data={helpArticleLd({ path, name: f.title, description: familyDescription(f) })} />
+      <JsonLd data={helpBreadcrumbLd(trail, { path, name: f.title })} />
+      <HelpBreadcrumb trail={trail} />
       <h1 className="mt-3 flex items-center gap-2 text-3xl font-bold tracking-tight text-slate-900">
         {f.title}
         {familyNeedsPaidPlan(f, matrix) ? (

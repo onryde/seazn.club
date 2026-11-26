@@ -9,9 +9,13 @@ import { helpBlogLinks } from "@/server/blog-help-links";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { helpTocEntries } from "@/lib/help-toc";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
+import { readingSerif } from "@/components/reading/reading-serif";
+import { READING_TITLE } from "@/components/reading/reading-title";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { HelpToc } from "@/components/help/help-toc";
 import { HelpRelated } from "@/components/help/help-related";
+import { JsonLd } from "@/components/seo/json-ld";
+import { helpArticleLd, helpBreadcrumbLd } from "@/lib/help-seo";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s, because an article with a
 // plan token reads the plan table, so a changed fee shows within about ten minutes (five here, five at the edge).
@@ -32,7 +36,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const article = helpArticle(slug.join("/"));
   if (!article) return {};
-  return { title: article.title, description: article.description };
+  return { title: article.title, description: article.description, alternates: { canonical: `/help/${article.slug}` } };
 }
 
 export default async function HelpArticlePage({ params }: Props) {
@@ -50,7 +54,7 @@ export default async function HelpArticlePage({ params }: Props) {
   // ONE pipeline run gives the HTML and its headings, so the "On this page" ids are the rendered ones.
   const { html, headings } = await renderHelpArticle(article, loadPricingMatrix);
   const toc = helpTocEntries(headings);
-  const sectionLabel = helpSectionLabel(article.section);
+  const trail = [{ href: `/help#${article.section}`, label: helpSectionLabel(article.section) }];
 
   // Previous/next within the section, in the section list's own order.
   const pages = helpSectionList().find((s) => s.key === article.section)?.pages ?? [];
@@ -68,18 +72,22 @@ export default async function HelpArticlePage({ params }: Props) {
   // The posts that name this page (blog front-matter `help:`), beside Related and never through it.
   const blogLinks = await helpBlogLinks(article.slug);
 
-  // The reading column is capped at 34rem: about 70 characters a line of the 15px body text, never more than
-  // about 80 (measured in a browser: an uncapped column ran 100+ characters at 1024 and about 90 at 1280).
+  // The type is the blog's reading style (owner pick "H1", 2026-11-26): the large title and a serif body, shared with a
+  // post (components/reading/, globals.css `.reading-prose`). The frame stays help's own.
+  // The reading column is capped at 34rem: about 60 characters a line of the 20px serif body, never more than 80
+  // (e2e/help.spec.ts measures it). Uncapped, the column ran past 100 characters a line at 1024 even in smaller text.
   // NOT `70ch`: `ch` is the width of Geist's "0", which is wide (70ch = 742px at 16px), so that cap bound nowhere.
   // From 1100px: reading column and the "On this page" rail beside it, which
   // spans every row so it can stay in view the whole way down. Below that: one column, the rail folded
   // under the lede. Rows are explicit so the order holds whatever the auto-placement would do.
   return (
     <HelpShell currentHref={href}>
-      <article className="min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,1fr)_12rem] min-[1100px]:gap-x-10">
+      <JsonLd data={helpArticleLd({ path: href, name: article.title, description: article.description })} />
+      <JsonLd data={helpBreadcrumbLd(trail, { path: href, name: article.title })} />
+      <article className={`${readingSerif.variable} min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,1fr)_12rem] min-[1100px]:gap-x-10`}>
         <header className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-1">
-          <HelpBreadcrumb trail={[{ href: `/help#${article.section}`, label: sectionLabel }]} />
-          <h1 className="mt-3 text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{article.title}</h1>
+          <HelpBreadcrumb trail={trail} />
+          <h1 className={`mt-3 ${READING_TITLE}`}>{article.title}</h1>
           {article.description ? (
             <p className="mt-3 text-lg leading-relaxed text-slate-600">{article.description}</p>
           ) : null}
@@ -91,7 +99,7 @@ export default async function HelpArticlePage({ params }: Props) {
           />
         ) : null}
         <div className="mt-8 min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
-          <CompetitionProse html={html} className="help-prose" />
+          <CompetitionProse html={html} className="help-prose reading-prose" />
         </div>
         <HelpRelated
           related={related}

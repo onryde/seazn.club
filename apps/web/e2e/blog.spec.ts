@@ -1,14 +1,17 @@
 // The blog at desktop width in a browser (Blog P2 Task 4; the seven phone and tablet widths are e2e/mobile/blog.spec.ts).
 // What the unit suite (src/app/blog/__tests__, node, no DOM) cannot see: no sideways page scroll at 1280, 768 and 320, axe,
-// a wide example table scrolling INSIDE a focusable named region (AGENTS.md class 23), the "On this page" rail beside the
-// article, the nav's client-side signed-in swap against the real session cookies, the Help icon's hit area, and the feed.
+// a wide example table scrolling INSIDE a focusable named region (AGENTS.md class 23), the one reading column with no
+// "On this page", the serif only a post page and a help article load, the nav's client-side signed-in swap against the real session cookies,
+// the Help icon's hit area, and the feed.
 //
 // The pilot is the one post on disk; the index shows no sport chips until a post names a sport (the chips' rule is a unit
 // test, src/app/blog/__tests__/blog-pages.test.tsx), so no chip is clicked here.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { CHECKLIST_POST, expectChecklist } from "./blog-checklist";
+import { SERIF, drawnWith, notTheSerif, serifFiles, style, watchFonts } from "./reading-font";
 
 const POST = "/blog/how-standings-points-work";
 const WIDTHS = [1280, 768, 320] as const;
@@ -22,6 +25,14 @@ async function visit(page: Page, path: string, width: number) {
   await dismissCookieBanner(page);
 }
 
+/** The pixel width of the file a lazy picture loaded: scrolled to, then waited for. */
+async function naturalWidth(img: Locator): Promise<number> {
+  await img.scrollIntoViewIfNeeded();
+  const read = () => img.evaluate((el: HTMLImageElement) => (el.complete ? el.naturalWidth : 0));
+  await expect.poll(read, { message: "the picture loaded" }).toBeGreaterThan(0);
+  return read();
+}
+
 /** axe's serious and critical findings, as short lines. */
 async function seriousAxe(page: Page): Promise<string[]> {
   const { violations } = await new AxeBuilder({ page }).analyze();
@@ -32,7 +43,7 @@ test.describe("signed out", () => {
   test.use(signedOut);
 
   for (const width of WIDTHS) {
-    for (const path of ["/blog", POST]) {
+    for (const path of ["/blog", POST, CHECKLIST_POST]) {
       test(`${path} at ${width}: no horizontal page scroll, nothing clipped, axe finds nothing serious`, async ({ page }) => {
         await visit(page, path, width);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -62,18 +73,17 @@ test.describe("signed out", () => {
     await expect(page.getByText("Swipe sideways to see the whole table")).toBeVisible();
   });
 
-  test("1280: the article, then the 'On this page' rail on its right, which marks and scrolls to a section", async ({ page }) => {
-    await visit(page, POST, 1280);
-    const rail = page.getByRole("navigation", { name: "On this page" });
-    await expect(rail).toBeVisible();
-    const h1 = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
-    const box = (await rail.boundingBox())!;
-    expect(h1.x + h1.width, "the article is left of the rail").toBeLessThanOrEqual(box.x);
-    const last = rail.locator("a").last();
-    await expect(last).toHaveAttribute("href", "#how-seazn-handles-it");
-    await last.click();
+  for (const width of WIDTHS) {
+    test(`the streaming guide's checklist at ${width}: a card per row below 480, an ordinary table from there`, async ({ page }) => {
+      await visit(page, CHECKLIST_POST, width);
+      await expectChecklist(page, width);
+      await expectNoHorizontalScroll(page);
+    });
+  }
+
+  test("'How Seazn handles it' is still a link target, and its link leads to a help page that exists", async ({ page }) => {
+    await visit(page, `${POST}#how-seazn-handles-it`, 1280);
     await expect(page.locator("#how-seazn-handles-it")).toBeInViewport();
-    // The post's "How Seazn handles it" link leads to a help page that exists.
     const go = page.getByTestId("blog-handles-it").getByRole("link");
     const href = (await go.getAttribute("href"))!;
     expect(href).toMatch(/^\/help\//);
@@ -129,6 +139,245 @@ test.describe("signed out", () => {
     const card = await request.get(`${POST}/opengraph-image`);
     expect(card.status()).toBe(200);
     expect(card.headers()["content-type"]).toContain("image/png");
+  });
+});
+
+// The reading layout (owner pick "A", 2026-11-25): one centred 680px column at every width and no table of contents.
+// Everything in a post's column is the SAME width and starts at the same left edge. A screenshot is the one exception to
+// the width: it is never scaled up past its own pixels. Measured in the page, element by element; a kind with no element
+// found fails (anti-vacuity), so a renamed test id cannot pass by checking nothing.
+const COLUMN = 680;
+const COLUMN_PARTS: Record<string, string> = {
+  header: '[data-testid="blog-post"] > header',
+  lede: '[data-testid="blog-post"] > header > p:first-of-type',
+  byline: '[data-testid="blog-byline"]',
+  prose: ".blog-prose",
+  heading: ".blog-prose h2",
+  paragraph: ".blog-prose > p",
+  example: '[data-testid="blog-example"]',
+  diagram: '[data-testid="blog-diagram"]',
+  picture: ".blog-prose figure img",
+  art: '[data-testid="blog-art"] img',
+  handles: '[data-testid="blog-handles-it"]',
+  related: '[data-testid="blog-related"]',
+};
+const COMMON = ["header", "lede", "byline", "prose", "heading", "paragraph", "handles", "related"];
+const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
+  { path: "/blog/chess-points-and-half-points", kinds: [...COMMON, "example", "picture"] },
+  { path: "/blog/how-standings-points-work", kinds: [...COMMON, "example", "picture"] },
+  { path: "/blog/how-a-ladder-works", kinds: [...COMMON, "diagram"] },
+  { path: "/blog/what-you-need-to-stream-a-match", kinds: [...COMMON, "art"] },
+];
+
+test.describe("the reading column", () => {
+  test.use(signedOut);
+
+  for (const width of WIDTHS) {
+    for (const { path, kinds } of COLUMN_POSTS) {
+      test(`${path} at ${width}: one centred column, every part of the post in it, no 'On this page'`, async ({ page }, testInfo) => {
+        await visit(page, path, width);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        await expect(page.getByTestId("help-toc")).toHaveCount(0);
+        await expect(page.getByText("On this page", { exact: true })).toHaveCount(0);
+        const column = Math.min(COLUMN, width - 2 * 16);
+        const left = (await page.locator(COLUMN_PARTS.header!).boundingBox())!.x;
+        const inner = await page.evaluate(() => document.documentElement.clientWidth);
+        expect(Math.abs(left - (inner - column) / 2), `centred: x=${left} in ${inner}px`).toBeLessThanOrEqual(1);
+        let checked = 0;
+        const wrong: string[] = [];
+        for (const kind of kinds) {
+          const found = page.locator(COLUMN_PARTS[kind]!);
+          const n = await found.count();
+          expect(n, `${path}: anti-vacuity, no '${kind}' found`).toBeGreaterThan(0);
+          for (let i = 0; i < n; i++) {
+            const want = kind === "picture" ? Math.min(column, await naturalWidth(found.nth(i))) : column;
+            const box = (await found.nth(i).boundingBox())!;
+            if (Math.abs(box.width - want) > 1 || Math.abs(box.x - left) > 1) {
+              wrong.push(`${kind}[${i}] x=${Math.round(box.x)} w=${Math.round(box.width)} (column x=${Math.round(left)}, want w=${want})`);
+            }
+            checked++;
+          }
+        }
+        testInfo.annotations.push({ type: "column-elements-checked", description: String(checked) });
+        console.log(`column check ${path} @${width}: ${checked} elements, column ${column}px`);
+        expect(checked, "anti-vacuity: elements measured").toBeGreaterThanOrEqual(kinds.length);
+        expect(wrong, `${checked} elements measured`).toEqual([]);
+        await expectNoHorizontalScroll(page);
+      });
+    }
+  }
+
+  // The case the rule exists for: a screenshot narrower than the column. The premise is checked, so a recaptured, wider
+  // picture fails here instead of leaving the upscale untested.
+  test("a screenshot narrower than the column keeps its own width", async ({ page }) => {
+    await visit(page, "/blog/how-standings-points-work", 1280);
+    const img = page.locator(COLUMN_PARTS.picture!);
+    const natural = await naturalWidth(img);
+    expect(natural, "premise: narrower than the 680px column").toBeLessThan(COLUMN);
+    expect(Math.abs((await img.boundingBox())!.width - natural), `drawn at its own ${natural}px`).toBeLessThanOrEqual(1);
+  });
+
+  // Phone sizes below 600, where the art also changes drawing; the full sizes from there. 599 and 600 are the two sides.
+  for (const { width, size } of [
+    { width: 1280, size: { body: 20, title: "42px", lede: "22px", h2: "24px" } },
+    { width: 600, size: { body: 20, title: "42px", lede: "22px", h2: "24px" } },
+    { width: 599, size: { body: 18, title: "31px", lede: "18px", h2: "21px" } },
+    { width: 320, size: { body: 18, title: "31px", lede: "18px", h2: "21px" } },
+  ]) {
+    test(`a post's type at ${width}: a ${size.body}px serif body at 1.6, a grey subtitle, the byline between two hairlines`, async ({ page }) => {
+      // One post carries everything read here: paragraphs, list items, a generated example and a screenshot figure.
+      await visit(page, "/blog/chess-points-and-half-points", width);
+      let checked = 0;
+      for (const selector of [".blog-prose > p", ".blog-prose li"]) {
+        const s = await style(page, selector);
+        expect(s.size, selector).toBe(`${size.body}px`);
+        expect(Math.abs(s.line - size.body * 1.6), `${selector} line height ${s.line}`).toBeLessThan(0.5);
+        expect(s.family.split(",")[0], selector).toMatch(SERIF);
+        expect(s.color, selector).toBe("rgb(36, 36, 36)");
+        checked++;
+      }
+      expect((await style(page, "main h1")).size).toBe(size.title);
+      const lede = await style(page, COLUMN_PARTS.lede!);
+      expect([lede.size, lede.color]).toEqual([size.lede, "rgb(107, 107, 107)"]);
+      const h2 = await style(page, ".blog-prose h2");
+      expect([h2.size, h2.transform]).toEqual([size.h2, "none"]);
+      const byline = await style(page, COLUMN_PARTS.byline!);
+      expect([byline.top, byline.bottom]).toEqual(["1px solid rgb(236, 236, 236)", "1px solid rgb(236, 236, 236)"]);
+      // Everything that is not body text stays in the house sans.
+      const sans = [
+        "main h1",
+        COLUMN_PARTS.lede!,
+        '[data-testid="blog-post"] nav[aria-label="Breadcrumb"] a',
+        `${COLUMN_PARTS.byline!} time`,
+        ".blog-prose h2",
+        '[data-testid="blog-example"] figcaption',
+        '[data-testid="blog-example"] th',
+        '[data-testid="blog-example"] td',
+        ".blog-prose figure figcaption",
+        '[data-testid="blog-handles-it"] h2',
+        '[data-testid="blog-handles-it"] p',
+        '[data-testid="blog-handles-it"] a',
+        '[data-testid="blog-related"] li a span',
+      ];
+      for (const selector of sans) {
+        await expect(page.locator(selector).first(), `anti-vacuity: ${selector}`).toBeAttached();
+        expect((await style(page, selector)).family, selector).not.toMatch(SERIF);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: elements whose face was read").toBe(sans.length + 2);
+    });
+  }
+
+  test("a post page loads the serif from this site; no font comes from anywhere else", async ({ page, baseURL }) => {
+    const asked = watchFonts(page);
+    await visit(page, "/blog/chess-points-and-half-points", 1280);
+    await page.waitForLoadState("networkidle");
+    await page.evaluate(() => document.fonts.ready);
+    const files = await serifFiles(page);
+    expect(files.length, "premise: the serif declares its files").toBeGreaterThan(0);
+    const loaded = asked.filter((u) => files.includes(u));
+    console.log(`post page: ${asked.length} font requests, ${loaded.length} of them the serif (${files.length} declared)`);
+    expect(loaded.length, "the serif was fetched").toBeGreaterThan(0);
+    expect(asked.filter((u) => new URL(u).origin !== new URL(baseURL!).origin), "fonts from another origin").toEqual([]);
+    expect(new Set(loaded).size, "one file: the Latin one, regular and bold together").toBe(1);
+    const drawn = await drawnWith(page, ".blog-prose > p");
+    expect(drawn.nodes, "anti-vacuity: paragraphs drawn").toBeGreaterThan(0);
+    expect(notTheSerif(drawn.faces)).toEqual([]);
+  });
+
+  // Help ARTICLE pages share the face (e2e/help.spec.ts "the reading style"); the help home and the format pages do not.
+  test("no other page asks for the serif: the blog index, the help home and format pages, the home page and pricing", async ({ page }) => {
+    // The files are read from a post, then each other page is opened fresh and left to settle while its links prefetch.
+    // A fixed settle, not "network idle": the home page keeps prefetching and is never idle.
+    test.setTimeout(180_000);
+    await visit(page, "/blog/chess-points-and-half-points", 1280);
+    const files = await serifFiles(page);
+    expect(files.length, "premise").toBeGreaterThan(0);
+    let checked = 0;
+    const others = ["/blog", "/help", "/help/formats", "/help/formats/knockout", "/en", "/pricing"];
+    for (const path of others) {
+      const other = await page.context().newPage();
+      const asked = watchFonts(other);
+      const postPrefetches: string[] = [];
+      other.on("requestfinished", (r) => {
+        if (/\/blog\/[a-z0-9-]+\?_rsc=/.test(r.url())) postPrefetches.push(r.url());
+      });
+      await visit(other, path, 1280);
+      await other.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      // The index is where this leaks: a prefetched post route carries its preload hints with it. The premise is that
+      // one was prefetched, or the check below would pass with nothing to catch.
+      if (path === "/blog") await expect.poll(() => postPrefetches.length, { message: "the index prefetched a post", timeout: 30_000 }).toBeGreaterThan(0);
+      await other.waitForTimeout(3_000);
+      expect(asked.length, `${path}: anti-vacuity, its own fonts were seen`).toBeGreaterThan(0);
+      expect(asked.filter((u) => files.includes(u)), path).toEqual([]);
+      const preloaded = await other.locator('link[rel="preload"][as="font"]').evaluateAll((els) => els.map((e) => (e as HTMLLinkElement).href));
+      expect(preloaded.filter((u) => files.includes(u)), `${path}: preload`).toEqual([]);
+      await other.close();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: pages checked").toBe(others.length);
+  });
+
+  // The serif is a Latin subset: every character a post draws in it must be in it (the ½ of a drawn game, the × and the
+  // dashes), or the browser quietly draws that one in another face. The posts come from the feed.
+  test("every post's body is drawn wholly in the serif, and so is every non-ASCII character any post uses", async ({ page, request }) => {
+    const xml = await (await request.get("/blog/rss.xml")).text();
+    const paths = [...xml.matchAll(/<link>https?:\/\/[^<]+?(\/blog\/[a-z0-9-]+)<\/link>/g)].map((m) => m[1]!);
+    expect(paths.length, "anti-vacuity: posts in the feed").toBeGreaterThan(20);
+    test.setTimeout(Math.max(120_000, paths.length * 8_000));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const special = new Set<string>();
+    const wrong: string[] = [];
+    let nodes = 0;
+    let glyphs = 0;
+    for (const path of paths) {
+      const res = await page.goto(path);
+      expect(res?.status(), path).toBe(200);
+      const drawn = await drawnWith(page, ".blog-prose p, .blog-prose p *, .blog-prose li, .blog-prose li *");
+      expect(drawn.nodes, `${path}: anti-vacuity, body text drawn`).toBeGreaterThan(0);
+      for (const face of notTheSerif(drawn.faces)) wrong.push(`${path}: ${face}`);
+      nodes += drawn.nodes;
+      glyphs += drawn.glyphs;
+      for (const c of (await page.getByTestId("blog-post").innerText()).match(/[^\x00-\x7F]/g) ?? []) if (!/\s/.test(c)) special.add(c);
+    }
+    expect(wrong, `${paths.length} posts, ${nodes} elements, ${glyphs} glyphs`).toEqual([]);
+    // Tables are sans today; a character used only there must still be in the serif before it moves into a sentence.
+    const chars = [...special].sort().join("");
+    expect(chars, "premise: posts use the half of a drawn game").toContain("½");
+    await page.locator(".blog-prose").first().evaluate((el, text) => {
+      const probe = el.appendChild(document.createElement("p"));
+      probe.id = "glyph-probe";
+      probe.textContent = text;
+    }, chars);
+    const probe = await drawnWith(page, "#glyph-probe");
+    console.log(`serif sweep: ${paths.length} posts, ${nodes} elements, ${glyphs} glyphs; non-ASCII characters probed: ${chars}`);
+    expect(probe.glyphs, "anti-vacuity: probe glyphs").toBeGreaterThanOrEqual([...chars].length);
+    expect(notTheSerif(probe.faces), chars).toEqual([]);
+  });
+
+  // The art has two drawings: the browser takes the phone one below 600px and the wide one from 600. Both must really
+  // load (a broken file keeps its reserved box, so a width check alone would pass on it).
+  test("a post's art: the phone drawing below 600px, the wide drawing from 600, each one loaded", async ({ page }) => {
+    let checked = 0;
+    for (const { width, file } of [
+      { width: 320, file: "what-you-need-to-stream-a-match-flow-phone.svg" },
+      { width: 599, file: "what-you-need-to-stream-a-match-flow-phone.svg" },
+      { width: 600, file: "what-you-need-to-stream-a-match-flow.svg" },
+      { width: 1280, file: "what-you-need-to-stream-a-match-flow.svg" },
+    ]) {
+      await visit(page, "/blog/what-you-need-to-stream-a-match", width);
+      const img = page.locator(COLUMN_PARTS.art!);
+      await img.scrollIntoViewIfNeeded();
+      const shown = () => img.evaluate((el: HTMLImageElement) => ({ file: el.currentSrc.split("/").pop(), loaded: el.complete && el.naturalWidth > 0 }));
+      await expect.poll(shown, { message: `art at ${width}` }).toEqual({ file, loaded: true });
+      // Its height follows the drawing that was picked, not the other one's reserved box.
+      const box = (await img.boundingBox())!;
+      const ratio = file.endsWith("-phone.svg") ? 1100 / 360 : 700 / 1200;
+      expect(Math.abs(box.height - box.width * ratio), `art shape at ${width}: ${Math.round(box.width)}x${Math.round(box.height)}`).toBeLessThan(2);
+      await expectNoHorizontalScroll(page);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: widths checked").toBe(4);
   });
 });
 

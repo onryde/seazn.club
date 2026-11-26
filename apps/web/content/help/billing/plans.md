@@ -1,6 +1,6 @@
 ---
 title: Plans at a glance
-description: Community is free. An Event Pass lifts one competition while it runs. Pro lifts every competition in your organisation, and Enterprise is for federations and platforms.
+description: Community is free. An Event Pass lifts one competition while it runs. Pro lifts every competition in your organisation. Enterprise is for federations and platforms.
 order: 1
 related: billing/change-plan, billing/event-pass, billing/downgrade, billing/groups
 ---

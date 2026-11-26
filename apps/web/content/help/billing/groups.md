@@ -1,6 +1,6 @@
 ---
 title: One bill for several organisations
-description: A billing group is one plan, one card and one invoice for several organisations. What each extra organisation costs, who pays, and what every organisation keeps for itself.
+description: A billing group is one plan, one card and one invoice for several organisations. What each extra one costs, who pays, and what every organisation keeps for itself.
 order: 4
 related: billing/add-an-organisation, billing/remove-an-organisation, billing/hand-over-a-bill, billing/operator
 ---

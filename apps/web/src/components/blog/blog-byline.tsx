@@ -16,7 +16,7 @@ export function BlogByline({
   updatedLabel?: string;
 }) {
   return (
-    <div className="mt-5 flex items-center gap-3" data-testid="blog-byline">
+    <div className="mt-7 flex items-center gap-3 border-y border-[#ececec] py-3.5" data-testid="blog-byline">
       <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--mk-night,#150b36)] text-base font-extrabold text-white">
         S
       </span>

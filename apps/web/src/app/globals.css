@@ -367,6 +367,90 @@ body {
   .help-prose h3 {
     @apply scroll-mt-24;
   }
+  /* The reading style (blog posts, owner pick "A" 2026-11-25; help articles, "H1" 2026-11-26). Both share help's
+     pipeline and `.help-prose`, and `.reading-prose` is the ONE definition of how they read: body text, lists and quotes
+     in the serif the page loads (`--reading-serif`, components/reading/reading-serif.ts), 20px at 1.6 (18px on a phone),
+     and section headings in normal case in the house sans, as are tables, code and captions. A callout is a labelled box,
+     not body text, so its paragraphs and lists are left exactly as they are (`:not(.help-callout *)`). A picture keeps the
+     figure rule below: its own width, capped at the column, so a narrow screenshot is never scaled up (blog art fills the
+     column through its own markup). Every rule needs BOTH classes, so organiser prose never takes one
+     (e2e/blog.spec.ts "the reading column" and e2e/help.spec.ts "the reading style" measure both). */
+  .competition-prose.reading-prose :is(p, li):not(.help-callout *) {
+    font-family: var(--reading-serif), Georgia, serif;
+    font-size: 20px;
+    line-height: 1.6;
+    color: #242424;
+    /* A path or address with no space in it breaks rather than push a phone's page wide. */
+    overflow-wrap: break-word;
+  }
+  .competition-prose.reading-prose p:not(.help-callout *) {
+    margin-block: 1.35em;
+  }
+  .competition-prose.reading-prose p:not(.help-callout *):first-child {
+    margin-top: 0;
+  }
+  .competition-prose.reading-prose p:not(.help-callout *):last-child {
+    margin-bottom: 0;
+  }
+  .competition-prose.reading-prose h2 {
+    margin-top: 3rem;
+    font-size: 24px;
+    line-height: 1.28;
+    letter-spacing: -0.01em;
+    color: #242424;
+    @apply normal-case;
+  }
+  /* Help's sub-headings (no post has one): over the 20px body, under the section heading. */
+  .competition-prose.reading-prose h3 {
+    margin-top: 2rem;
+    font-size: 21px;
+    line-height: 1.3;
+    color: #242424;
+  }
+  @media (max-width: 599.98px) {
+    .competition-prose.reading-prose :is(p, li):not(.help-callout *) {
+      font-size: 18px;
+    }
+    .competition-prose.reading-prose h2 {
+      margin-top: 2.25rem;
+      font-size: 21px;
+    }
+    .competition-prose.reading-prose h3 {
+      margin-top: 1.75rem;
+      font-size: 19px;
+    }
+  }
+  /* A post's own Markdown table (server/blog-table-stack.ts): on a narrow phone each row is a card, the first cell
+     its title and every other cell under its column's name. The column header row stays for a screen reader, out of
+     sight; the roles the renderer writes keep it a table. From 480px it is the ordinary table. */
+  .competition-prose .blog-cell-label {
+    display: none;
+  }
+  @media (max-width: 479.98px) {
+    .competition-prose table.blog-stack {
+      @apply relative block w-full text-[15px] leading-normal;
+    }
+    .competition-prose table.blog-stack thead {
+      @apply sr-only;
+    }
+    .competition-prose table.blog-stack tbody,
+    .competition-prose table.blog-stack tbody tr,
+    .competition-prose table.blog-stack tbody td {
+      @apply block;
+    }
+    .competition-prose table.blog-stack tbody tr {
+      @apply mb-3 rounded-xl border border-purple-100 px-3 py-2;
+    }
+    .competition-prose table.blog-stack tbody td {
+      @apply border-b-0 px-0 py-1;
+    }
+    .competition-prose table.blog-stack tbody td[role="rowheader"] {
+      @apply font-display font-semibold uppercase tracking-wide text-slate-900;
+    }
+    .competition-prose table.blog-stack .blog-cell-label {
+      @apply block text-xs font-semibold uppercase tracking-wide text-slate-500;
+    }
+  }
   .competition-prose hr {
     @apply my-6 border-zinc-200;
   }

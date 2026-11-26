@@ -16,7 +16,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const matrix = vi.hoisted(() => ({ load: vi.fn(async () => ({})) }));
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: matrix.load }));
-vi.mock("next/font/google", () => ({ Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }) }));
+vi.mock("next/font/google", () => ({
+  Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }),
+  Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }),
+}));
 
 import * as layoutRoute from "../layout";
 import * as indexRoute from "../page";

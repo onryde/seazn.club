@@ -27,6 +27,8 @@ vi.mock("next/navigation", async (importOriginal) => ({
 // Rendering a token-free article needs no plan table; if the page asked for one here it would be a defect.
 const matrix = vi.hoisted(() => ({ loadPricingMatrix: vi.fn(async () => { throw new Error("the plan matrix must not be loaded"); }) }));
 vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: matrix.loadPricingMatrix }));
+// The article page's serif (components/reading/reading-serif.ts) is next/font, which only exists inside a Next build.
+vi.mock("next/font/google", () => ({ Source_Serif_4: () => ({ variable: "--reading-serif", className: "" }) }));
 
 // The real lookup, on a fixture map. The targets are real articles.
 const FIXTURE = vi.hoisted(() => ({

@@ -11,10 +11,11 @@ import "server-only";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { builtinModules } from "@seazn/engine/sports";
+import { ART_LINE, ART_ONLY_TOPIC, blogArt } from "@/blog/art";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { helpUrl } from "@/lib/help";
 import {
-  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_HELP_MAX, BLOG_SLUG, BLOG_TOPICS,
+  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_HELP_MAX, BLOG_SLUG, BLOG_TITLE_MAX, BLOG_TOPICS,
   type BlogPostMeta, type BlogTopic,
 } from "@/lib/blog";
 import type { HelpSearchRow } from "@/lib/help-search";
@@ -121,15 +122,28 @@ function bodyProblems(body: string, examples: string[]): BlogProblem[] {
     if (!used.includes(id)) problems.push({ key: "examples", message: `example '${id}' is listed but the body never places it` });
   }
 
+  // Art tokens: a registered picture, alone on its own line, placed once.
+  const art: string[] = [];
+  lines.forEach((line, i) => {
+    const m = ART_LINE.exec(line.trim());
+    if (m) {
+      if (blogArt(m[1]!) === undefined) problems.push({ key: "body", message: `line ${i + 1}: there is no art '${m[1]}'` });
+      if (art.includes(m[1]!)) problems.push({ key: "body", message: `line ${i + 1}: art '${m[1]}' is placed more than once` });
+      art.push(m[1]!);
+    } else if (line.includes("{{art:")) {
+      problems.push({ key: "body", message: `line ${i + 1}: an art token must stand alone on its own line` });
+    }
+  });
+
   // Plan tokens never belong in a post (a post states no plan figure); any other brace pair is a hole.
   if (body.includes("{{plan:")) problems.push({ key: "body", message: "a {{plan:...}} token: a post states no plan figure, link the help page instead" });
   const rest = lines
-    .filter((l) => !EXAMPLE_LINE.test(l.trim()))
+    .filter((l) => !EXAMPLE_LINE.test(l.trim()) && !ART_LINE.test(l.trim()))
     .join("\n")
     .replace(FACT_TOKEN, "")
     .replace(/\{\{plan:[^}]*\}\}/g, "")
-    // An example token that is not alone on its line is already reported above; not a second time here.
-    .replace(/\{\{example:[^}]*\}\}/g, "");
+    // An example or art token that is not alone on its line is already reported above; not a second time here.
+    .replace(/\{\{(?:example|art):[^}]*\}\}/g, "");
   const stray = rest.indexOf("{{");
   if (stray !== -1) {
     problems.push({ key: "body", message: `'${rest.slice(stray, stray + 40)}' is not a fact token or an example token` });
@@ -148,6 +162,13 @@ function bodyProblems(body: string, examples: string[]): BlogProblem[] {
 
   return problems;
 }
+
+/** True when the body places a picture from the art registry, which stands where a worked example would. */
+const placesArt = (body: string): boolean =>
+  body.split("\n").some((line) => {
+    const m = ART_LINE.exec(line.trim());
+    return m !== null && blogArt(m[1]!) !== undefined;
+  });
 
 function figureProblems(key: string, text: string): BlogProblem[] {
   const out: BlogProblem[] = [];
@@ -189,6 +210,13 @@ export function parseBlogFrontmatter(
     if (!title.endsWith("?")) bad("title", "must be a question and end with '?'");
     if (title.includes("{{")) bad("title", "must not carry a token (front-matter is never resolved)");
     problems.push(...figureProblems("title", title));
+  }
+
+  const seoTitle = meta.seoTitle;
+  if (seoTitle !== undefined) {
+    if (seoTitle.length < 1 || seoTitle.length > BLOG_TITLE_MAX) bad("seoTitle", `must be 1 to ${BLOG_TITLE_MAX} characters, is ${seoTitle.length}`);
+    if (seoTitle.includes("{{")) bad("seoTitle", "must not carry a token (front-matter is never resolved)");
+    problems.push(...figureProblems("seoTitle", seoTitle));
   }
 
   const description = need("description");
@@ -249,7 +277,9 @@ export function parseBlogFrontmatter(
   const examplesRaw = need("examples");
   const examples = examplesRaw === null ? [] : parseHelpRelated(examplesRaw);
   if (examplesRaw !== null) {
-    if (examples.length === 0) bad("examples", "is empty; every post carries at least one generated example");
+    if (examples.length === 0 && !(topic === ART_ONLY_TOPIC && placesArt(body))) {
+      bad("examples", `is empty; every post carries at least one generated example (only a '${ART_ONLY_TOPIC}' post may place art, {{art:<id>}}, instead)`);
+    }
     for (const id of examples) if (!EXAMPLE_ID.test(id)) bad("examples", `'${id}' is not an example id`);
     if (new Set(examples).size !== examples.length) bad("examples", "lists an example twice");
   }
@@ -273,6 +303,7 @@ export function parseBlogFrontmatter(
     markdown: body,
   };
   if (updated !== undefined) post.updated = updated;
+  if (seoTitle !== undefined) post.seoTitle = seoTitle;
   return post;
 }
 

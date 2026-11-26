@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import {
   BookUser, CalendarClock, ClipboardList, CreditCard, LayoutGrid,
   Megaphone, Play, Rocket, Trophy, UserCheck, Users, Webhook,
@@ -6,10 +7,18 @@ import {
 import { HELP_SECTIONS, helpNav } from "@/server/help-content";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { HelpSearch } from "@/components/help/help-search";
+import { JsonLd } from "@/components/seo/json-ld";
+import { HELP_DESCRIPTION, helpCollectionLd } from "@/lib/help-seo";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. No plan table here: an hour.
 export const dynamic = "error";
 export const revalidate = 3600;
+
+// `absolute`: without it the root template adds a second "Seazn Club" to the layout's default title.
+export const metadata: Metadata = {
+  title: { absolute: "Help centre — Seazn Club" },
+  alternates: { canonical: "/help" },
+};
 
 const SECTION_ICONS: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number; "aria-hidden"?: boolean }>> = {
   "getting-started": Rocket,
@@ -36,6 +45,7 @@ export default function HelpIndexPage() {
   const nav = helpNav();
   return (
     <main>
+      <JsonLd data={helpCollectionLd({ path: "/help", name: "Help centre", description: HELP_DESCRIPTION })} />
       <h1 className="mk-display text-4xl font-bold text-purple-950 sm:text-5xl">How can we help?</h1>
       <p className="mt-3 max-w-2xl text-slate-600">
         How to run tournaments and leagues on Seazn Club, written for organisers. New here? Start with

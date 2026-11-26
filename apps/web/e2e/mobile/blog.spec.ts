@@ -7,13 +7,14 @@
 //  - the Help icon's tap area is at least 44px and is what a tap at its centre HITS (elementFromPoint, not paint);
 //  - /blog and a post: no sideways page scroll, nothing clipped, axe finds nothing serious;
 //  - the example table scrolls inside a focusable, named region that fits the page column;
-//  - "On this page" is folded under the lede below 1100 and opens;
+//  - a post is one column in the page gutters with no "On this page", its body the serif at 18px below 600 and 20px from there;
 //  - a signed-in visitor sees Dashboard in the bar (tablets) or the panel (phones), and a signed-out one does not.
 // Not serial: no test reads state another writes (AGENTS.md class 21).
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { CHECKLIST_POST, expectChecklist } from "../blog-checklist";
 import { projectViewport } from "./_shared";
 
 const POST = "/blog/how-standings-points-work";
@@ -48,7 +49,8 @@ async function seriousAxe(page: Page): Promise<string[]> {
 test.describe("signed out", () => {
   test.use(signedOut);
 
-  for (const path of ["/blog", POST]) {
+  // The streaming guide is the post with art (a tall phone drawing) and a Markdown checklist rather than an example table.
+  for (const path of ["/blog", POST, CHECKLIST_POST]) {
     test(`${path}: no horizontal scroll, nothing clipped, a tab stop on every scrolling box, axe clean`, async ({ page }) => {
       await visit(page, path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -59,6 +61,12 @@ test.describe("signed out", () => {
       expect(await seriousAxe(page)).toEqual([]);
     });
   }
+
+  test("the streaming guide's checklist: a card per row on a phone, an ordinary table on a tablet", async ({ page }) => {
+    await visit(page, CHECKLIST_POST);
+    await expectChecklist(page, width());
+    await expectNoHorizontalScroll(page);
+  });
 
   test("the example table is a focusable, named region that fits the page column, scrolling inside itself", async ({ page }) => {
     await visit(page, POST);
@@ -89,20 +97,30 @@ test.describe("signed out", () => {
     await expectNoHorizontalScroll(page);
   });
 
-  test("'On this page' is folded under the lede at this width; it opens and an entry lands its heading in view", async ({ page }) => {
+  test("one reading column in the page gutters, no 'On this page', and a serif body at this width's size", async ({ page }) => {
     await visit(page, POST);
-    const toc = page.getByTestId("help-toc");
-    const toggle = toc.locator("button");
-    const nav = toc.locator("nav");
-    await expect(toggle).toBeVisible();
-    await expect(nav).toBeAttached();
-    await expect(nav).toBeHidden();
-    await toggle.click();
-    await expect(nav).toBeVisible();
-    const first = nav.locator("a").first();
-    const id = (await first.getAttribute("href"))!.slice(1);
-    await first.click();
-    await expect(page.locator(`#${id}`)).toBeInViewport();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByTestId("help-toc")).toHaveCount(0);
+    await expect(page.getByText("On this page", { exact: true })).toHaveCount(0);
+    const vw = width();
+    const column = Math.min(680, vw - 32);
+    let checked = 0;
+    for (const selector of ['[data-testid="blog-post"] > header', '[data-testid="blog-byline"]', ".blog-prose > p", '[data-testid="blog-handles-it"]', '[data-testid="blog-related"]']) {
+      const found = page.locator(selector);
+      const n = await found.count();
+      expect(n, `anti-vacuity: ${selector}`).toBeGreaterThan(0);
+      for (let i = 0; i < n; i++) {
+        const box = (await found.nth(i).boundingBox())!;
+        expect(Math.abs(box.width - column), `${selector}[${i}] is ${box.width}px wide`).toBeLessThanOrEqual(1);
+        expect(Math.abs(box.x - (vw - column) / 2), `${selector}[${i}] starts at ${box.x}`).toBeLessThanOrEqual(1);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: elements measured").toBeGreaterThanOrEqual(5);
+    const body = await page.locator(".blog-prose > p").first().evaluate((el) => ({ size: getComputedStyle(el).fontSize, family: getComputedStyle(el).fontFamily.split(",")[0]! }));
+    expect(body.size).toBe(vw < 600 ? "18px" : "20px");
+    expect(body.family).toMatch(/Source.?Serif.?4/i);
+    await expectNoHorizontalScroll(page);
   });
 
   test("the bar: Blog and Help are reachable at this width and the bar stays one row", async ({ page }) => {

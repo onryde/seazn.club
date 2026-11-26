@@ -1,6 +1,6 @@
 ---
 title: Scorers and Match Day codes
-description: Give a scorer a link for one match, or make a Match Day code that lets the Seazn Club Mobile App list the day's matches, score them and, when you tick it, call them to courts.
+description: Give a scorer a link for one match, or a Match Day code so the Seazn Club Mobile App can list and score the day's matches and call them to courts if you tick it.
 order: 10.2
 related: scheduling/match-day, scheduling/match-day-stream, scoring/device-links, scoring/scorer-role
 ---

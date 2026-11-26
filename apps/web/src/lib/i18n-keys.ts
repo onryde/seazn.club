@@ -656,6 +656,7 @@ export type DictionaryKey =
   | "blog.topic.round-robin"
   | "blog.topic.seeding"
   | "blog.topic.social"
+  | "blog.topic.streaming"
   | "blog.topic.swiss"
   | "blog.topic.tie-breaks"
   | "blog.topic.withdrawal"

@@ -1,5 +1,6 @@
 ---
 title: How is a round-robin schedule made, and what happens with an odd number of teams?
+seoTitle: Round-robin schedules: what happens with an odd number of teams?
 description: Every team meets every other once. With an odd number of teams one team rests each round, so the league needs one more round than each team has opponents.
 date: 2026-11-23
 author: Seazn

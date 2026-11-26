@@ -1,5 +1,6 @@
 ---
 title: What happens when a player gets a bye in a Swiss chess tournament?
+seoTitle: Swiss chess byes: what happens when a player gets one?
 description: With an odd number of players one sits out each round. The bye goes to the lowest-placed player who has not had one, and it scores a win.
 date: 2026-11-23
 author: Seazn

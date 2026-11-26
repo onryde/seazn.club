@@ -274,7 +274,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
  */
 export const APPROVED_PLANS_INVENTORY: string[] = [
   "bc2337dbe88e419f",
-  "742131b670aabf12",
+  "ae32da130f61f2ff",
   "c6896e734d6f2567",
   "06c3d80394b3a06f",
   "a1330a9ad92e694e",
@@ -539,7 +539,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
  */
 export const APPROVED_GROUPS_INVENTORY: string[] = [
   "70406cfe0fe3385a",
-  "9b34a88bcf6b26d7",
+  "fcb8972949352205",
   "82ad58f71300bb0b",
   "79ff0430b6bd8934",
   "b26eebdc70d60598",
