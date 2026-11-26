@@ -14,3 +14,12 @@ export const SESSION_MAX_AGE_S = SESSION_DAYS * 24 * 60 * 60;
 export function hasSessionHint(cookie: string): boolean {
   return cookie.split(";").some((pair) => pair.trim() === `${SESSION_HINT_COOKIE}=1`);
 }
+
+/**
+ * The same test as hasSessionHint, as the text of an inline script for a cached page whose server cannot know who is
+ * looking (components/marketing/nav-session-swap.tsx NavSessionMark). Parsed as the first child of the element it marks, it sets
+ * `data-signed-in` there before the rest is drawn. Kept beside the reader: session-hint's cookie, one rule, and the
+ * nav test runs this string over the reader's own cases. Inline, so only a page whose CSP allows inline scripts may use
+ * it (/help and /blog: proxy.ts, the fixed policy).
+ */
+export const SESSION_HINT_PREPAINT = `(function(){var s=document.currentScript;if(s&&document.cookie.split(";").some(function(p){return p.trim()===${JSON.stringify(`${SESSION_HINT_COOKIE}=1`)}}))s.parentElement.setAttribute("data-signed-in","")})()`;

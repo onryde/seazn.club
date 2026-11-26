@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
 import { CalendarClock, CircleHelp, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Ticket, Trophy, type LucideIcon } from "lucide-react";
-import { NavSessionSwap } from "@/components/marketing/nav-session-swap";
+import { NavSessionMark, NavSessionSwap } from "@/components/marketing/nav-session-swap";
 import { NavMenu } from "@/components/marketing/nav-menu";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { HELP_LINK, NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
@@ -69,8 +69,12 @@ export async function MarketingNav({
   return (
     <header
       data-mk-nav
-      className={`sticky top-0 z-40 ${night ? "mk-nav mk-nav-night" : "mk-nav mk-nav-solid"}`}
+      className={`sticky top-0 z-40 ${night ? "mk-nav mk-nav-night" : "mk-nav mk-nav-solid"}${auth === "client" ? " group/nav-session" : ""}`}
+      // On a cached page NavSessionMark may have set `data-signed-in` here before React gets to it.
+      suppressHydrationWarning={auth === "client"}
     >
+      {/* First, and it must stay first: nothing of the bar is on screen yet when the browser stops at it. */}
+      {auth === "client" ? <NavSessionMark /> : null}
       {night ? <NavScrollFlip /> : null}
       <div className="relative mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <Link href="/" aria-label="Seazn Club — home" className="flex items-center gap-2">
@@ -120,7 +124,7 @@ export async function MarketingNav({
               is worse. Every marketing page carries its own in-body CTAs, so
               the header CTA is a convenience here, not the only route. */}
           {auth === "client" ? (
-            <NavSessionSwap signedOut={signedOutLinks} signedIn={dashboardLink} />
+            <NavSessionSwap signedOut={signedOutLinks} signedIn={dashboardLink} signedInLabel={dashboardLabel} />
           ) : user ? (
             dashboardLink
           ) : (
