@@ -143,6 +143,48 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     for (const entry of logged) expect(entry).not.toContain("own session");
   });
 
+  it("owner ruling 2026-11-26: a playbackUrl is never stored — the armed line is KEPT minus the key (every other field unchanged), the counts are the same as without the strip, a nested one is dropped as unreadable, a second record does the same, and nothing is logged", async () => {
+    const r = await captureRig({ credits: 1 });
+    const S = await r.start(phoneId("a"));
+    const PLAYBACK = "https://customer-k7q2.cloudflarestream.com/0f1e2d3c4b5a69788796a5b4c3d2e1f0/manifest/video.m3u8";
+    const armed = { at: AT, kind: "armed", sid: S, playbackUrl: PLAYBACK, stalledMs: 12000, message: "armed note" };
+    const lines = [pairLine(r.tok), armed, deviceLine("inside"), unpairedLine()];
+    const strippedArmed = { at: AT, kind: "armed", sid: S, stalledMs: 12000, message: "armed note" };
+    // A nested playbackUrl is no line at all (the allow-list takes scalars and strings only): dropped, counted invalid.
+    const nested = { at: AT, kind: "armed", sid: S, extra: { playbackUrl: PLAYBACK } };
+    const text = ndjson([...lines, nested]);
+
+    const first = await postCaptureRecord(r.code, r.tok, post(text), r.now());
+    // The counts the strip must not move: 5 received, the nested one dropped and invalid — the armed line is KEPT.
+    expect(first).toMatchObject({ kept: 4, dropped: 1 });
+    const [row] = await records(r.fixtureId);
+    expect(row).toMatchObject({ received_lines: 5, kept_lines: 4, dropped_lines: 1, invalid_lines: 1, body_bytes: Buffer.byteLength(text) });
+    expect(row!.lines.split("\n")).toEqual([pairLine(r.tok), strippedArmed, deviceLine("inside"), unpairedLine()].map((l) => JSON.stringify(l)));
+    expect(row!.lines.includes("playbackUrl"), "key not stored").toBe(false);
+    expect(row!.lines.includes("m3u8"), "value not stored").toBe(false);
+    expect(await linksOf(row!.id)).toEqual([S]);                       // the stripped line still links its session
+
+    // The same lines WITHOUT any playbackUrl answer the same counts: the strip moves none of them.
+    r.tick(60_000);
+    const control = await postCaptureRecord(r.code, r.tok, post(ndjson([pairLine(r.tok), strippedArmed, deviceLine("inside"), unpairedLine(), nested])), r.now());
+    expect(control).toMatchObject({ kept: first.kept, dropped: first.dropped });
+
+    // The sequence: a second record of the same body strips again (no state carried), and every stored record is clean.
+    r.tick(60_000);
+    const second = await postCaptureRecord(r.code, r.tok, post(text), r.now());
+    expect(second).toMatchObject({ kept: 4, dropped: 1 });
+    const all = await records(r.fixtureId);
+    expect(all).toHaveLength(3);
+    let checked = 0;
+    for (const rec of all) {
+      expect(rec.lines.includes("playbackUrl") || rec.lines.includes("m3u8"), rec.ref).toBe(false);
+      expect(rec.lines.split("\n")).toContain(JSON.stringify(strippedArmed));
+      checked += rec.kept_lines;
+    }
+    expect(checked, "kept lines checked across the three records").toBe(12);
+    for (const entry of logged) expect(entry.includes("m3u8") || entry.includes("playbackUrl")).toBe(false);
+  });
+
   it("CROSS-CODE across two orgs: club X's lines (its pair, its device lines, its session) sent under club Y's tok are DROPPED — never stored, never logged — and Y's are kept (§6's worked example)", async () => {
     const x = await captureRig({ credits: 1 });
     const y = await captureRig({ credits: 1 });
