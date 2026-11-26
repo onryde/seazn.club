@@ -7,10 +7,11 @@ import type { IngestCreateSpec, IngestCredentials, InputAccess } from "@/server/
 import { storeInputCredentials, storePlaybackCredentials } from "@/server/relay/secret-columns";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
+import { isTerminal, type SessionState } from "@/server/relay/domain/session";
 import { readRow, toSession } from "./session-row";
 import type { SessionDeps } from "./deps";
 import { programmeAccess } from "./destination";
-import { forceDestroy, recordEffect } from "./port-effects";
+import { disablePhoneInput, forceDestroy, recordEffect } from "./port-effects";
 import { apply } from "./apply";
 import { isSerializationFailure } from "./refusals";
 
@@ -159,7 +160,10 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
   try {
     // The credentials are stored the moment both inputs exist — never behind the Machine's create: a Machine that has booted
     // is already asking for them.
-    await storeCredentials(sessionId, camera, programme, access, deps);
+    // A Stop (or any other end) can land while the creates are out, and its `disable_phone_input` then read no input id: the
+    // camera input would stay ENABLED. So a session that had ALREADY ENDED when the ids were stored switches it off here, first,
+    // before anything below can throw. An end after the store reads the ids and does it itself. Never throws.
+    if (await storeCredentials(sessionId, camera, programme, access, deps)) await disablePhoneInput(sessionId, deps);
     const ran = runner ? await runner : null;
     // A runner apply that THREW is the error of the start, as it was when the first edge ran after the credentials (the inputs
     // are stored and the row is left for F18, unless the error is a rollback, which goes out through the abandon below).
@@ -216,9 +220,14 @@ export async function inputsNoRowNames(sessionId: string, made: string[]): Promi
 }
 
 /** The credentials of both inputs, and the session's output input. One transaction: a Machine that reads the facts sees both
- *  or neither (job-facts.ts answers 503 `inputs_not_ready` until they are there). */
-async function storeCredentials(sessionId: string, camera: IngestCredentials, programme: IngestCredentials | undefined, access: InputAccess | undefined, deps: SessionDeps): Promise<void> {
-  await sql.begin(async (tx) => {
+ *  or neither (job-facts.ts answers 503 `inputs_not_ready` until they are there).
+ *
+ *  Resolves `true` when the session had already ENDED. The answer is the session row's own `returning`, from the update that
+ *  locks that row, so it leaves no gap with `apply` (which locks the same row to end a session): an end that committed first is
+ *  seen here; any other commits after these ids do, and its `disable_phone_input` reads them. Both can switch (an end whose read
+ *  runs after this commit) — a disable twice is success at the provider. A separate read would be one more thing to fail. */
+async function storeCredentials(sessionId: string, camera: IngestCredentials, programme: IngestCredentials | undefined, access: InputAccess | undefined, deps: SessionDeps): Promise<boolean> {
+  return (await sql.begin(async (tx) => {
     const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' and slot = 0`;
     await storeInputCredentials(tx, inp!.id, camera.inputId, camera);
     if (programme) {
@@ -231,8 +240,11 @@ async function storeCredentials(sessionId: string, camera: IngestCredentials, pr
     // input — the one its destination output attaches to and whose recording is the session's: the camera for
     // passthrough, the programme for composed.
     const outputInput = programme ? programme.inputId : camera.inputId;
-    await tx`update fixture_stream_sessions set provisioned_at = coalesce(provisioned_at, ${deps.now()}), ingest_input_uid = ${outputInput} where id = ${sessionId}`;
-  });
+    const [session] = await tx<{ state: SessionState }[]>`
+      update fixture_stream_sessions set provisioned_at = coalesce(provisioned_at, ${deps.now()}), ingest_input_uid = ${outputInput}
+       where id = ${sessionId} returning state`;
+    return isTerminal(session!.state);
+  })) as boolean;
 }
 
 /** `provisioned` is applied ONLY while the row is still provisioning. A stop, the wall clock, or the

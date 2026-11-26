@@ -21,7 +21,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { TARGET_UNREADABLE } from "@/lib/stream-destinations";
-import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS, RESERVATION_BUFFER_MINUTES, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
+import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS, RESERVATION_BUFFER_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
 import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { machineNameFor } from "@/server/relay/domain/runner";
 import * as telemetry from "@/server/relay/telemetry";
@@ -44,6 +44,9 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 // @/lib/db), so a test can make the phone-input disable's camera read throw in the middle of a Stop. A pass-through while
 // `match` is null — every other test in this file runs on the real pool.
 const dbFault = vi.hoisted(() => ({ match: null as RegExp | null, hits: 0, err: new Error("injected: connection reset by peer") }));
+// The same seam as a GATE: the next statement matching `match` is held back — not yet sent to the database — until `open`
+// resolves, so a test chooses which writes it reads. One-shot: every later statement passes.
+const dbGate = vi.hoisted(() => ({ match: null as RegExp | null, parked: () => {}, open: Promise.resolve() }));
 vi.mock("@/lib/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/db")>();
   const sql = new Proxy(real.sql, {
@@ -53,7 +56,13 @@ vi.mock("@/lib/db", async (importOriginal) => {
         dbFault.hits++;
         return Promise.reject(dbFault.err);
       }
-      return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+      const run = () => Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+      if (dbGate.match && Array.isArray(strings) && dbGate.match.test(strings.join("?"))) {
+        dbGate.match = null;
+        dbGate.parked();
+        return dbGate.open.then(run);
+      }
+      return run();
     },
   });
   return { ...real, sql };
@@ -83,7 +92,7 @@ const PASSTHROUGH_RECORDINGS = 1;
 
 type Mode = "composed" | "passthrough";
 
-async function rig(opts: { recorder?: ProviderCallRecorder; clock?: number } = {}) {
+async function rig(opts: { recorder?: ProviderCallRecorder; clock?: number; connectAfterMs?: number } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const { fixtureId } = await startedDivisionWithFixture(auth);
@@ -96,7 +105,7 @@ async function rig(opts: { recorder?: ProviderCallRecorder; clock?: number } = {
   const streamKey = `dest-${randomUUID()}`;
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey });
   let now = opts.clock ?? Date.now();
-  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 10 * 60_000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 10 * 60_000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner(opts.recorder ? { recorder: opts.recorder } : {});
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
@@ -1270,6 +1279,203 @@ describe.skipIf(!HAS_DB)("#981 follow-up: a start for a fixture that is gone is 
       expect(made, `${mode}: no input`).not.toHaveBeenCalled();
       expect(r.runner.created, `${mode}: no Machine`).toHaveLength(0);
       expect(await rowsFor(r.fixtureId), `${mode}: no row`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+// A session can END while its camera input is still being made. The end's own `disable_phone_input` reads the input rows, so
+// one that reads before the ids are stored switches nothing off, and the input the create then stores stayed ENABLED. The
+// property: whichever side commits first, an ended session's camera input is OFF. Every order is FORCED — by holding the
+// provider's create, the Machine's create, or the disable's own read — never left to which query returns first. Expected
+// values come from the rows and from the fake's call log. One sport (the file's rule: nothing here reads it).
+const disableRowsOf = (sessionId: string) => sql<{ result: string; input: string | null }[]>`
+  select result, payload->>'inputUid' as input from fixture_stream_events
+   where session_id = ${sessionId} and kind = 'effect' and type = 'disable_phone_input' order by seq`;
+const disableAlarms = () => sentry.captureError.mock.calls.filter(([, ctx]) => String((ctx as { route?: string }).route).startsWith("relay.disable_phone_input"));
+/** What the session took from the org's credits: its consume rows, and the ledger id the session row keeps. */
+const consumed = async (orgId: string, sessionId: string) => ({
+  rows: (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${orgId} and reason = 'consume'`)[0]!.n,
+  ledgerId: (await stateOf(sessionId)).credit_ledger_id,
+});
+const storedUids = async (sessionId: string) =>
+  Object.fromEntries((await inputs(sessionId)).map((i) => [i.role, i.ingest_input_id])) as Partial<Record<Role, string | null>>;
+/** Holds back the next read of a session's camera inputs — `disablePhoneInput`'s — until `release`. */
+function parkCameraRead() {
+  let parked!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((res) => { parked = res; });
+  dbGate.open = new Promise<void>((res) => { release = res; });
+  dbGate.parked = parked;
+  dbGate.match = /select ingest_input_id as uid, slot from fixture_stream_inputs/;
+  return { reached, release };
+}
+/** Ends a session whose creates are all still held, and resolves when the end's own effects have run. A passthrough Stop
+ *  completes at once. A composed Stop with the Machine's create out is only `ending`: past the grace, the next read forces the
+ *  teardown by name and completes it. */
+async function endStopped(r: Rig, mode: Mode, sessionId: string) {
+  const stopped = await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+  if (mode === "passthrough") return stopped;
+  r.tick((RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1) * 1000);
+  return reconcileSession(sessionId, r.deps);
+}
+function answerAll(r: Rig, mode: Mode) {
+  held(r.ingest, "camera").answer();
+  if (mode === "composed") {
+    held(r.ingest, "programme").answer();
+    r.runner.heldCreates[0]!.answer();
+  }
+}
+/** The create that was out when the session ended: it resolves, and the session is completed by the organiser's Stop. */
+async function expectStartResolvedStopped(outcome: Promise<{ ok: { sessionId: string } | null; err: unknown }>, sessionId: string) {
+  const { ok, err } = await outcome;
+  expect(err, "the create is never a 500").toBeNull();
+  expect(ok!.sessionId).toBe(sessionId);
+  const [row] = await sql<{ state: string; end_reason: string | null; started_at: string | null }[]>`
+    select state, end_reason, started_at from fixture_stream_sessions where id = ${sessionId}`;
+  expect(row).toMatchObject({ state: "completed", end_reason: "stopped", started_at: null });
+}
+
+describe.skipIf(!HAS_DB)("a session that ends while its camera input is still being made leaves that input OFF", () => {
+  afterEach(() => { dbGate.match = null; });
+  const MODES = ["passthrough", "composed"] as const;
+
+  it("ended BEFORE the ids are stored, the end's own disable already run and having seen nothing: the create switches the camera OFF — once, one ok row, nothing alarmed, the composed programme untouched, no credit moved", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      sentry.captureError.mockClear();
+      const r = await rig();
+      const { outcome, sessionId } = await heldAllStart(r, mode);
+      await endStopped(r, mode, sessionId);
+      expect(await stateOf(sessionId), `${mode}: PREMISE — ended while the creates are out`).toMatchObject({ state: "completed" });
+      expect(Object.values(await storedUids(sessionId)).filter((u) => u !== null), `${mode}: PREMISE — no id stored yet`).toEqual([]);
+      expect(r.ingest.enabledCalls, `${mode}: PREMISE — the end's own disable switched nothing`).toEqual([]);
+      answerAll(r, mode);
+      await expectStartResolvedStopped(outcome, sessionId);
+      const uids = await storedUids(sessionId);
+      expect(uids.camera, `${mode}: the camera's id is stored`).toEqual(expect.any(String));
+      expect(r.ingest.enabledCalls, `${mode}: one switch, OFF, on the camera`).toEqual([{ inputId: uids.camera, enabled: false }]);
+      expect(r.ingest.isEnabled(uids.camera!), mode).toBe(false);
+      expect(await disableRowsOf(sessionId), mode).toEqual([{ result: "ok", input: uids.camera }]);
+      expect(disableAlarms(), mode).toEqual([]);
+      // The programme is not the phone's input: no end of any order switches it.
+      if (mode === "composed") expect(r.ingest.isEnabled(uids.programme!), "programme").toBe(true);
+      expect(r.ingest.deletedInputs, `${mode}: switched off, never deleted (C2)`).toEqual([]);
+      expect(await consumed(r.auth.orgId, sessionId), `${mode}: no credit moved`).toEqual({ rows: 0, ledgerId: null });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("ended BEFORE the ids are stored, but the end's own disable reads AFTER them: the camera is switched OFF by both — two OFF calls and two ok rows, harmless; both callers resolve and nothing is alarmed", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      sentry.captureError.mockClear();
+      const r = await rig();
+      const { outcome, sessionId } = await heldAllStart(r, mode);
+      const gate = parkCameraRead();
+      const ending = endStopped(r, mode, sessionId);
+      try {
+        await gate.reached;
+        expect(await stateOf(sessionId), `${mode}: PREMISE — the end committed, its read still unsent`).toMatchObject({ state: "completed" });
+        expect(Object.values(await storedUids(sessionId)).filter((u) => u !== null), `${mode}: PREMISE — no id stored yet`).toEqual([]);
+        answerAll(r, mode);
+        await expectStartResolvedStopped(outcome, sessionId);
+        const uids = await storedUids(sessionId);
+        expect(r.ingest.enabledCalls, `${mode}: the create's own switch, while the end's is still held`).toEqual([{ inputId: uids.camera, enabled: false }]);
+      } finally {
+        gate.release();
+      }
+      await ending;
+      const { camera } = await storedUids(sessionId);
+      const off = { inputId: camera, enabled: false };
+      expect(r.ingest.enabledCalls, mode).toEqual([off, off]);
+      expect(r.ingest.isEnabled(camera!), mode).toBe(false);
+      expect(await disableRowsOf(sessionId), mode).toEqual([{ result: "ok", input: camera }, { result: "ok", input: camera }]);
+      expect(disableAlarms(), mode).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("ended AFTER the ids are stored — a composed session still `ending` when they were, and a Stop landing inside the output add: the end's own disable does it, exactly ONCE (the create adds none), and an output made late is released", async () => {
+    let checked = 0;
+    // composed: `ending` at the store (the Machine's create still out) is not ended, so the create switches nothing.
+    {
+      const r = await rig();
+      const { outcome, sessionId } = await heldAllStart(r);
+      await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+      held(r.ingest, "camera").answer();
+      held(r.ingest, "programme").answer();
+      await vi.waitFor(async () => { expect((await storedUids(sessionId)).camera).toEqual(expect.any(String)); });
+      expect(await stateOf(sessionId), "PREMISE: stored while still ending").toMatchObject({ state: "ending" });
+      r.runner.heldCreates[0]!.answer();
+      await expectStartResolvedStopped(outcome, sessionId);
+      const { camera } = await storedUids(sessionId);
+      expect(r.ingest.enabledCalls).toEqual([{ inputId: camera, enabled: false }]);
+      expect(await disableRowsOf(sessionId)).toEqual([{ result: "ok", input: camera }]);
+      checked++;
+    }
+    // passthrough: the Stop lands inside the destination output's add, the last provider call of the start.
+    {
+      const r = await rig();
+      const add = r.ingest.addOutput.bind(r.ingest);
+      let stops = 0;
+      vi.spyOn(r.ingest, "addOutput").mockImplementationOnce(async (...args) => {
+        await stopSession(r.auth, r.fixtureId, args[2]!.sessionId!, r.deps);
+        stops++;
+        return add(...args);
+      });
+      const { sessionId } = await r.start("passthrough");
+      expect(stops, "PREMISE: the Stop landed during the add").toBe(1);
+      const { camera } = await storedUids(sessionId);
+      expect(r.ingest.enabledCalls).toEqual([{ inputId: camera, enabled: false }]);
+      expect(await disableRowsOf(sessionId)).toEqual([{ result: "ok", input: camera }]);
+      expect(r.ingest.liveOutputCount(camera!), "the output added after the end is released").toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the positive pair: a session that goes live and is never stopped is switched by NOTHING — its camera stays enabled", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      const r = await rig({ connectAfterMs: 3000 });
+      const { sessionId } = await r.start(mode);
+      r.tick(4000);
+      if (mode === "composed") await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, mode).toBe("live");
+      const { camera } = await storedUids(sessionId);
+      expect(r.ingest.isEnabled(camera!), mode).toBe(true);
+      expect(r.ingest.enabledCalls, mode).toEqual([]);
+      expect(await disableRowsOf(sessionId), mode).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the create's own disable FAILING is not the create's failure: it resolves, the session stays completed, no credit moves, the effect row is failed and ALARMED once naming the session and the input", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      sentry.captureError.mockClear();
+      const r = await rig();
+      const down = Object.assign(new Error("cloudflare set input enabled: HTTP 503"), { status: 503 });
+      const refused = vi.spyOn(r.ingest, "setInputEnabled").mockRejectedValue(down);
+      const { outcome, sessionId } = await heldAllStart(r, mode);
+      await endStopped(r, mode, sessionId);
+      expect(refused, `${mode}: PREMISE — the end's own disable asked for nothing`).not.toHaveBeenCalled();
+      answerAll(r, mode);
+      await expectStartResolvedStopped(outcome, sessionId);
+      const { camera } = await storedUids(sessionId);
+      expect(refused, mode).toHaveBeenCalledTimes(1);
+      expect(r.ingest.isEnabled(camera!), `${mode}: the truth — still on`).toBe(true);
+      expect(await disableRowsOf(sessionId), mode).toEqual([{ result: "failed", input: camera }]);
+      const alarms = disableAlarms();
+      expect(alarms, mode).toHaveLength(1);
+      expect(alarms[0]![0], mode).toBe(down);
+      expect(alarms[0]![1], mode).toMatchObject({ route: "relay.disable_phone_input", extra: { sessionId, inputUid: camera } });
+      expect(await consumed(r.auth.orgId, sessionId), `${mode}: no credit moved`).toEqual({ rows: 0, ledgerId: null });
       checked++;
     }
     expect(checked).toBe(2);
