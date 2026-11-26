@@ -68,6 +68,9 @@ export type { PublicFixtureVideo };
  *  production signs through this process's relay, its one token cache (Task 13) and its replay driver. */
 export type VideoDeps = PlaybackDeps & { replay?: ReplayHost };
 
+/** The identity a signed part carries: an `hls` one has it (cf-playback.ts `SignedPlayback.id`), the replay host's `embed` one does not. */
+const partId = (signed: { src: string; expiresAt: string; id?: string }): string | undefined => signed.id;
+
 const EMPTY = (): PublicFixtureVideo => ({ live: null, replay: [], session: null });
 /** A fixture id is a uuid; anything else names no fixture, and is answered before it reaches a query (22P02 would be a 500). */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -194,7 +197,7 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
   signed.forEach((s, i) => {
     const p = parts[i]!;
     if (s.status === "fulfilled") {
-      if (s.value !== null) replay.push({ partNo: p.partNo, player: p.player, src: s.value.src, expiresAt: s.value.expiresAt });
+      if (s.value !== null) replay.push({ partNo: p.partNo, player: p.player, src: s.value.src, expiresAt: s.value.expiresAt, ...(partId(s.value) === undefined ? {} : { id: partId(s.value) }) });
     } else if (freshFailure(s.reason)) {
       log.warn(
         { fixtureId, sessionId: p.sessionId, cfVideoId: p.cfVideoId, err: errorClass(s.reason), ...providerCodeOf(s.reason) },

@@ -142,17 +142,18 @@ class Viewer {
   advance = (ms: number): Promise<void> => advanceSyncing(ms, () => this.sync());
 }
 
-type Route = { live: boolean; parts?: number[] };
+type Route = { live: boolean; parts?: number[]; uid?: string };
 /** The route, as a fetch stub. Every read signs through the REAL signer; `cache` picks the process: one shared (a single machine) or a
  *  new one per read (every read lands on a machine that has not minted: the divergence under test). */
-function routeStub(opts: { cache: "shared" | "per-read"; next: () => Route }) {
+function routeStub(opts: { cache: "shared" | "per-read"; next: () => Route; omitId?: boolean }) {
   const shared = createPlaybackTokenCache();
   const reads: PublicFixtureVideo[] = [];
   const fetchMock = vi.fn(async () => {
     const r = opts.next();
     const deps = { ingest: new FakeIngest(), tokenCache: (opts.cache === "shared" ? shared : createPlaybackTokenCache()) as PlaybackTokenCache };
     const now = new Date();
-    const live = r.live ? await signLivePlayback(deps, "in-1", now) : null;
+    const live = r.live ? await signLivePlayback(deps, r.uid ?? "in-1", now) : null;
+    if (opts.omitId && live) delete (live as { id?: string }).id;
     const replay = await Promise.all((r.parts ?? []).map(async (n) => ({ partNo: n, player: "hls" as const, ...(await signRecordingPlayback(deps, `rec-${n}`, now)) })));
     const data = { live, replay, session: null } as unknown as PublicFixtureVideo;
     reads.push(data);
@@ -263,6 +264,33 @@ describe("native HLS: a read that carries a different token for the same live vi
     expect(viewer.players[0]!.video.assigned, "the first live: one address across its two polls").toEqual([reads[0]!.live!.src]);
     expect(viewer.players[1]!.video.assigned).toEqual([reads[2]!.replay[0]!.src]);
     expect(viewer.players[2]!.video.assigned, "the second live is a NEW video: its own address, not the first live's held one").toEqual([reads[3]!.live!.src]);
+    island.unmount();
+  });
+
+  it("TWO UIDS, NO GAP: a new live session (another input) with no answer between is a different video and re-points on the very next answer", async () => {
+    // The token carries the video's identity (cf-playback.ts), so host and path are the same for every live: only the route's own id can tell.
+    let uid = "in-1";
+    const { reads } = routeStub({ cache: "per-read", next: () => ({ live: true, uid }) });
+    const { island, viewer } = mount();
+    await viewer.advance(0);
+    await viewer.advance(FLOOR);
+    uid = "in-2";
+    await viewer.advance(FLOOR);
+    expect(reads).toHaveLength(3);
+    expect(new Set(reads.map((r) => r.live!.id)).size, "PREMISE: two inputs, two identities").toBe(2);
+    expect(viewer.players, "one player slot: its key does not change for a new live").toHaveLength(1);
+    expect(viewer.last.video.assigned, "the first live held across its second poll, then the new input's address at once").toEqual([reads[0]!.live!.src, reads[2]!.live!.src]);
+    await viewer.advance(FLOOR);
+    expect(viewer.last.video.assigned, "and the new input is held in its turn").toHaveLength(2);
+    island.unmount();
+  });
+
+  it("an answer that names no identity is never held (an older route): every changed address is taken", async () => {
+    routeStub({ cache: "per-read", omitId: true, next: () => ({ live: true }) });
+    const { island, viewer } = mount();
+    await viewer.advance(0);
+    await viewer.advance(FLOOR);
+    expect(viewer.last.video.assigned, "no identity, no hold: both addresses assigned").toHaveLength(2);
     island.unmount();
   });
 

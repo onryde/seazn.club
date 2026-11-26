@@ -10,14 +10,15 @@ const NOW = Date.parse("2026-11-26T12:00:00.000Z");
 const WINDOW_MS = SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
 const addr = (token: string, host = "playback.fake.invalid", path = "manifest/video.m3u8") => `https://${host}/${token}/${path}`;
 /** An address expiring `leftMs` after NOW. */
-const signed = (token: string, leftMs: number, extra: { host?: string; path?: string } = {}) => ({
+const signed = (token: string, leftMs: number, extra: { host?: string; path?: string; id?: string | null } = {}) => ({
   src: addr(token, extra.host, extra.path),
   expiresAt: new Date(NOW + leftMs).toISOString(),
+  ...(extra.id === null ? {} : { id: extra.id ?? "vid-1" }),
 });
 const HOUR = 3_600_000;
-const video = (v: { live?: ReturnType<typeof signed> | null; replay?: { partNo: number; player: "hls" | "embed"; src: string; expiresAt: string }[] }): PublicFixtureVideo =>
+const video = (v: { live?: ReturnType<typeof signed> | null; replay?: { partNo: number; player: "hls" | "embed"; src: string; expiresAt: string; id?: string }[] }): PublicFixtureVideo =>
   ({ live: v.live ?? null, replay: v.replay ?? [], session: null }) as unknown as PublicFixtureVideo;
-const hlsPart = (partNo: number, token: string, leftMs: number) => ({ partNo, player: "hls" as const, ...signed(token, leftMs) });
+const hlsPart = (partNo: number, token: string, leftMs: number, id = `rec-${partNo}`) => ({ partNo, player: "hls" as const, ...signed(token, leftMs, { id }) });
 
 describe("isRefreshDue: the window the server itself stops reusing a token in", () => {
   it("is due at exactly the refresh window and one millisecond inside it, and not due one millisecond outside", () => {
@@ -80,6 +81,20 @@ describe("holdAddresses: the live", () => {
     expect(holdAddresses(holdAddresses(shown, gap, NOW), back, NOW).live, "the answer before it had no live: nothing held").toEqual(back.live);
   });
 
+  it("TWO VIDEOS, ONE HOST AND PATH: another identity is never held, however far its token is from due (the token is what differs for every video)", () => {
+    const shown = video({ live: signed("a", HOUR, { id: "vid-1" }) });
+    const next = video({ live: signed("b", HOUR, { id: "vid-2" }) });
+    expect(holdAddresses(shown, next, NOW).live).toEqual(next.live);
+  });
+
+  it("an answer with no identity, on either side, is never held", () => {
+    const withId = video({ live: signed("a", HOUR) });
+    const without = video({ live: signed("b", HOUR, { id: null }) });
+    expect(holdAddresses(withId, without, NOW).live, "the new one names none").toEqual(without.live);
+    expect(holdAddresses(without, withId, NOW).live, "the held one names none").toEqual(withId.live);
+    expect(holdAddresses(without, video({ live: signed("c", HOUR, { id: null }) }), NOW).live, "neither names one").toEqual(signed("c", HOUR, { id: null }));
+  });
+
   it("an address that is not a signed one (relative, another scheme) is never held, held or new", () => {
     const odd = { src: "/relative/video.m3u8", expiresAt: new Date(NOW + HOUR).toISOString() };
     const shown = video({ live: odd });
@@ -99,6 +114,12 @@ describe("holdAddresses: the recording parts", () => {
       [3, next.replay[1]!.src],
       [1, shown.replay[0]!.src],
     ]);
+  });
+
+  it("a part whose recording changed under the same number (another identity) is taken, not held", () => {
+    const shown = video({ replay: [hlsPart(1, "a1", HOUR, "rec-A")] });
+    const next = video({ replay: [hlsPart(1, "b1", HOUR, "rec-B")] });
+    expect(holdAddresses(shown, next, NOW).replay[0]).toEqual(next.replay[0]);
   });
 
   it("only the part whose token is due changes", () => {

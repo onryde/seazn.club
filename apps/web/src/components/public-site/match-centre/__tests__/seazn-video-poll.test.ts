@@ -897,3 +897,44 @@ describe("review I2: a hidden page reads nothing", () => {
     }
   });
 });
+
+// Native-HLS stall fix: the island keeps a playing address while its token is not due (seazn-held-address.ts) and hands the poll the
+// answer it SHOWS (`hold`). The schedule's re-read of a SETTLED interim recording is timed from the expiry of the token the player
+// HOLDS: timed from the newest answer's (a second machine's later mint) it could wait the full 5 min cap past the held token's own
+// refresh point, with no margin before it lapses.
+describe("startVideoPoll: `hold` — the next read is timed from the answer shown", () => {
+  // Built at the fake clock (`replayFor` reads `Date.now()`): the held token is due 2 min from T0, the answer that arrived is a later mint.
+  const shownReplay = () => replayFor(REFRESH_MS + 2 * MIN);
+  const newest = () => replayFor(60 * MIN);
+  it("EMPTY CASE FIRST: without `hold` a settled recording is read at the NEWEST token's refresh point, capped at 5 min (the control)", async () => {
+    const r = route(newest());
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * MIN - 1);
+    expect(r.calls, "not before the 5 min cap").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls).toHaveLength(2);
+    poll.stop();
+  });
+
+  it("with `hold`, the shown answer's expiry sets the read: the held token's refresh point, 2 min, and the hook is given the answer and the rebuild flag", async () => {
+    const held = shownReplay();
+    const r = route(newest());
+    const asked: boolean[] = [];
+    const delivered: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({
+      fetchVideo: r.fetchVideo,
+      hold: (_v, { rebuild }) => (asked.push(rebuild), held),
+      onVideo: (v) => delivered.push(v),
+      settledAtMs: SETTLED,
+    });
+    await flush();
+    expect(delivered, "onVideo gets what hold returned, not the raw answer").toEqual([held]);
+    expect(asked).toEqual([false]);
+    await vi.advanceTimersByTimeAsync(2 * MIN - 1);
+    expect(r.calls, "not before the held token's refresh point").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls, "at it").toHaveLength(2);
+    poll.stop();
+  });
+});

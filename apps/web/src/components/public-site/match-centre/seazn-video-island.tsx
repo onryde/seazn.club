@@ -334,14 +334,17 @@ export function SeaznVideoIsland({
     // The page's visibility is the document's (the loop's default): no read while the tab is hidden.
     const poll = startVideoPoll({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
-      onVideo: (next, { rebuild }) => {
-        // A video already on screen keeps its address while its token is not refresh-due, whichever machine signed this answer
-        // (seazn-held-address.ts: a native player is re-pointed, and stops, by every changed address). A rebuild takes the fresh
-        // answer whole: the player it replaces gave up on the address it held.
+      // A video already on screen keeps its address while its token is not refresh-due, whichever machine signed this answer
+      // (seazn-held-address.ts: a native player is re-pointed, and stops, by every changed address). A rebuild takes the fresh
+      // answer whole: the player it replaces gave up on the address it held. The poll times its next read from what this returns.
+      hold: (next, { rebuild }) => {
         const shown = rebuild ? next : holdAddresses(shownRef.current, next, Date.now());
         shownRef.current = shown;
+        return shown;
+      },
+      onVideo: (shown, { rebuild }) => {
         setVideo(shown);
-        setWait((w) => waitAfterAnswer(w, next, Date.now()));
+        setWait((w) => waitAfterAnswer(w, shown, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
       settledAtMs,

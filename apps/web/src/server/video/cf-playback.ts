@@ -17,6 +17,7 @@ import "server-only";
 //
 // The URL shapes are Cloudflare's: `https://<customer host>/<token>/manifest/video.m3u8` (C1) and
 // `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
+import { createHash } from "node:crypto";
 import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
 import type { CallTimeout, IngestProvider } from "@/server/relay/ports";
 
@@ -43,7 +44,14 @@ const PROCESS_CACHE: PlaybackTokenCache = createPlaybackTokenCache();
 export const processPlaybackTokenCache = (): PlaybackTokenCache => PROCESS_CACHE;
 
 export interface PlaybackDeps { ingest: Pick<IngestProvider, "playbackToken">; tokenCache: PlaybackTokenCache }
-export interface SignedPlayback { src: string; expiresAt: string }
+/** `id` is the video's own identity, opaque and stable for as long as the video is the same: a hash of the Cloudflare uid, never the uid
+ *  (the uid names the input and the recording to Cloudflare's API). The address cannot say it: the token is the only part of a signed
+ *  address that differs between videos, and it also differs between two mints of ONE video (this cache is per process, so a second
+ *  machine, or a restart, mints its own). The match page holds a playing address only while the id is equal (seazn-held-address.ts). */
+export interface SignedPlayback { src: string; expiresAt: string; id: string }
+
+/** The opaque identity of a Cloudflare video uid (see `SignedPlayback.id`): 16 hex characters of a salted SHA-256. */
+export const videoIdentity = (uid: string): string => createHash("sha256").update(`seazn-video:${uid}`).digest("hex").slice(0, 16);
 
 /** The customer host the URL is built on. A real-relay deployment without STREAM_PLAYBACK_HOST refuses rather than guess one
  *  (config.ts `streamPlaybackHost`), and it refuses before a token is minted for nothing. */
@@ -92,7 +100,7 @@ async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, 
 async function signedManifest(deps: PlaybackDeps, uid: string, now: Date): Promise<SignedPlayback> {
   const host = hostOrThrow();
   const { token, expiresAtMs } = await tokenFor(deps, uid, false, now, SEAZN_LIVE_TOKEN_TTL_SECONDS);
-  return { src: `https://${host}/${token}/manifest/video.m3u8`, expiresAt: new Date(expiresAtMs).toISOString() };
+  return { src: `https://${host}/${token}/manifest/video.m3u8`, expiresAt: new Date(expiresAtMs).toISOString(), id: videoIdentity(uid) };
 }
 
 /** A live Seazn programme input's signed HLS, for the public match page and the organiser's panel (Task 14). */

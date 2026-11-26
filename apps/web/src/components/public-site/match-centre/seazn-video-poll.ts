@@ -45,8 +45,13 @@ export interface VideoPollHooks {
   /** One read of the route. Rejects on any failure; honours `signal` (the stop aborts it). */
   fetchVideo: (signal: AbortSignal) => Promise<PublicFixtureVideo>;
   /** Each good answer, in order. `rebuild`: a player asked for this read after giving up, so it is to be rebuilt, not updated.
-   *  Never called after `stop`. */
+   *  Never called after `stop`. It is handed the answer `hold` made of the read, if there is one. */
   onVideo: (video: PublicFixtureVideo, answer: { rebuild: boolean }) => void;
+  /** The video to SHOW for an answer, when it is not the answer itself: the island keeps the address a player is already playing while
+   *  its token is not due (seazn-held-address.ts), because a native player is re-pointed, and stops, by every changed address. What
+   *  it returns is what `onVideo` is given AND what the next read is timed from (the schedule reads its expiries: a settled recording
+   *  is re-read before the token the player HOLDS is due, not the newest one's). Absent: the answer as it came. */
+  hold?: (video: PublicFixtureVideo, answer: { rebuild: boolean }) => PublicFixtureVideo;
   /** When the fixture is settled (ms; the page's `settledAt`): an empty answer from then on ends the loop. Absent or null: never. */
   settledAtMs?: number | null;
   /** Review N1, from the page's plan: the fixture's kick-off (ms), and until when it counts as active (ms). Either one makes an empty
@@ -70,7 +75,7 @@ export interface VideoPoll {
  *  the island. */
 export const SEAZN_VIDEO_FETCH_TIMEOUT_MS = 15_000;
 
-export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickoffAtMs = null, activeUntilMs = null, visibility, onReadFailed }: VideoPollHooks): VideoPoll {
+export function startVideoPoll({ fetchVideo, onVideo, hold, settledAtMs = null, kickoffAtMs = null, activeUntilMs = null, visibility, onReadFailed }: VideoPollHooks): VideoPoll {
   const page = visibility ?? documentVisibility();
   const isHidden = () => page?.hidden() ?? false;
   let stopped = false;
@@ -119,11 +124,12 @@ export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickof
       if (stopped) return;
       const rebuild = rebuildNext;
       rebuildNext = false;
-      onVideo(video, { rebuild });
+      const shown = hold ? hold(video, { rebuild }) : video;
+      onVideo(shown, { rebuild });
       inFlight = null;
       failStreak = 0;
-      emptyStreak = isEmptyVideo(video) ? emptyStreak + 1 : 0;
-      schedule(nextVideoFetchMs(video, { nowMs: Date.now(), settledAtMs, emptyStreak, kickoffAtMs, activeUntilMs }));
+      emptyStreak = isEmptyVideo(shown) ? emptyStreak + 1 : 0;
+      schedule(nextVideoFetchMs(shown, { nowMs: Date.now(), settledAtMs, emptyStreak, kickoffAtMs, activeUntilMs }));
     } catch (err) {
       if (stopped) return;   // only stop() aborts besides the give-up, and the give-up is a failed read
       inFlight = null;
