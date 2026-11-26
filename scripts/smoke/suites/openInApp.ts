@@ -42,7 +42,7 @@ export async function openInAppSuite(): Promise<void> {
         body.includes(`href="${PLAY}"`),
     );
     check(
-      `open in app: only /app/score offers the way back to scoring in the browser (/app/${kind})`,
+      `open in app: only /app/score offers scoring in the browser instead (/app/${kind})`,
       body.includes('data-testid="score-in-browser"') === (kind === "score"),
     );
   }
