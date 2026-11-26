@@ -144,3 +144,37 @@ export function linkBuilders(): Map<string, string> {
 export const NOT_ONE_TIME: Record<string, string> = {
   "/register/status": "the cart's access token (RS006): reusable, the status page is re-opened to view and withdraw",
 };
+
+// ---- the query readers (moved from scrub-query-credentials.test.ts, which still pins each one's verdict) -----------------
+
+/** A parameter name that looks like a credential. */
+const CREDENTIAL_NAME = /^(?:token|t|st|key|code|state|secret|sig|signature|otp|nonce|join|[a-z]+_code|[a-z]+_token|[a-z]+_secret|[a-z]+_key)$/;
+
+/** Every query parameter name a source reads, by the three ways a page or route reads one. */
+export function queryParamsRead(source: string): string[] {
+  const names = new Set<string>();
+  for (const m of source.matchAll(/searchParams\.get\(\s*["']([\w-]+)["']\s*\)/g)) names.add(m[1]!);
+  for (const m of source.matchAll(/searchParams\s*:\s*Promise<\{([^}]*)\}>/g)) for (const n of m[1]!.matchAll(/(\w+)\??\s*:/g)) names.add(n[1]!);
+  for (const m of source.matchAll(/const\s*\{([^}]*)\}\s*=\s*await\s+(?:props\.)?searchParams/g)) {
+    for (const n of m[1]!.split(",")) names.add(n.split(":")[0]!.trim());
+  }
+  names.delete("");
+  return [...names].filter((n) => CREDENTIAL_NAME.test(n)).sort();
+}
+
+/** Every `app/**` page.tsx / route.ts(x) that reads a credential-looking parameter: `<file under app/>:<param>`. */
+export function queryCredentialReaders(): string[] {
+  const found: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "__tests__" && entry.name !== "node_modules") walk(full);
+      } else if (["page.tsx", "route.ts", "route.tsx"].includes(entry.name)) {
+        for (const param of queryParamsRead(fs.readFileSync(full, "utf8"))) found.push(`${path.relative(APP_DIR, full)}:${param}`);
+      }
+    }
+  };
+  walk(APP_DIR);
+  return found.sort();
+}

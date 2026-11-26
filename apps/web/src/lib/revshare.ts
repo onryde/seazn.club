@@ -1,17 +1,17 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { log } from "@/server/logger";
-import { REF_CODE_RE, REVSHARE_COOKIE, revshareEnabled } from "@/lib/revshare-shared";
+import { REF_CODE_RE, REVSHARE_COOKIE, REVSHARE_PROGRAM_ID, revshareEnabled } from "@/lib/revshare-shared";
 
-// Revshare affiliate tracking (https://www.revshare.so). The tracking script in
-// the root layout sets window.revshare_metadata.ref_code; <RevshareCapture>
-// copies it into the first-party `rs_ref` cookie; createOrgForUser consumes that
+export { REVSHARE_PROGRAM_ID };
+
+// Revshare affiliate tracking (https://www.revshare.so). On an affiliate landing
+// (lib/revshare-script.ts) the tracking script sets window.revshare_metadata.ref_code;
+// <RevshareCapture> copies it into the first-party `rs_ref` cookie; createOrgForUser consumes that
 // cookie into subscriptions.revshare_ref_code for a user's FIRST org only; the
 // Stripe invoice handler reports each subscription charge. The whole chain is off
 // unless NEXT_PUBLIC_REVSHARE_ENABLED=1. REVSHARE_API_KEY must never reach the client.
 
-/** Program id is public (it is also in the tracking <script> tag). */
-export const REVSHARE_PROGRAM_ID = "6ac5012c6a42960a11fbb86b";
 const REFERRAL_URL = "https://www.revshare.so/api/referral";
 
 /** The cookie is client-writable, so treat it as hostile: short, URL-safe only. */

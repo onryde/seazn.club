@@ -16,7 +16,8 @@ primary_region = "lhr"
     # PostHog managed reverse proxy (CNAME g.seazn.club, proxied by Cloudflare).
     # Not set in fly.stg.toml: stg keeps the /ingest rewrite.
     NEXT_PUBLIC_POSTHOG_API_HOST       = "https://g.seazn.club"
-    # Revshare affiliate tracking: "1" = load the tracking script, capture ref_codes, report sales.
+    # Revshare affiliate tracking: "1" = load the tracking script on affiliate landings (public pages with ?via= / ?ref=,
+    # apps/web/src/lib/revshare-script.ts), capture ref_codes, report sales.
     NEXT_PUBLIC_REVSHARE_ENABLED       = "1"
     NEXT_PUBLIC_SENTRY_DSN          = "https://7ce8d8933b2291575f99fd0e7e1c6447@o4512107033198592.ingest.de.sentry.io/4512107042963536"  # uncomment when Sentry project created
     # Cloudflare Turnstile widget site key: public by design (it is in every page that renders the widget). The SECRET and the

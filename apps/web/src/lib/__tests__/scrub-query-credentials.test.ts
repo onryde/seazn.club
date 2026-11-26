@@ -24,7 +24,7 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 }));
 
 import { USER_ID } from "./_fake-sql";
-import { APP_DIR } from "./_route-scan";
+import { APP_DIR, queryCredentialReaders, queryParamsRead } from "./_route-scan";
 import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
 import { generateRefCode } from "@/lib/ref-code";
@@ -35,39 +35,7 @@ import { scrubScoreUrl } from "../scrub-score-url";
 
 const ORIGIN = "https://seazn.club";
 
-// ---- the scan -----------------------------------------------------------------------------------------------------------
-
-/** A parameter name that looks like a credential. */
-const CREDENTIAL_NAME = /^(?:token|t|st|key|code|state|secret|sig|signature|otp|nonce|join|[a-z]+_code|[a-z]+_token|[a-z]+_secret|[a-z]+_key)$/;
-
-/** Every query parameter name a source reads, by the three ways a page or route reads one. */
-function queryParamsRead(source: string): string[] {
-  const names = new Set<string>();
-  for (const m of source.matchAll(/searchParams\.get\(\s*["']([\w-]+)["']\s*\)/g)) names.add(m[1]!);
-  for (const m of source.matchAll(/searchParams\s*:\s*Promise<\{([^}]*)\}>/g)) for (const n of m[1]!.matchAll(/(\w+)\??\s*:/g)) names.add(n[1]!);
-  for (const m of source.matchAll(/const\s*\{([^}]*)\}\s*=\s*await\s+(?:props\.)?searchParams/g)) {
-    for (const n of m[1]!.split(",")) names.add(n.split(":")[0]!.trim());
-  }
-  names.delete("");
-  return [...names].filter((n) => CREDENTIAL_NAME.test(n)).sort();
-}
-
-/** Every `app/**` page.tsx / route.ts(x) that reads a credential-looking parameter: `<file under app/>:<param>`. */
-function readers(): string[] {
-  const found: string[] = [];
-  const walk = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "__tests__" && entry.name !== "node_modules") walk(full);
-      } else if (["page.tsx", "route.ts", "route.tsx"].includes(entry.name)) {
-        for (const param of queryParamsRead(fs.readFileSync(full, "utf8"))) found.push(`${path.relative(APP_DIR, full)}:${param}`);
-      }
-    }
-  };
-  walk(APP_DIR);
-  return found.sort();
-}
+// ---- the scan lives in _route-scan.ts (revshare-script.test.ts reads the same readers) --------------------------------------
 
 /** The reusable cart access token (RS006): the status page is re-opened to view and withdraw, so it is not scrubbed (NOT_ONE_TIME). */
 const CART_TOKEN = "the cart's reusable access token (RS006, NOT_ONE_TIME in _route-scan.ts): the status page is re-opened to view and withdraw with it";
@@ -102,7 +70,7 @@ const QUERY_VERDICTS: Record<string, true | string> = {
   "admin/overlay-gallery/page.tsx:code": "a staff-only stress input: a team's short name for the overlay gallery, not a credential",
 };
 
-const found = readers();
+const found = queryCredentialReaders();
 
 describe("the reader scan, on synthetic sources (so a new reader is found)", () => {
   it("finds a get(), a typed searchParams, a destructure, both quote styles, and ignores a non-credential name", () => {
