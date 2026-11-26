@@ -228,9 +228,10 @@ describe("the SVG size reader the legibility check runs on", () => {
   });
 });
 
-// Where each drawing's words are smallest on the screens it is checked at, typed from the layout (e2e "layout A" measures
-// the column): the wide drawing in the 44rem column, and the phone drawing on a 320px screen less the 16px gutters.
-const SHOWN_AT = { wide: 704, phone: 320 - 2 * 16 } as const;
+// Where each drawing's words are smallest on the screens it is checked at, typed from the layout (e2e "the reading
+// column" measures it): the wide drawing in the 680px column, from a 768px screen up, and the phone drawing on a 320px
+// screen less the 16px gutters.
+const SHOWN_AT = { wide: 680, phone: 320 - 2 * 16 } as const;
 const MIN_WORD_PX = 11;
 
 describe("every word in the art can be read", () => {
