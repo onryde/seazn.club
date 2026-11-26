@@ -227,6 +227,99 @@ describe.skipIf(!HAS_DB)("Task 46 — the beat answer's delivery, through the re
     expect(dlv(await beat(r, phone))?.programmeIngest).toBe("errored");
   });
 
+  // stg 2026-11-26, session c02f56a0: the phone's SRT leg died, it fell back to RTMPS (Cloudflare: connected), the relay pulled the
+  // picture on every beat, and Cloudflare then delivered `live_input.disconnected` for the DEAD leg — newer than the reconnect, naming
+  // the input and not the protocol. The recorder stores it (a record, never a decision); the beat answer must not tell the phone on
+  // air that its camera is disconnected. Real recorder + real Machine beat + real beat answer: nothing here is a fixture of the fix.
+  const stored = async (sid: string, role: "camera" | "programme") => (await sql<{ event: string }[]>`
+    select e.payload->>'event' as event from fixture_stream_events e
+      join fixture_stream_inputs i on i.session_id = e.session_id and i.role = ${role} and i.ingest_input_id = e.payload->>'inputUid'
+     where e.session_id = ${sid} and e.type = 'ingest_status' and e.source = 'webhook' order by e.occurred_at desc, e.seq desc limit 1`)[0]?.event;
+  const BOTH_UP = { ...PLAYING_TOLD, cameraIngest: "connected", programmeIngest: "connected" } as const;
+
+  it("a late `disconnected` for the dead leg, a fresh beat showing the camera arriving after it → told connected; a real drop is not swallowed (connected → disconnected → relay beats → connected)", async () => {
+    const r = await captureRig();
+    const phone = phoneId("dlv-stale-leg");
+    const sid = await liveSeazn(r, phone);
+    const pub = (): Promise<Answer> => beat(r, phone, { sid, state: "publishing" });
+    expect(dlv(await pub())).toEqual(BOTH_UP);
+
+    // The dead leg's notification arrives; the relay's NEXT beat (still pulling the picture) is stored after it.
+    r.tick(10 * SEC);
+    await cfSays(r, sid, "camera", "live_input.disconnected");
+    expect(await stored(sid, "camera"), "PREMISE: the webhook is RECORDED as disconnected (the fix is in what the phone is told)").toBe("live_input.disconnected");
+    // …BEFORE the relay's next beat: nothing newer than the notification has been stored, so it cannot be contradicted.
+    expect(dlv(await pub())?.cameraIngest, "no beat since the notification: a real drop looks exactly like this").toBe("disconnected");
+    r.tick(2 * SEC);
+    await machineBeats(r, sid, PLAYING);
+    const stale = dlv(await pub());
+    expect(stale, "the relay's beat, stored after the notification, shows input connected + programme live").toEqual(BOTH_UP);
+    expect(await stored(sid, "camera"), "…and the record is untouched").toBe("live_input.disconnected");
+
+    // A REAL drop: Cloudflare disconnects again, later than that beat. Nothing contradicts it until the relay beats again…
+    r.tick(3 * SEC);
+    await cfSays(r, sid, "camera", "live_input.disconnected");
+    expect(dlv(await pub())?.cameraIngest, "a real disconnect, newer than the last beat").toBe("disconnected");
+    // …and when the relay's own input drops, it stays told disconnected (the beat no longer shows the camera arriving).
+    r.tick(2 * SEC);
+    await machineBeats(r, sid, { state: "stalled", input: "backoff", output: "connected", programmePhase: "reconnecting", fps: 0, bitrateKbps: 0 });
+    expect(dlv(await pub())).toMatchObject({ cameraIngest: "disconnected", programmePhase: "reconnecting" });
+    // The sequence's third leg: a `connected` after the late `disconnected` is simply the newest word.
+    r.tick(SEC);
+    await cfSays(r, sid, "camera", "live_input.connected");
+    expect(dlv(await pub())?.cameraIngest).toBe("connected");
+    // A second late `disconnected` stamped BEFORE that connect (Cloudflare documents no order) never reads as now.
+    await cfSays(r, sid, "camera", "live_input.disconnected", new Date(r.now().getTime() - 4 * SEC));
+    expect(dlv(await pub())?.cameraIngest).toBe("connected");
+  });
+
+  it("the programme's `disconnected` is never outranked (review I1), even by a fresh playing beat after it, and a stalled encoder with its socket up; the camera's is, beside it", async () => {
+    const r = await captureRig();
+    const phone = phoneId("dlv-stale-roles");
+    const sid = await liveSeazn(r, phone);
+    r.tick(10 * SEC);
+    await cfSays(r, sid, "camera", "live_input.disconnected");
+    await cfSays(r, sid, "programme", "live_input.disconnected");
+    r.tick(2 * SEC);
+    await machineBeats(r, sid, PLAYING);
+    expect(dlv(await beat(r, phone, { sid, state: "publishing" })), "camera outranked by the relay's frames; programme as Cloudflare said").toMatchObject({ cameraIngest: "connected", programmeIngest: "disconnected", relayOutput: "connected" });
+    // A stalled encoder keeps `output: connected` (a socket word): the programme is still told disconnected.
+    r.tick(SEC);
+    await machineBeats(r, sid, { state: "stalled", output: "connected", input: "connected", programmePhase: "frozen", fps: 0, bitrateKbps: 0 });
+    expect(dlv(await beat(r, phone, { sid, state: "publishing" }))).toMatchObject({ cameraIngest: "disconnected", programmeIngest: "disconnected", relayOutput: "connected", fps: 0 });
+    // A passthrough session has no relay beat at all: its camera `disconnected` is never outranked (a known remaining case).
+    const r2 = await captureRig();
+    const phone2 = phoneId("dlv-stale-passthrough");
+    const sid2 = await goLive(r2, phone2, { mode: "passthrough", targetId: await seaznOf(r2.auth.orgId) });
+    await cfSays(r2, sid2, "camera", "live_input.disconnected");
+    expect(dlv(await beat(r2, phone2))).toEqual({ cameraIngest: "disconnected" });
+  });
+
+  it("the notification's moment is Cloudflare's clock, the beat's is ours: Cloudflare ahead delays the fix by the skew, behind masks no longer than the relay's own frames say", async () => {
+    const r = await captureRig();
+    const phone = phoneId("dlv-skew");
+    const sid = await liveSeazn(r, phone);
+    const pub = (): Promise<Answer> => beat(r, phone, { sid, state: "publishing" });
+    // (a) CF's clock 3 s AHEAD: the stale notification is stamped after the beat stored a moment later, so it stands…
+    r.tick(10 * SEC);
+    await cfSays(r, sid, "camera", "live_input.disconnected", new Date(r.now().getTime() + 3 * SEC));
+    r.tick(SEC);
+    await machineBeats(r, sid, PLAYING);
+    expect(dlv(await pub())?.cameraIngest, "beat stored 1 s after receipt but 2 s before the CF-stamped moment").toBe("disconnected");
+    // …and the next beat, stored past that moment, outranks it.
+    r.tick(3 * SEC);
+    await machineBeats(r, sid, PLAYING);
+    expect(dlv(await pub())?.cameraIngest).toBe("connected");
+    // (b) CF's clock behind (2.5 s; 3 s would repeat (a)'s own moment, a duplicate): a notification stamped before the last beat reads as stale, and the beat's frame proof is
+    // what outranks it; with the relay's phase no longer live it is told as received.
+    r.tick(2 * SEC);
+    await cfSays(r, sid, "camera", "live_input.disconnected", new Date(r.now().getTime() - 2500));
+    expect(dlv(await pub())?.cameraIngest, "stamped before the last live beat: outranked by it").toBe("connected");
+    r.tick(SEC);
+    await machineBeats(r, sid, { state: "stalled", input: "connected", output: "connected", programmePhase: "frozen", fps: 0, bitrateKbps: 0 });
+    expect(dlv(await pub())?.cameraIngest, "the relay's frames stopped: no proof, the notification stands").toBe("disconnected");
+  });
+
   it("a read that throws: no delivery, the beat stored and answered, reported without secrets; the next beat carries it again", async () => {
     const r = await captureRig();
     const phone = phoneId("dlv-throw");

@@ -160,9 +160,11 @@ export async function recordLiveNotification(n: LiveNotification, arrivedAt: Dat
  *  writers. The newest by the event's MOMENT (`occurred_at`), then by the order recorded (`seq`), matched on the input's uid, so a
  *  deleted input (uid nulled by the retention pass) matches nothing. Events, not the samples beside them: a session over its sample
  *  cap stops writing samples, never events. */
-export function latestWebhookEvent(role: "camera" | "programme") {
-  return sql`(select e.payload->>'event' from fixture_stream_events e
-              join fixture_stream_inputs i on i.session_id = s.id and i.role = ${role} and i.ingest_input_id = e.payload->>'inputUid'
-             where e.session_id = s.id and e.type = 'ingest_status' and e.source = 'webhook'
-             order by e.occurred_at desc, e.seq desc limit 1)`;
-}
+const newestWebhook = (role: "camera" | "programme") => sql`
+    from fixture_stream_events e
+    join fixture_stream_inputs i on i.session_id = s.id and i.role = ${role} and i.ingest_input_id = e.payload->>'inputUid'
+   where e.session_id = s.id and e.type = 'ingest_status' and e.source = 'webhook'
+   order by e.occurred_at desc, e.seq desc limit 1`;
+export const latestWebhookEvent = (role: "camera" | "programme") => sql`(select e.payload->>'event' ${newestWebhook(role)})`;
+/** The MOMENT of that same newest notification (same order, same match): the beat answer compares it with the relay's own beat. */
+export const latestWebhookAt = (role: "camera" | "programme") => sql`(select e.occurred_at ${newestWebhook(role)})`;

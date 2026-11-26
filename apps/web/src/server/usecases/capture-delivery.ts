@@ -17,23 +17,29 @@ import "server-only";
 // later reconnect never reads as now. "That input" is the session's input of the role, matched on its uid; a deleted input's uid
 // is nulled (relay-sweep.ts's retention pass), so its notifications no longer match.
 //
+// ONE exception to "the latest notification": the camera's `disconnected` is told `connected` while the relay's own fresh beat,
+// stored after it, shows the camera live (relay/domain/delivery.ts `cameraIngestOf`: a late notification for a dead leg), which is
+// why the camera's notification MOMENT is read too (`latestWebhookAt`). The programme's is never outranked.
+//
 // Every session, whatever its kind (review ruling 2026-11-24, apply-rec: widened from Seazn-hosted only): each answer tells what
 // is STORED for its session and nothing else. A composed session has a relay that beats (the relay members) and a camera and a
 // programme input (both CF members); a passthrough session has no relay and one camera input, so at most `cameraIngest`; a
 // session with no fact yet answers no `delivery` at all (relay/domain/delivery.ts omits every unknown member, and
 // wireBeatAnswer an empty object). Court sessions are read the same way.
 import { sql } from "@/lib/db";
-import { latestWebhookEvent } from "./stream-sessions/live-notification";
+import { latestWebhookAt, latestWebhookEvent } from "./stream-sessions/live-notification";
 import type { StoredDelivery } from "@/server/relay/domain/delivery";
 
 /** The stored facts for session `sid`, or null when it no longer exists. One statement. */
 export async function readDeliveryFacts(sid: string): Promise<StoredDelivery | null> {
-  const [row] = await sql<{ last_heartbeat: unknown; heartbeat_at: Date | null; camera_event: string | null; programme_event: string | null }[]>`
+  const [row] = await sql<{ last_heartbeat: unknown; heartbeat_at: Date | null; camera_event: string | null; programme_event: string | null; camera_event_at: Date | null }[]>`
     select s.last_heartbeat, s.heartbeat_at,
            ${latestWebhookEvent("camera")} as camera_event,
-           ${latestWebhookEvent("programme")} as programme_event
+           ${latestWebhookEvent("programme")} as programme_event,
+           ${latestWebhookAt("camera")} as camera_event_at
       from fixture_stream_sessions s
      where s.id = ${sid}`;
   if (row === undefined) return null;
-  return { relayBeat: row.last_heartbeat, relayBeatAt: row.heartbeat_at, cameraEvent: row.camera_event, programmeEvent: row.programme_event };
+  return { relayBeat: row.last_heartbeat, relayBeatAt: row.heartbeat_at, cameraEvent: row.camera_event, programmeEvent: row.programme_event,
+    cameraEventAt: row.camera_event_at };
 }
