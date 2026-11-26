@@ -292,10 +292,20 @@ export function withDefaultDaySpread<T extends SlotConfig & VerifyConfig>(
   );
   if (hasExplicitCap || fixtureCount <= 0 || config.window === undefined || config.tz === undefined) return config;
 
-  // Same padded-by-one-day-at-each-end shape `build-grid.ts` and `repair.ts`
-  // already rely on (`calendarDaysCovering`'s own doc comment) — undo the pad
-  // rather than reimplement day counting a third way.
-  const days = calendarDaysCovering(config.window, config.tz).length - 2;
+  // `calendarDaysCovering` pads one day at each end (its own doc comment) and
+  // counts the day `to` falls on, so `length - 2` is the whole days from
+  // `from`'s through `to`'s INCLUSIVE. The window this pass is handed is
+  // half-open: `applyWindow` ends it at the EXCLUSIVE midnight after the last
+  // day, a day the board can never use. Counting that day made a one-day window
+  // two days and capped it at half the board (Swiss, 12 fixtures: 6 a day, the
+  // other 6 unplaceable), and every window of N days held ceil(n / (N + 1)) x N
+  // fixtures, short of n. So the last instant the window contains is the one
+  // asked about: `to - 1`.
+  const days =
+    calendarDaysCovering(
+      { from: config.window.from, to: Math.max(config.window.from, config.window.to - 1) },
+      config.tz,
+    ).length - 2;
   if (days <= 1) return config;
 
   const hard: HardConstraint[] = [
