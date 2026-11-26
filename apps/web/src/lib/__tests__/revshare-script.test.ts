@@ -260,7 +260,9 @@ function fakeWindow(opts: { href: string; referrer?: string; storage?: Record<st
   const scripts: FakeScript[] = [];
   const jar = new Map<string, string>((opts.cookie ?? "").split("; ").filter(Boolean).map((c) => [c.split("=")[0]!, c.slice(c.indexOf("=") + 1)]));
   const written: string[] = [];
-  const popstate: ((e: { stopImmediatePropagation(): void }) => void)[] = [];
+  type Listener = (e: { stopImmediatePropagation(): void; persisted?: boolean }) => void;
+  const listeners: Record<string, Listener[]> = {};
+  const popstate: Listener[] = (listeners.popstate = []);
   let current = new URL(opts.href);
   const location = {
     get href() { return current.href; },
@@ -302,12 +304,18 @@ function fakeWindow(opts: { href: string; referrer?: string; storage?: Record<st
   };
   const raw = {
     location, history, localStorage, document,
-    addEventListener: (name: string, fn: (e: { stopImmediatePropagation(): void }) => void) => { if (name === "popstate") popstate.push(fn); },
+    addEventListener: (name: string, fn: Listener) => { (listeners[name] ??= []).push(fn); },
     revshare_metadata: undefined as { ref_code?: string } | undefined,
   };
   return {
     win: raw as unknown as Window,
     raw, log, store, scripts, written, jar, popstate,
+    /** A window event; returns how many listeners heard it. */
+    fire(name: string, event: { persisted?: boolean } = {}) {
+      const heard = listeners[name] ?? [];
+      for (const fn of heard) fn({ stopImmediatePropagation: () => {}, ...event });
+      return heard.length;
+    },
     /** The browser's own traversal: the URL changes first, then popstate fires. */
     traverse(url: string) {
       current = new URL(url, current);
@@ -433,6 +441,41 @@ describe("a document that runs the script never takes an address it may not see"
     f.raw.history.replaceState({}, "", "/dashboard");
     f.raw.history.pushState({}, "", "/login");
     expect(f.log).toEqual([`assign ${ORIGIN}/dashboard`, `assign ${ORIGIN}/login`]);
+  });
+
+  // The load can fail to replace this document, and the same link must then still work: otherwise the router renders
+  // the other page in place, under this address, with the script still here.
+  const LOGIN = `assign ${ORIGIN}/login`;
+  const twice = (f: ReturnType<typeof live>, between: () => void) => {
+    f.raw.history.pushState({}, "", "/login");
+    between();
+    f.raw.history.pushState({}, "", "/login");
+  };
+
+  it("restored from the back/forward cache after leaving: the same click leaves again", () => {
+    const f = live();
+    twice(f, () => expect(f.fire("pageshow", { persisted: true })).toBeGreaterThan(0));
+    expect(f.log).toEqual([LOGIN, LOGIN]);
+    expect(f.raw.location.href).toBe(`${ORIGIN}/?ref=aff_1`);
+  });
+
+  it("the first load's own pageshow (not persisted) forgets nothing", () => {
+    const f = live();
+    twice(f, () => f.fire("pageshow", { persisted: false }));
+    expect(f.log).toEqual([LOGIN]);
+  });
+
+  it("a Back within this document overtakes the load: the same click leaves again", () => {
+    const f = live();
+    twice(f, () => f.traverse("/pricing"));
+    expect(f.log).toEqual([LOGIN, LOGIN]);
+  });
+
+  // Stop, Escape or an answer with no page leaves the document and fires no event: the next press is a new request.
+  it.each(["pointerdown", "keydown"])("a stopped load, then a %s: the same click leaves again", (input) => {
+    const f = live();
+    twice(f, () => expect(f.fire(input)).toBeGreaterThan(0));
+    expect(f.log).toEqual([LOGIN, LOGIN]);
   });
 
   it("public pages, state-only writes and an allowed page with no ?ref= pass straight through", () => {

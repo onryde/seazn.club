@@ -122,8 +122,19 @@ export function captureRevshareRef(win: Window): boolean {
 /** Step 3 of the header: from now on this document's address stays one the script may see. */
 function holdAddress(win: Window): void {
   const { history } = win;
-  // Next writes the same URL more than once per navigation; the second write must not restart the load.
+  // Next writes the same URL more than once per navigation; the second write must not restart the load. That memory is
+  // only good while the load can still replace this document: kept longer, it would swallow the next click on the same
+  // link, and the router would render that page HERE, under this address.
   let leavingFor: string | null = null;
+  const forget = () => {
+    leavingFor = null;
+  };
+  // Left, then restored from the back/forward cache with this memory intact.
+  win.addEventListener("pageshow", (event) => {
+    if (event.persisted) forget();
+  });
+  // A stopped load, or an answer with no page, fires nothing: the person's next press is a new request.
+  for (const input of ["pointerdown", "keydown"]) win.addEventListener(input, forget, true);
   for (const [method, go] of [["pushState", "assign"], ["replaceState", "replace"]] as const) {
     const write = history[method];
     history[method] = (data: unknown, unused: string, url?: string | URL | null) => {
@@ -144,6 +155,7 @@ function holdAddress(win: Window): void {
   // Back or Forward has already changed the address. Reload it as a fresh document, and keep the event from any
   // listener added after this one (the script's would be).
   win.addEventListener("popstate", (event) => {
+    forget(); // a traversal within this document overtakes a load that is under way
     if (mayBeSeen(new URL(win.location.href))) return;
     event.stopImmediatePropagation();
     win.location.reload();
