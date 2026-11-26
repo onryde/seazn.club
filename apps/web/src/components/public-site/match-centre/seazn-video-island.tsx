@@ -97,7 +97,7 @@ export function nextPartIndex(key: string, from: number, count: number): number 
 const REGION = "ph-no-capture mt-4 border-t border-white/10 pt-4";
 /** The delay line under the live player (Task 33c), and the held box's invisible copy of it: one authority for its geometry, and the
  *  copy holds the very sentence, so it wraps exactly as the line will at every width and in every locale. `text-court-muted` is the
- *  court card's quiet-line ink (the "Updated {seconds}s ago" line under this slot), measured above WCAG AA on `bg-court`. */
+ *  court card's quiet-line ink (the "Score updated {seconds}s ago" line above this slot), measured above WCAG AA on `bg-court`. */
 const DELAY_LINE = "mt-2 text-xs text-court-muted";
 const delayText = (labels: SeaznVideoLabels): string =>
   interpolate(labels.delay, { seconds: SEAZN_LIVE_DELAY_SECONDS });

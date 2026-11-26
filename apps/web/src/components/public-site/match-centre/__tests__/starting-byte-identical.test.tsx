@@ -6,6 +6,8 @@
 // CAPTURE_STARTING_GOLDEN=1 — the expected values come from the code as it was, never from the code under test.
 //
 // A deliberate future change to the court card or the list reds this file: re-capture it in that change, and say so.
+// Re-captured for Task 54 (2026-11-26): the freshness line moved above the video slot and was reworded, so ONLY the twelve
+// `court:*/in_play` and online-live cases changed hash; every other status and the list renders kept their BASE hash.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

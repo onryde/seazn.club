@@ -190,7 +190,41 @@ describe("CourtCard", () => {
     const header: MatchCentreHeaderT = { ...liveHeader, updatedAt: fiveSecondsAgo };
     const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
     expect(html).toContain('data-testid="mc-updated-at"');
-    expect(html).toContain("Updated 5s ago");
+    // Expected text comes from the dictionary's own line, never the component.
+    expect(html).toContain(en["matchCentre.scoreUpdatedAgo"].replace("{seconds}", "5"));
+    expect(en["matchCentre.scoreUpdatedAgo"], "premise: the line names the score, not the video").toMatch(/^Score updated/);
+  });
+
+  // Task 54 - the line is the SCORE document's age, so it belongs to the score block, not under the video.
+  it("every locale carries matchCentre.scoreUpdatedAgo with exactly one {seconds} placeholder", () => {
+    let checked = 0;
+    for (const [locale, d] of LOCALE_DICTS) {
+      const line = d["matchCentre.scoreUpdatedAgo"];
+      expect(line, `${locale} has the key`).toBeTruthy();
+      expect(line.match(/\{seconds\}/g)?.length, `${locale} has one {seconds}`).toBe(1);
+      // English pasted into a locale is a translation gap, not a translation.
+      if (locale !== "en") expect(line, `${locale} is translated, not English`).not.toBe(en["matchCentre.scoreUpdatedAgo"]);
+      checked += 1;
+    }
+    expect(checked, "all four locales checked").toBe(4);
+  });
+
+  it("the freshness line renders once, after the score rows and the status/rate/super-over lines, with and without a replay", () => {
+    const header: MatchCentreHeaderT = {
+      ...liveHeader,
+      superOverLine: { key: "org.competitionsBy", params: { org: "Riverside" } },
+    } as MatchCentreHeaderT;
+    for (const replay of [undefined, <section key="r" data-testid="order-probe">REPLAY</section>]) {
+      const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} replay={replay} />);
+      const at = html.indexOf('data-testid="mc-updated-at"');
+      expect(html.split('data-testid="mc-updated-at"').length - 1, "exactly one line").toBe(1);
+      for (const earlier of ["mc-score-1", "mc-status-line", "mc-rate-line", "mc-super-over-line"]) {
+        const e = html.indexOf(`data-testid="${earlier}"`);
+        expect(e, `premise: ${earlier} rendered`).toBeGreaterThan(-1);
+        expect(at, `after ${earlier}`).toBeGreaterThan(e);
+      }
+      if (replay) expect(at, "before the replay").toBeLessThan(html.indexOf('data-testid="order-probe"'));
+    }
   });
 
   // Defect round 15b — axe measured `mc-updated-at` at 4.09:1 on `bg-court`
@@ -228,7 +262,7 @@ describe("CourtCard", () => {
   it("a malformed header.updatedAt reads '0s ago' rather than NaN", () => {
     const header: MatchCentreHeaderT = { ...liveHeader, updatedAt: "not-a-real-date" };
     const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
-    expect(html).toContain("Updated 0s ago");
+    expect(html).toContain(en["matchCentre.scoreUpdatedAgo"].replace("{seconds}", "0"));
     expect(html).not.toContain("NaN");
   });
 
@@ -488,7 +522,7 @@ describe("CourtCard — a long entrant name ellipses instead of pushing the scor
 
 // YouTube Connect T16 (owner ruling O1, layout B): the replay player lives INSIDE the court card, directly under the scoreline. The
 // card knows nothing of YouTube - the page hands it a node - so what is pinned here is the slot: present only when given, inside the
-// slab, after the score rows and before the freshness line, and the card is byte-identical without it.
+// slab, after the score rows and after the freshness line, and the card is byte-identical without it.
 describe("CourtCard replay slot", () => {
   const marker = <section data-testid="replay-slot-probe">REPLAY</section>;
 
@@ -510,9 +544,9 @@ describe("CourtCard replay slot", () => {
     expect(at).toBeLessThan(bar);
   });
 
-  it("sits before the freshness line on a live match, so the live clock stays the card's last word", () => {
+  it("sits AFTER the freshness line on a live match: the line is the score's age, so it stays with the score, above the video", () => {
     const html = renderToStaticMarkup(<CourtCard header={liveHeader} dict={dict} replay={marker} />);
     expect(html).toContain('data-testid="mc-updated-at"');
-    expect(html.indexOf("replay-slot-probe")).toBeLessThan(html.indexOf('data-testid="mc-updated-at"'));
+    expect(html.indexOf('data-testid="mc-updated-at"')).toBeLessThan(html.indexOf("replay-slot-probe"));
   });
 });

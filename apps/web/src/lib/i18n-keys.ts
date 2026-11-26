@@ -4223,6 +4223,7 @@ export type DictionaryKey =
   | "matchCentre.result.wickets.other"
   | "matchCentre.runRateShort"
   | "matchCentre.scoreByUnit"
+  | "matchCentre.scoreUpdatedAgo"
   | "matchCentre.serving"
   | "matchCentre.sets"
   | "matchCentre.status.abandoned"

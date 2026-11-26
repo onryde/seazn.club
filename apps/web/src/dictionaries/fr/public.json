@@ -50,6 +50,7 @@
   "matchCentre.status.timeNotRecorded": "Heure non enregistrée",
   "matchCentre.winner": "Vainqueur :",
   "matchCentre.updatedAgo": "Mis à jour il y a {seconds}s",
+  "matchCentre.scoreUpdatedAgo": "Score mis à jour il y a {seconds} s",
   "matchCentre.goalsByPeriod": "Buts par période",
   "matchCentre.discipline": "Discipline",
   "matchCentre.toss": "{side} a gagné le tirage au sort, a choisi {elected}",

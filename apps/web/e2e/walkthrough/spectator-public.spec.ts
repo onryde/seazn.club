@@ -423,10 +423,10 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   // Fix round 1 (task-15-review.md I2) -- the positive pair for "no
   // navigation": a fresh document arrived, even though the page never
   // navigated. NOT a before/after TEXT-equality check: caught live on the
-  // first real run of this exact assertion -- `mc-updated-at`'s "Updated Ns
-  // ago" resets to "Updated 0s ago" on ANY fresh document, so a page that is
+  // first real run of this exact assertion -- `mc-updated-at`'s "Score updated
+  // Ns ago" resets to "Score updated 0s ago" on ANY fresh document, so a page that is
   // merely newly loaded and a page that just received a genuinely new one
-  // can both read "Updated 0s ago" at the moment each is checked (before
+  // can both read "Score updated 0s ago" at the moment each is checked (before
   // !== after is neither necessary -- a real update can leave the STRING
   // unchanged -- nor sufficient -- the ticking clock alone changes it a
   // second later with no update at all). Parsing the elapsed-seconds NUMBER
@@ -435,11 +435,11 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   // into the test by now), that number would be large, not small.
   const updatedAtAfter = await anon320.getByTestId("mc-updated-at").textContent();
   // Fix round 2 (task-15-rereview, New Issue #1): `/(\d+)s ago/` only
-  // matches the ENGLISH string. Every `matchCentre.updatedAgo` dictionary
+  // matches the ENGLISH string. Every `matchCentre.scoreUpdatedAgo` dictionary
   // entry carries exactly one `{seconds}` placeholder and no other digits
-  // (en "Updated {seconds}s ago", fr "Mis à jour il y a {seconds}s", es
-  // "Actualizado hace {seconds}s", nl "Bijgewerkt {seconds}s geleden") --
-  // reading the key's own shape, the first integer anywhere in the label is
+  // (en "Score updated {seconds}s ago", fr "Score mis à jour il y a {seconds} s",
+  // es "Marcador actualizado hace {seconds} s", nl "Score {seconds} s geleden bijgewerkt") --
+  // reading the key's own shape, the integer before its seconds unit ("5s" or "5 s") is
   // locale-agnostic. This file never itself changes locale, but a sibling
   // walkthrough file does (spectator-public-2.spec.ts's own locale test),
   // and both now run under CI's real multi-worker scheduling -- matching
@@ -448,7 +448,7 @@ test("cricket match A: the anonymous match centre updates live as the real pad a
   // round 2 also gave the locale test its own dedicated org); parsing
   // locale-agnostically removes the coupling to WHICH locale happens to be
   // active at all, rather than relying on isolation being perfect forever.
-  const secondsAfter = Number(updatedAtAfter?.match(/(\d+)/)?.[1]);
+  const secondsAfter = Number(updatedAtAfter?.match(/(\d+)\s?s\b/)?.[1]);
   expect(Number.isFinite(secondsAfter), `mc-updated-at did not parse a number: ${updatedAtAfter}`).toBe(true);
   expect(secondsAfter, "mc-updated-at must show a FRESH elapsed time right after the update, not the page-load-old one").toBeLessThan(
     10,

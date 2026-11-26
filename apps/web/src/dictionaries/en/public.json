@@ -50,6 +50,7 @@
   "matchCentre.status.timeNotRecorded": "Time not recorded",
   "matchCentre.winner": "Winner:",
   "matchCentre.updatedAgo": "Updated {seconds}s ago",
+  "matchCentre.scoreUpdatedAgo": "Score updated {seconds}s ago",
   "matchCentre.goalsByPeriod": "Goals by period",
   "matchCentre.discipline": "Discipline",
   "matchCentre.toss": "{side} won the toss, elected to {elected}",

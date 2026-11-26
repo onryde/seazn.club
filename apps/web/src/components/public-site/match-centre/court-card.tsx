@@ -36,7 +36,7 @@
 //   left unconditional it could read something absurd like "Updated
 //   47231s ago" on a page that finished hours ago.
 // - `Date.parse` is guarded with `Number.isFinite`: a malformed
-//   `header.updatedAt` now reads "Updated 0s ago" rather than the
+//   `header.updatedAt` now reads "Score updated 0s ago" rather than the
 //   `Math.floor(NaN / 1000)` → `NaN` this would otherwise produce.
 // - `suppressHydrationWarning` on the freshness `<p>` — its text is a
 //   function of wall-clock time, so the server-rendered and first-client-
@@ -295,10 +295,11 @@ export function CourtCard({ header, dict, replay }: CourtCardProps) {
             {t(dict, header.superOverLine.key, header.superOverLine.params)}
           </p>
         ) : null}
-        {replay ?? null}
         {inPlay ? (
           <p
             data-testid="mc-updated-at"
+            // Task 54: this is the SCORE document's age, so it sits with the score block, above the replay/live
+            // video slot (which brings its own `mt-4 border-t pt-4` rule) - under the player it read as the video's age.
             // Defect round 15b: the extra `/70` opacity stacked on top of
             // `text-court-muted`'s own embedded alpha measured 4.09:1 on
             // `bg-court` — short of WCAG AA's 4.5:1 (axe SERIOUS, walkthrough
@@ -308,9 +309,10 @@ export function CourtCard({ header, dict, replay }: CourtCardProps) {
             className="mt-3 text-[11px] text-court-muted"
             suppressHydrationWarning
           >
-            {t(dict, "matchCentre.updatedAgo", { seconds })}
+            {t(dict, "matchCentre.scoreUpdatedAgo", { seconds })}
           </p>
         ) : null}
+        {replay ?? null}
       </div>
       <div aria-hidden className={`h-1 ${inPlay ? "bg-emerald-400" : "bg-accent"}`} />
     </div>
