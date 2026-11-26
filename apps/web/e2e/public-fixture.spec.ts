@@ -650,7 +650,9 @@ test.describe("the Seazn player over time (1280)", () => {
       expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, element)), "the same <video> node").toBe(true);
       // A refresh is NOT a load on hls.js: handing it another address would detach the media; nothing asked for the refreshed manifest.
       expect(stub.requests.filter((u) => /\/refreshed-\d+\//.test(u)), "no request yet names the refreshed token").toEqual([]);
-      expect(stub.requests.filter((u) => /\/manifest\/video\.m3u8$/.test(u)).every((u) => u === first), "the manifest was only ever asked for under the first token").toBe(true);
+      const manifestRequests = stub.requests.filter((u) => /\/manifest\/video\.m3u8$/.test(u));
+      expect(manifestRequests.length, "anti-vacuity: the manifest was asked for at least once, or the `every` below proves nothing").toBeGreaterThan(0);
+      expect(manifestRequests.every((u) => u === first), "the manifest was only ever asked for under the first token").toBe(true);
       await video.evaluate((el: HTMLVideoElement) => { el.muted = true; void el.play().catch(() => undefined); });
       await expect
         .poll(() => stub.requests.some((u) => /\/refreshed-\d+\/manifest\/seg0\.ts$/.test(u)), { message: "the segment went out under the refreshed token", timeout: 15_000 })
