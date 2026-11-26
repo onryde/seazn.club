@@ -52,7 +52,9 @@ async function refusalFrom(status: number, code: number, message: string): Promi
 const HAS_DB = !!process.env.DATABASE_URL;
 const ROOMY_STORAGE_MINUTES = 100_000_000;
 /** Cloudflare's signed manifest (C1, plan Task 14): the token is ONE path segment, and there is no query string. */
-const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
+/** W-LL: the live programme manifest carries Cloudflare's LL-HLS query while STREAM_PROGRAMME_LOW_LATENCY is on (the default); a recording's never does (PLAY_PLAIN). */
+const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8(?:\?protocol=llhls)?$/;
+const PLAY_PLAIN = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
 /** The plan's live token life (Task 8: 1 h), typed here. */
 const TTL_SECONDS = 3600;
 /** Nothing to play. `session` (Task 33g) is what an open page follows: null where the latest session is not a Seazn one, or there is none,
@@ -297,7 +299,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(answer.live).toBeNull();
     expect(answer.replay).toHaveLength(1);
     expect(answer.replay[0]).toMatchObject({ partNo: 1, player: "hls" });
-    expect(answer.replay[0]!.src).toMatch(PLAY);
+    expect(answer.replay[0]!.src).toMatch(PLAY_PLAIN);
     expect(signedUid(answer.replay[0]!.src), "the recording is signed, never the input").toBe(rec);
     expect(answer.replay[0]!.expiresAt).toBe(new Date((Math.floor(r.clock.now / 1000) + TTL_SECONDS) * 1000).toISOString());
     expect(PublicFixtureVideo.parse(answer)).toEqual(answer);

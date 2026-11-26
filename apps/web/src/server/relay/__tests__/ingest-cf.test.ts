@@ -232,7 +232,7 @@ describe("CloudflareIngest", () => {
     rec = recorder(cfReply);
     ingest = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: "tok" });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
   it("create: deleteRecordingAfterDays is a TOP-LEVEL sibling of recording, never a member of it (U1-S1), with mode automatic and timeoutSeconds from config inside Cloudflare's range (C1, C4, C8)", async () => {
     await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
@@ -309,7 +309,8 @@ describe("CloudflareIngest", () => {
     await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
     const bodies = rec.calls.filter((c) => c.init.method === "POST").map((c) => JSON.parse(String(c.init.body)) as { meta: { name: string } });
     expect(bodies.map((b) => b.meta.name)).toEqual(["seazn-session-s1-slot-0", "seazn-session-s_noplay-slot-0", "seazn-session-s1-programme-slot-0"]);
-    const settings = (b: Record<string, unknown>) => ({ ...b, meta: undefined });
+    // W-LL: the programme create also asks for LL-HLS (its own block below); everything else is the camera's.
+    const settings = (b: Record<string, unknown>) => ({ ...b, meta: undefined, preferLowLatency: undefined });
     expect(settings(bodies[2]!), "the programme input records as the camera does").toEqual(settings(bodies[0]!));
   });
 
@@ -326,6 +327,96 @@ describe("CloudflareIngest", () => {
     expect({ ...prog!.recording, requireSignedURLs: undefined, allowedOrigins: undefined }).toEqual(cam!.recording);
     expect(cam!.recording, "the camera: exactly the unsigned settings").toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
     expect(["requireSignedURLs", "allowedOrigins"].filter((k) => k in cam!.recording), "the camera carries neither key").toEqual([]);
+  });
+
+  // W-LL (owner 2026-11-26, research lever 2): the PROGRAMME input asks Cloudflare for Low-Latency HLS. The field is Cloudflare's own,
+  // read off its API reference (Create Live Input / Update Live Input, request AND response): `preferLowLatency`, a boolean at the
+  // TOP LEVEL of the body, a sibling of `recording` and not a member of it. The name and placement are typed here, never read off
+  // the adapter.
+  describe("W-LL: preferLowLatency on the programme input only", () => {
+    const bodyOf = (c: { init: RequestInit }) => JSON.parse(String(c.init.body)) as Record<string, unknown> & { recording: Record<string, unknown> };
+    const creates = () => rec.calls.filter((c) => c.init.method === "POST").map(bodyOf);
+
+    it("on (the default, unset or blank or \"true\"): the programme create carries preferLowLatency: true at the top level, never inside recording; the camera create never carries it", async () => {
+      let checked = 0;
+      for (const v of [undefined, "", "  ", "true", "TRUE"]) {
+        vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", v);
+        rec.calls.length = 0;
+        await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+        await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+        await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "camera" });
+        const [prog, cam, cam2] = creates();
+        expect(prog!.preferLowLatency, `value ${JSON.stringify(v)}: programme`).toBe(true);
+        expect("preferLowLatency" in prog!.recording, "never nested in recording").toBe(false);
+        expect("preferLowLatency" in cam!, `value ${JSON.stringify(v)}: camera`).toBe(false);
+        expect("preferLowLatency" in cam2!, `value ${JSON.stringify(v)}: explicit camera role`).toBe(false);
+        checked++;
+      }
+      expect(checked, "five spellings of on were driven").toBe(5);
+    });
+
+    it("off (STREAM_PROGRAMME_LOW_LATENCY=false, any case): the programme create omits the key entirely, and is the camera's body but for its name", async () => {
+      let checked = 0;
+      for (const v of ["false", "FALSE", " false "]) {
+        vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", v);
+        rec.calls.length = 0;
+        await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+        await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+        const [prog, cam] = creates();
+        expect("preferLowLatency" in prog!, `value ${JSON.stringify(v)}: omitted, not false`).toBe(false);
+        expect({ ...prog!, meta: undefined }).toEqual({ ...cam!, meta: undefined });
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it("a signed programme create (a Seazn session) carries it too, beside requireSignedURLs inside recording", async () => {
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");
+      await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED });
+      const [prog] = creates();
+      expect(prog!.preferLowLatency).toBe(true);
+      expect(prog!.recording.requireSignedURLs).toBe(true);
+    });
+
+    it("the switch (PUT) re-sends the flag for a programme input when on, omits it when off, and never puts it on a camera's", async () => {
+      let checked = 0;
+      for (const [env, role, want] of [["", "programme", true], ["false", "programme", false], ["", "camera", false], ["", undefined, false]] as const) {
+        vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", env);
+        rec.calls.length = 0;
+        await ingest.setInputEnabled("in_abc", false, { sessionId: "s1", slot: 0, ...(role ? { role, access: null } : {}) });
+        const put = bodyOf(rec.calls[0]!);
+        expect("preferLowLatency" in put, `env ${JSON.stringify(env)} role ${String(role)}`).toBe(want);
+        if (want) expect(put.preferLowLatency).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
+    it("a malformed value throws naming the variable, before anything is sent", async () => {
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "maybe");
+      await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" })).rejects.toThrow(/STREAM_PROGRAMME_LOW_LATENCY/);
+      expect(rec.calls, "nothing was sent").toHaveLength(0);
+    });
+
+    it("an echo that does not say preferLowLatency true is WARNED (the input still works as plain HLS), never refused; a true echo is silent; the warning carries no id, url or token", async () => {
+      vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");
+      const warns: { fields: Record<string, unknown>; message: string }[] = [];
+      const build = (echo: boolean | undefined) => new CloudflareIngest({
+        fetchImpl: recorder((c) => {
+          const sent = JSON.parse(String(c.init.body)) as { recording: Record<string, unknown> };
+          return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, ...sent.recording }, ...(echo === undefined ? {} : { preferLowLatency: echo }) } } };
+        }).fetchImpl,
+        accountId: "acct", token: "tok", warn: (fields, message) => warns.push({ fields, message }),
+      });
+      await expect(build(undefined).createLiveInput({ sessionId: "s1", slot: 0, role: "programme" })).resolves.toBeDefined();
+      await expect(build(false).createLiveInput({ sessionId: "s1", slot: 0, role: "programme" })).resolves.toBeDefined();
+      expect(warns, "absent and false each warned once").toHaveLength(2);
+      expect(JSON.stringify(warns)).not.toMatch(/in_abc|srt:|rtmps:|playback/);
+      warns.length = 0;
+      await build(true).createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+      await build(undefined).createLiveInput({ sessionId: "s1", slot: 0 });
+      expect(warns, "a true echo, and a camera that never asked, are silent").toHaveLength(0);
+    });
   });
 
   it("Task 12 (U1, G5): the signing is READ BACK — a signed create whose echo has no requireSignedURLs, or whose origins are not the ones sent, is refused and its input deleted; an unsigned create echoed signed is refused too; the honest echoes pass", async () => {
@@ -432,7 +523,8 @@ describe("CloudflareIngest", () => {
   // own page ("Enable or disable a live input") sends `{"enabled": false}` alone, but nothing there says a body without
   // `recording` leaves the recording untouched — and the recording is the thing C4 measured: an input whose mode went
   // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
-  it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (no preferLowLatency)", async () => {
+  it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (preferLowLatency only on a programme input, W-LL)", async () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "");   // unset = on: the default
     let checked = 0;
     // Every role the create names differently: the camera (the default) and a programme input — Task 12: unsigned (an external
     // destination's, whose row reads `access` null) and signed (a Seazn session's). The switch is told the access its row holds.
@@ -463,7 +555,9 @@ describe("CloudflareIngest", () => {
         expect(body.recording.mode).toBe("automatic");
         expect(body.recording.timeoutSeconds).toBe(INGEST_TIMEOUT_SECONDS);
         expect(body.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
-        expect(Object.keys(body).sort(), "exactly these four keys").toEqual(["deleteRecordingAfterDays", "enabled", "meta", "recording"]);
+        // W-LL: a programme input's switch re-sends the LL-HLS flag its create carried (default on); the camera's never has it.
+        const wantKeys = ["deleteRecordingAfterDays", "enabled", "meta", "recording", ...(role === "programme" ? ["preferLowLatency"] : [])].sort();
+        expect(Object.keys(body).sort(), "exactly these keys").toEqual(wantKeys);
         checked++;
       }
     }
@@ -1297,10 +1391,11 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
     expect(cf).not.toMatch(/mode:\s*"off"/);
     expect([...cf.matchAll(/mode:\s*"/g)], "one mode literal in the whole adapter").toHaveLength(1);
   });
-  it("no preferLowLatency, no token verify, no manifest fetch, no ENDLIST anywhere under server/relay (C11, C12, C13, C8)", () => {
+  it("preferLowLatency only in the adapter and config (W-LL, owner 2026-11-26; was C11: never), no token verify, no manifest fetch, no ENDLIST anywhere under server/relay (C12, C13, C8)", () => {
     expect(sources.length, "the scan found sources at all").toBeGreaterThan(5);
+    const naming = sources.filter((s) => /preferLowLatency/.test(s.text)).map((s) => s.name).sort();
+    expect(naming, "the field is named by the adapter and nothing else (config names the env var, not the field)").toEqual(["ingest-cf.ts"]);
     for (const s of sources) {
-      expect(s.text, s.name).not.toMatch(/preferLowLatency/);
       expect(s.text, s.name).not.toMatch(/\/user\/tokens\/verify/);
       expect(s.text, s.name).not.toMatch(/\.m3u8/);
       expect(s.text, s.name).not.toMatch(/ENDLIST/);

@@ -971,3 +971,29 @@ describe("T44 — SAMPLES_PER_SESSION_CAP holds a full session at the edge beat'
     expect((config.MAX_DURATION_MINUTES * 60 * 1000) / config.RELAY_HEARTBEAT_INTERVAL_MS).toBe(2_160);
   });
 });
+
+// W-LL (owner 2026-11-26, research lever 2): the switch for Low-Latency HLS on the programme input and its manifest address.
+// Default ON; the variable is a server setting read per call; anything but true/false throws, naming it (like STREAM_SRT_ENABLED).
+describe("programmeLowLatency (STREAM_PROGRAMME_LOW_LATENCY)", () => {
+  it("is on when unset, blank or true in any case; off for false in any case; anything else throws naming the variable", () => {
+    let checked = 0;
+    const cases: [Record<string, string | undefined>, boolean][] = [
+      [{}, true], [{ STREAM_PROGRAMME_LOW_LATENCY: "" }, true], [{ STREAM_PROGRAMME_LOW_LATENCY: "   " }, true],
+      [{ STREAM_PROGRAMME_LOW_LATENCY: "true" }, true], [{ STREAM_PROGRAMME_LOW_LATENCY: "TRUE" }, true],
+      [{ STREAM_PROGRAMME_LOW_LATENCY: "false" }, false], [{ STREAM_PROGRAMME_LOW_LATENCY: " False " }, false],
+    ];
+    for (const [env, want] of cases) { expect(config.programmeLowLatency(env), JSON.stringify(env)).toBe(want); checked++; }
+    for (const bad of ["0", "off", "yes", "1", "maybe"]) {
+      expect(() => config.programmeLowLatency({ STREAM_PROGRAMME_LOW_LATENCY: bad }), bad).toThrow(/STREAM_PROGRAMME_LOW_LATENCY/);
+      checked++;
+    }
+    expect(checked, "seven accepted spellings and five refused").toBe(12);
+  });
+  it("reads process.env when no env is passed", () => {
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "false");
+    expect(config.programmeLowLatency()).toBe(false);
+    vi.stubEnv("STREAM_PROGRAMME_LOW_LATENCY", "true");
+    expect(config.programmeLowLatency()).toBe(true);
+    vi.unstubAllEnvs();
+  });
+});

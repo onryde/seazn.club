@@ -29,7 +29,7 @@
 //    "not known yet" — `measured()` maps those to null on the VALUE, never on
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
-import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS } from "./config";
+import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS, programmeLowLatency } from "./config";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -76,6 +76,19 @@ export function liveInputRecording(access?: IngestCreateSpec["access"]): typeof 
   if (!access) return { ...LIVE_INPUT_RECORDING };
   return { ...LIVE_INPUT_RECORDING, requireSignedURLs: true, allowedOrigins: [...access.allowedOrigins] };
 }
+
+/** W-LL (owner 2026-11-26, research lever 2): the LL-HLS ask a PROGRAMME input's create (and the switch's PUT, which re-sends the create's
+ *  body) carries — Cloudflare's `preferLowLatency`, a boolean at the TOP LEVEL of the body beside `recording`, not inside it. Sources:
+ *  create  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/create/index.md  (request + response)
+ *  update  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/update/index.md  (the PUT takes it too)
+ *  guide   https://developers.cloudflare.com/stream/stream-live/start-stream-live/  (default false, BETA, recording `mode` must be
+ *          `automatic` — which the one LIVE_INPUT_RECORDING constant always is; B-frames unsupported, GOP 2-4 s, RTMP preferred over SRT).
+ *  Nothing there says how it interacts with `requireSignedURLs` (UNMEASURED: the stg trial reads it), and the docs list no extra price.
+ *  Camera: never — the relay pulls it over SRT and LL could change that. Off (config's STREAM_PROGRAMME_LOW_LATENCY=false): the key is
+ *  omitted, never sent as false. The PUT re-sends the same current value because a PUT's omitted fields are not known to be kept
+ *  (C4's lesson about `recording`); a flag flipped between a create and its switch therefore reaches that input at the switch. */
+const lowLatencyFor = (role: IngestCreateSpec["role"]): { preferLowLatency?: true } =>
+  role === "programme" && programmeLowLatency() ? { preferLowLatency: true } : {};
 
 /** Task 12 (U1: every setting sent is read back): what an echo says of the input's signing, against what was sent. Signed
  *  sent ⇒ `requireSignedURLs` must echo `true` and the origins must be the same hosts (order is not compared). Unsigned sent ⇒
@@ -312,6 +325,7 @@ export class CloudflareIngest implements IngestProvider {
   }
 
   async createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials> {
+    const asked = lowLatencyFor(spec.role);
     const r = await this.call<{
       uid: string;
       rtmps: { url: string; streamKey: string };
@@ -324,6 +338,8 @@ export class CloudflareIngest implements IngestProvider {
        *  `timeoutSeconds` Cloudflare declined comes back null (U1-S8). */
       recording?: { timeoutSeconds?: number | null; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null;
       deleteRecordingAfterDays?: number | null;
+      /** W-LL: the LL-HLS flag echoed (the response schema carries it). */
+      preferLowLatency?: boolean | null;
     }>("POST", "/live_inputs", {
       // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
       // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles — Task 12: plus the
@@ -338,6 +354,7 @@ export class CloudflareIngest implements IngestProvider {
       // session, with a green create call at every step.
       recording: liveInputRecording(spec.access),
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+      ...asked,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) this.fail("create live input", r);
     const { uid, rtmps, srt, srtPlayback } = r.json.result;
@@ -354,6 +371,11 @@ export class CloudflareIngest implements IngestProvider {
     // Task 12 (G5): a signed input that came back unsigned is publicly playable (C3 saw exactly that of a recording), so it is
     // refused and deleted like every other setting that did not apply.
     notApplied.push(...accessNotApplied(spec.access, r.json.result.recording));
+    // W-LL: a flag that did not apply is a SOFT finding, not a refusal — the input is a working plain-HLS input, and a beta
+    // latency option must not take a session down (the stg playlist read, EXT-X-PART, is what proves it). No id, url or token.
+    if (asked.preferLowLatency && r.json.result.preferLowLatency !== true) {
+      this.warn({ echoed: String(r.json.result.preferLowLatency ?? null) }, "cloudflare create live input: preferLowLatency was sent and the echo does not say true — this programme input plays as plain HLS");
+    }
     if (notApplied.length > 0) {
       // The input exists and is misconfigured. Nothing has connected yet, so it
       // holds no recording for `deleteInput` to leak (C2) — dropping it here is
@@ -560,6 +582,7 @@ export class CloudflareIngest implements IngestProvider {
     const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
     const r = await this.call<{ enabled?: boolean; recording?: { mode?: string; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
       ...named, enabled, recording: liveInputRecording(meta.access ?? undefined), deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+      ...lowLatencyFor(meta.role),
     }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 && !enabled) return;
     if (!r.json.success || !r.json.result) this.fail("set input enabled", r);

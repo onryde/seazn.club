@@ -54,7 +54,8 @@ installSeaznEnv("seazn-org-video-route-test");
 
 const BASE = "https://test.local/api/v1";
 /** The fake driver's playback host and the token's one-segment shape (cf-playback.ts, the plan's C1). */
-const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
+/** W-LL: the live programme manifest carries Cloudflare's LL-HLS query while STREAM_PROGRAMME_LOW_LATENCY is on (the default); a recording's never does (seazn-video.test.ts pins that). */
+const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8(?:\?protocol=llhls)?$/;
 
 interface Envelope<T = unknown> {
   ok: boolean;

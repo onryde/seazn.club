@@ -366,6 +366,21 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
   if (v === "false") return false;
   throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
 }
+/** W-LL (owner 2026-11-26, research lever 2, cf-stream-optimisation-research.md): whether the PROGRAMME live input is created asking
+ *  Cloudflare for Low-Latency HLS (`preferLowLatency`, beta) and its live manifest address carries `?protocol=llhls`. The camera input
+ *  never does (the relay pulls it over SRT). DEFAULT ON: unset or blank means on, so a deploy that does not name the variable gets it;
+ *  `false` is the switch off without a code change. Anything but true/false throws, naming the variable (like STREAM_SRT_ENABLED).
+ *  A server setting only, read per call, never cached: a new input reads it at its create; a session already running keeps what its
+ *  input was created with. Cloudflare's docs, which this follows: the flag is a top-level create/update body field
+ *  (https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/methods/create/), documented as beta and as
+ *  needing recording mode `automatic` (https://developers.cloudflare.com/stream/stream-live/start-stream-live/), and the manifest
+ *  query is from https://blog.cloudflare.com/cloudflare-stream-low-latency-hls-open-beta/ (not production-ready there). */
+export function programmeLowLatency(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.STREAM_PROGRAMME_LOW_LATENCY?.trim().toLowerCase();
+  if (!v || v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`STREAM_PROGRAMME_LOW_LATENCY must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_PROGRAMME_LOW_LATENCY)}`);
+}
 /** Task 34: whether the stream code's paste field and its Copy show under the QR (the QR itself always does). They are for
  *  developers and the harnesses — e2e/helpers/fake-capture-phone.ts reads the field to drive the phone routes — never for a
  *  club. Unset or blank: shown where the relay driver is fake (every e2e, CI and smoke server sets `RELAY_DRIVERS=fake`) or

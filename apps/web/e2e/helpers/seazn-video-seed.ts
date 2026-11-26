@@ -41,9 +41,10 @@ export interface SeaznMatch extends SeaznSession {
 
 /** The address the fake driver signs for a programme uid: `https://<fake host>/fake.<uid>.<exp seconds>/manifest/video.m3u8`
  *  (fakes.ts `playbackToken`, cf-playback.ts). Read from the server's own declarations by the caller, never retyped here beyond the
- *  uid, which this file writes. */
+ *  uid, which this file writes. W-LL: a LIVE programme address ends in `?protocol=llhls` while STREAM_PROGRAMME_LOW_LATENCY is on
+ *  (the default); a recording's never does (the unit tests pin that, this pattern accepts either). */
 export const signedAddressPattern = (uid: string): RegExp =>
-  new RegExp(`^https://playback\\.fake\\.invalid/fake\\.${uid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.\\d+/manifest/video\\.m3u8$`);
+  new RegExp(`^https://playback\\.fake\\.invalid/fake\\.${uid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.\\d+/manifest/video\\.m3u8(?:\\?protocol=llhls)?$`);
 
 export async function seedSeaznMatch(page: Page, o: { name: string; ensurePro?: boolean; live?: boolean }): Promise<SeaznMatch> {
   const request = page.request;
@@ -168,7 +169,7 @@ export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean; l
     // as hls.js orders them) and each rung as a media playlist: the specs read which rung hls.js asked for (Task 42). Without one every
     // request gets the one-segment manifest, as before.
     if (o.ladder !== undefined) {
-      if (/\/manifest\/video\.m3u8$/.test(url)) {
+      if (/\/manifest\/video\.m3u8(\?protocol=llhls)?$/.test(url)) {
         return route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", headers: CORS, body: stubMaster(o.ladder) });
       }
       // The one segment every rung names (`seg0.ts`, STUB_MANIFEST): a 188-byte (one TS packet) body, so a fetch is answered, not refused.
