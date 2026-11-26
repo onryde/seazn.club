@@ -46,6 +46,9 @@ import { roundOrderText } from "./conflict-detail-format";
  *  the board relied on push alone, so a board on a topic gone silent never refreshed until reload. */
 export const BOARD_POLL_MS = 60_000;
 
+/** An auto run can leave dozens of matches out: its message quotes this many different reasons, beside the count. */
+const LEFT_OUT_REASONS_SHOWN = 3;
+
 // P9 pass 4a: court_id — the merge `{...f, ...o}` (below) has to overwrite
 // the field board-grid/movableForRun/etc. actually key on, or an optimistic
 // drag shows the card in its OLD column until the next server refresh.
@@ -334,6 +337,51 @@ export function useBoardActions(
     };
   }, [queueValidate, fixtures]);
 
+  /** One sentence per different reason in `list`, each naming the match it is against: a refused write
+   *  (`fail`) and the matches an auto run left out say it the same way. */
+  const conflictReasons = useCallback(
+    (list: readonly BoardConflict[]): string[] => {
+      const titleOf = (id: string) => {
+        const f = board.find((x) => x.id === id);
+        // Fix round 3 (Important 3): `lookup` was left off — an unfilled
+        // slot's label fell through to cardTitle's client-safe English
+        // default instead of `msg` (useMsg(), line 159), regardless of
+        // this org's locale.
+        return f ? cardTitle(f, entrantNames, feedLabels, msg) : msg("board.action.anotherMatch");
+      };
+      const helpOf = (code: string) => {
+        const k = `board.conflictHelp.${code}` as MessageKey;
+        const l = msg(k);
+        return l === k ? (CONFLICT_HELP[code] ?? msg("board.action.slotFail")) : l;
+      };
+      return [
+        ...new Set(
+          list.map((c) => {
+            let m =
+              roundOrderText(c.details, {
+                msg,
+                entrantNames,
+                fixtureTitles: c.details?.other_fixture_id
+                  ? { [c.details.other_fixture_id]: titleOf(c.details.other_fixture_id) }
+                  : {},
+              })?.help ?? helpOf(c.code);
+            // Structured `details.other_fixture_id` (C3, 2026-08-13 design
+            // amendment) — never a regex scrape of the deprecated prose.
+            // The old regex took the FIRST UUID-shaped substring in
+            // `c.detail`, which for `entrant_overlap`/`person_overlap` is
+            // the ENTRANT/PERSON id, not the counterparty fixture — so
+            // `board.find` missed it and this silently degraded to
+            // "another match" instead of naming the real one.
+            const otherId = c.details?.other_fixture_id;
+            if (otherId) m += msg("board.action.withMatch", { title: titleOf(otherId) });
+            return m;
+          }),
+        ),
+      ];
+    },
+    [board, entrantNames, feedLabels, msg],
+  );
+
   const fail = useCallback(
     (err: unknown): boolean => {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -362,44 +410,7 @@ export function useBoardActions(
         // `moveFixture`). The server's sentence is English.
         setError(msg("schedule.error.played"));
       } else if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
-        const list = (err.extra.conflicts as BoardConflict[] | undefined) ?? [];
-        const titleOf = (id: string) => {
-          const f = board.find((x) => x.id === id);
-          // Fix round 3 (Important 3): `lookup` was left off — an unfilled
-          // slot's label fell through to cardTitle's client-safe English
-          // default instead of `msg` (useMsg(), line 159), regardless of
-          // this org's locale.
-          return f ? cardTitle(f, entrantNames, feedLabels, msg) : msg("board.action.anotherMatch");
-        };
-        const helpOf = (code: string) => {
-          const k = `board.conflictHelp.${code}` as MessageKey;
-          const l = msg(k);
-          return l === k ? (CONFLICT_HELP[code] ?? msg("board.action.slotFail")) : l;
-        };
-        const reasons = [
-          ...new Set(
-            list.map((c) => {
-              let m =
-                roundOrderText(c.details, {
-                  msg,
-                  entrantNames,
-                  fixtureTitles: c.details?.other_fixture_id
-                    ? { [c.details.other_fixture_id]: titleOf(c.details.other_fixture_id) }
-                    : {},
-                })?.help ?? helpOf(c.code);
-              // Structured `details.other_fixture_id` (C3, 2026-08-13 design
-              // amendment) — never a regex scrape of the deprecated prose.
-              // The old regex took the FIRST UUID-shaped substring in
-              // `c.detail`, which for `entrant_overlap`/`person_overlap` is
-              // the ENTRANT/PERSON id, not the counterparty fixture — so
-              // `board.find` missed it and this silently degraded to
-              // "another match" instead of naming the real one.
-              const otherId = c.details?.other_fixture_id;
-              if (otherId) m += msg("board.action.withMatch", { title: titleOf(otherId) });
-              return m;
-            }),
-          ),
-        ];
+        const reasons = conflictReasons((err.extra.conflicts as BoardConflict[] | undefined) ?? []);
         setError(
           reasons.length > 0
             ? msg("board.action.cantSchedule", { reasons: reasons.join(" ") })
@@ -429,7 +440,7 @@ export function useBoardActions(
       }
       return false;
     },
-    [board, entrantNames, feedLabels, msg, plural, router, locale],
+    [conflictReasons, msg, plural, router, locale],
   );
 
   const moveCard = useCallback(
@@ -567,8 +578,20 @@ export function useBoardActions(
             },
           );
 
-        // Reports telemetry and returns the proposal, or `null` and the
-        // "nothing to schedule" notice for an empty one. BEFORE the
+        // The matches a proposal does not list, and why. Apply never sees them and the check after the
+        // refresh does not repeat it, so this run's message is the one place the organiser can read it.
+        const leftOut = (p: Proposal): string | null => {
+          const listed = new Set(p.assignments.map((a) => a.fixture_id));
+          const why = (p.conflicts ?? []).filter((c) => !listed.has(c.fixture_id));
+          if (why.length === 0) return null;
+          return plural("board.action.leftOut", new Set(why.map((c) => c.fixture_id)).size, {
+            reasons: conflictReasons(why).slice(0, LEFT_OUT_REASONS_SHOWN).join(" "),
+          });
+        };
+
+        // Reports telemetry and returns the proposal, or `null` and, for an empty
+        // one, why it is empty ("nothing to schedule" where no match was left
+        // out). BEFORE the
         // empty-proposal check, not after: an `infeasible` run can place
         // nothing at all, and that is exactly the run whose report the
         // organiser most needs — capturing it only on a non-empty proposal
@@ -577,7 +600,9 @@ export function useBoardActions(
           const out = await solve();
           if (out.metrics && out.solver) setLastRun({ metrics: out.metrics, solver: out.solver });
           if (out.assignments.length === 0) {
-            setNotice(msg("board.action.nothingStage"));
+            const why = leftOut(out);
+            if (why !== null) setError(why);
+            else setNotice(msg("board.action.nothingStage"));
             return null;
           }
           return out;
@@ -586,6 +611,7 @@ export function useBoardActions(
         const out = await propose();
         if (!out) return;
 
+        let proposed = out;
         let expectedSeq = seqRef.current[divisionId];
         let applied: { applied: number; conflicts: BoardConflict[]; seq: number };
         try {
@@ -615,6 +641,7 @@ export function useBoardActions(
           // outer catch and surfaces through `fail`'s ordinary path. Exactly
           // one automatic retry, per owner ruling.
           applied = await applyOnce(retryOut.assignments, expectedSeq);
+          proposed = retryOut;
         }
         // The apply's own answer, never `expectedSeq + 1`: one that moved
         // nothing (every fixture held a result) writes no ledger step and
@@ -626,6 +653,7 @@ export function useBoardActions(
             ? msg("board.action.placedWarn", { n: applied.applied, w: applied.conflicts.length })
             : msg("board.action.placed", { n: applied.applied }),
         );
+        setError(leftOut(proposed));
         router.refresh();
       } catch (err) {
         fail(err);
@@ -633,7 +661,7 @@ export function useBoardActions(
         setBusy(false);
       }
     },
-    [fail, msg, router],
+    [conflictReasons, fail, msg, plural, router],
   );
 
   const act = useCallback(

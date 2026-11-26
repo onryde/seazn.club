@@ -4158,6 +4158,8 @@
   "board.action.nothingStage": "No hay nada que programar en esta fase.",
   "board.action.placed": "Se colocaron {n} partido(s).",
   "board.action.placedWarn": "Se colocaron {n} partido(s) — {w} advertencia(s).",
+  "board.action.leftOut.one": "{count} partido quedó fuera de esta ejecución. {reasons}",
+  "board.action.leftOut.other": "{count} partidos quedaron fuera de esta ejecución. {reasons}",
   "ladder.failed": "Error",
   "ladder.rank": "Posición",
   "ladder.player": "Jugador",

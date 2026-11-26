@@ -4211,6 +4211,8 @@
   "board.action.nothingStage": "Rien à programmer pour cette phase.",
   "board.action.placed": "{n} rencontre(s) placée(s).",
   "board.action.placedWarn": "{n} rencontre(s) placée(s) — {w} avertissement(s).",
+  "board.action.leftOut.one": "{count} rencontre n'a pas été incluse dans ce passage. {reasons}",
+  "board.action.leftOut.other": "{count} rencontres n'ont pas été incluses dans ce passage. {reasons}",
   "ladder.failed": "Échec",
   "ladder.rank": "Classement",
   "ladder.player": "Joueur",

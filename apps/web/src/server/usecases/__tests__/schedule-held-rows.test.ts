@@ -135,6 +135,20 @@ describe("spareHeldRows", () => {
     expect(checked).toBe(3);
   });
 
+  // The held match still holds its court past the floor by the gap, so it is brought forward to end where the
+  // next one starts. Its player's earlier match was clear of it where it was, and is not where it goes.
+  it("keeps a player off a match that was brought forward onto another of theirs", () => {
+    const input = request(
+      [row("held", -35, "C1", ["p"]), row("next", 0, "C1", ["q"]), row("earlier", -69, "C2", ["p"])],
+      0,
+      { gap: 10 },
+    );
+    expect(clashes(input)).toEqual({ found: ["court held/next"], pairs: 3 });
+    const out = spare(input, new Set(["held"]));
+    expect(byId(out, "held").startAtMs).toBe(at(-40));
+    expect(clashes(out)).toEqual({ found: [], pairs: 3 });
+  });
+
   it("never parks a row on a row it was not asked to touch", () => {
     const other = row("sibling", -700, "C1", ["e9"]);
     const input = request([other, row("a", -600, "C1"), row("b", -600, "C1")]);

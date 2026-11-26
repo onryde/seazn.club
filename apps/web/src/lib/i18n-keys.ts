@@ -664,6 +664,8 @@ export type DictionaryKey =
   | "board.action.cantSchedule"
   | "board.action.cantScheduleClash"
   | "board.action.cooldown"
+  | "board.action.leftOut.one"
+  | "board.action.leftOut.other"
   | "board.action.nothingStage"
   | "board.action.placed"
   | "board.action.placedWarn"

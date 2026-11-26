@@ -4211,6 +4211,8 @@
   "board.action.nothingStage": "Nothing to schedule for this stage.",
   "board.action.placed": "Placed {n} fixture(s).",
   "board.action.placedWarn": "Placed {n} fixture(s) — {w} warning(s).",
+  "board.action.leftOut.one": "{count} match was left out of this run. {reasons}",
+  "board.action.leftOut.other": "{count} matches were left out of this run. {reasons}",
   "ladder.failed": "Failed",
   "ladder.rank": "Rank",
   "ladder.player": "Player",

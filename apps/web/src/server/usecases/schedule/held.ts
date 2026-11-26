@@ -99,11 +99,14 @@ export function spareHeldRows(input: SolveBuildInput, heldIds: ReadonlySet<strin
     const inPlace = (r: WireRow) => startOf.get(r) === r.startAtMs;
     let busyUntil = freeAt(theirs[0]!);
     if (busyUntil <= floor) {
-      // Nothing owed past the floor: two rows left in place may still overlap, and one of them gives way.
-      const spans: WireRow[] = [];
-      for (const r of theirs.filter(inPlace)) {
-        if (spans.some((o) => overlaps(o.startAtMs, freeAt(o), r.startAtMs, freeAt(r)))) drop(r, player);
-        else spans.push(r);
+      // Nothing owed past the floor: two rows may still overlap where they now stand (as they were, or one
+      // brought forward onto the other), and one of them gives way. A parked row overlaps nothing.
+      const spans: [number, number][] = [];
+      for (const r of theirs) {
+        const from = startOf.get(r)!;
+        const to = from + freeAt(r) - r.startAtMs;
+        if (spans.some(([a, b]) => overlaps(a, b, from, to))) drop(r, player);
+        else spans.push([from, to]);
       }
       continue;
     }
@@ -151,28 +154,33 @@ export function sparingHeldRows(solve: PlacementSolver, heldIds: ReadonlySet<str
 }
 
 /**
+ * What the engine's own round-order rule says of `card` beside `fixed`, a card that stays where it is, or
+ * `undefined` where the two are in order. The rounds-per-day cap is not an order between two cards.
+ */
+export function pairRoundBreach(card: Assignment, fixed: Assignment, tz: string | undefined): Conflict | undefined {
+  return roundOrderConflicts(
+    [
+      { ...fixed, movable: false },
+      { ...card, movable: true },
+    ],
+    tz,
+  ).find((c) => isBlockingConflict(c) && c.details?.kind !== "rounds_per_day");
+}
+
+/**
  * The refusal for a card that would put its round out of order with a held card, or `undefined`. The
  * engine bounds a placement by a later round among the obstacles only for Swiss (the end barrier), so a
  * league's or a group's order against a held card is unknown to it.
  *
- * Asked of the engine's own round-order rule, one held card at a time (so a breach between two held cards
- * is never laid on this one), with the held card as the pin it is. The rounds-per-day cap is not an order
- * between two cards, and the engine already counts held rounds into it.
+ * Asked one held card at a time (so a breach between two held cards is never laid on this one). The
+ * engine already counts held rounds into the rounds-per-day cap.
  */
 export function roundOrderRefusal(
   card: Assignment,
   held: readonly Assignment[],
   tz: string | undefined,
 ): Conflict | undefined {
-  const other = held.find((h) =>
-    roundOrderConflicts(
-      [
-        { ...h, movable: false },
-        { ...card, movable: true },
-      ],
-      tz,
-    ).some((c) => isBlockingConflict(c) && c.details?.kind !== "rounds_per_day"),
-  );
+  const other = held.find((h) => pairRoundBreach(card, h, tz) !== undefined);
   if (other === undefined) return undefined;
   return {
     fixtureId: card.fixtureId,

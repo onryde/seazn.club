@@ -773,6 +773,8 @@ export async function autoSchedule(
     proposed: out.assignments.filter((a) => !behind.has(a.fixtureId)),
     held,
     stored,
+    standing: new Map([...plan.board, ...currentBoard].map((a) => [a.fixtureId, a])),
+    config: plan.gate.config,
     keepStored: body.mode === "polish",
     refuses: (rows) =>
       applyRefusals({

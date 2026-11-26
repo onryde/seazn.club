@@ -520,6 +520,36 @@ describe.skipIf(!HAS_DB)("autoSchedule start floor", () => {
       }
     }
 
+    // The refusal lands on a PLAYED later-round card, which names no card the pass moved. Only the one
+    // open round-1 match is what put the rounds out of order, so only it is left out.
+    for (const mode of ["build", "polish", "reflow"] as const) {
+      it(`${mode}: one open round-1 match behind played rounds is left out alone, and the rest applies`, async () => {
+        const seed = await seedSwiss(
+          { startAt: midnight(0), endAt: midnight(3) + 23 * HOUR, sessions: [] },
+          { kind: "league", entrants: 6 },
+        );
+        const [open, ...firstPlayed] = inRound(seed, 1);
+        const played = [...firstPlayed, ...inRound(seed, 2), ...inRound(seed, 3)];
+        for (const [i, f] of played.entries()) {
+          await place(f.id, midnight(-1) + (8 + i) * HOUR, seed.courts[i % 2]!);
+          await sql`update fixtures set status = 'decided' where id = ${f.id}`;
+        }
+        const later = [...inRound(seed, 4), ...inRound(seed, 5)].map((f) => f.id);
+        expect([played.length, later.length]).toEqual([8, 6]);
+        // "Improve times" works on a board: the later rounds are already laid out, loosely.
+        if (mode === "polish") await layDown(seed, [...inRound(seed, 4), ...inRound(seed, 5)], 2);
+        const out = await autoSchedule(seed.auth, seed.stageId, { only_unlocked: mode !== "build", mode });
+        expect(out.assignments.map((a) => a.fixture_id).sort()).toEqual([...later].sort());
+        // "Improve times" lists a card it leaves alone too, so listed is not enough: the rows have to move.
+        if (mode === "polish") expect(out.solver.moved).toBeGreaterThan(0);
+        const why = out.conflicts.filter((c) => c.fixture_id === open!.id);
+        expect(why.map((c) => c.details?.kind)).toEqual([expect.stringMatching(/^round_order_|^no_slot_round/)]);
+        expect(why[0]!.details).toMatchObject({ other_round_no: expect.any(Number) });
+        expect(played.map((f) => f.id)).toContain(why[0]!.details!.other_fixture_id);
+        await applyAndAudit(seed, out);
+      }, 120_000);
+    }
+
     // Swiss only: on a LEAGUE the engine's greedy board (solver unreachable) places an earlier round
     // after a later-round pin and then drops the pin, with or without a held card (seen 2026-11-26).
     it("swiss: a pin at or after the floor does not make a held board contradictory", async () => {
